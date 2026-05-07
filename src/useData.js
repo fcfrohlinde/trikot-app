@@ -22,6 +22,7 @@ const DEFAULTS = {
   deposits: [],
   orders: [],
   transactions: [],
+  reports: [],
   settings: { defaultDeposit: 100, clubName: 'FC Frohlinde 1949 e.V.' },
 };
 

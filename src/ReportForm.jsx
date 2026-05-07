@@ -1,0 +1,192 @@
+import { useState, useEffect } from 'react';
+
+const REASONS = [
+  { id: 'verloren', label: 'Verloren' },
+  { id: 'verschlissen', label: 'Verschlissen' },
+  { id: 'flock_kaputt', label: 'Flock kaputt' },
+  { id: 'beschaedigt', label: 'Beschädigt' },
+];
+
+export default function ReportForm({ onBack }) {
+  const [info, setInfo] = useState(null);
+  const [team, setTeam] = useState('');
+  const [number, setNumber] = useState('');
+  const [item, setItem] = useState('');
+  const [reasons, setReasons] = useState([]);
+  const [comment, setComment] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/public/info')
+      .then(r => r.json())
+      .then(d => {
+        setInfo(d);
+        if (d.teams?.length) setTeam(d.teams[0]);
+        if (d.items?.length) setItem(d.items[0].id);
+      })
+      .catch(() => setError('Stammdaten konnten nicht geladen werden.'));
+  }, []);
+
+  function toggleReason(id) {
+    setReasons(reasons.includes(id) ? reasons.filter(r => r !== id) : [...reasons, id]);
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    setError('');
+    if (reasons.length === 0) {
+      setError('Bitte mindestens einen Grund auswählen.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await fetch('/api/public/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ team, number, item, reasons, comment, name }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Meldung fehlgeschlagen');
+      setDone(true);
+    } catch (e) {
+      setError(e.message);
+    }
+    setBusy(false);
+  }
+
+  function newReport() {
+    setNumber('');
+    setReasons([]);
+    setComment('');
+    setName('');
+    setDone(false);
+    setError('');
+  }
+
+  return (
+    <div className="min-h-screen p-4 flex items-center justify-center" style={{ background: '#F8F5F0' }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700;800&family=Bebas+Neue&family=Source+Sans+3:wght@300;400;500;600;700&display=swap');
+      `}</style>
+      <div className="w-full max-w-lg" style={{ fontFamily: "'Source Sans 3', sans-serif" }}>
+        <div className="text-center mb-6">
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 12, letterSpacing: '0.18em', color: '#0B2D5C' }}>
+            {info?.clubName || 'F. C. FROHLINDE 1949 e. V.'}
+          </div>
+          <h1 style={{ fontFamily: "'Playfair Display', Georgia, serif", fontSize: 40, color: '#1A1A1A', lineHeight: 1.1, marginTop: 8 }}>
+            Bedarfsmeldung
+          </h1>
+          <div className="flex items-center justify-center gap-3 mt-3">
+            <div className="h-px w-12" style={{ background: '#DCD6C8' }} />
+            <p style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 11, letterSpacing: '0.18em', color: '#807D78' }}>
+              FÜR SPIELER · OHNE LOGIN
+            </p>
+            <div className="h-px w-12" style={{ background: '#DCD6C8' }} />
+          </div>
+        </div>
+
+        {done ? (
+          <div className="bg-white p-7 text-center" style={{ border: '2px solid #4A6B3A' }}>
+            <div style={{ fontSize: 48, color: '#4A6B3A' }}>✓</div>
+            <h2 style={{ fontFamily: "'Playfair Display', Georgia, serif", fontSize: 24, color: '#1A1A1A', marginTop: 8 }}>
+              Vielen Dank!
+            </h2>
+            <p style={{ color: '#4A4845', fontSize: 14, marginTop: 8 }}>
+              Deine Meldung wurde übermittelt. Der Zeugwart kümmert sich darum.
+            </p>
+            <div className="flex gap-2 justify-center mt-5">
+              <button onClick={newReport} className="px-5 py-2 text-xs uppercase text-white" style={{ background: '#0B2D5C', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                Weitere Meldung
+              </button>
+              <button onClick={onBack} className="px-5 py-2 text-xs uppercase" style={{ border: '1px solid #DCD6C8', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                Zurück
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="bg-white p-7 space-y-4" style={{ border: '1px solid #DCD6C8' }}>
+            <div className="p-3 text-xs" style={{ background: '#F1ECDF', color: '#4A4845', borderLeft: '3px solid #0B2D5C' }}>
+              Pro Artikel eine Meldung. Mehrere defekte Teile? Einfach mehrere Meldungen abgeben.
+            </div>
+
+            <Field label="Mannschaft">
+              <select required className="w-full px-3 py-2 text-sm" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={team} onChange={e => setTeam(e.target.value)}>
+                <option value="">– wählen –</option>
+                {info?.teams?.map(t => <option key={t}>{t}</option>)}
+              </select>
+            </Field>
+
+            <Field label="Rückennummer">
+              <input required type="number" inputMode="numeric" className="w-full px-3 py-2 text-sm" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={number} onChange={e => setNumber(e.target.value)} />
+            </Field>
+
+            <Field label="Artikel">
+              <select required className="w-full px-3 py-2 text-sm" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={item} onChange={e => setItem(e.target.value)}>
+                <option value="">– wählen –</option>
+                {info?.items?.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+              </select>
+            </Field>
+
+            <Field label="Grund (mind. einer)">
+              <div className="grid grid-cols-2 gap-2">
+                {REASONS.map(r => {
+                  const active = reasons.includes(r.id);
+                  return (
+                    <label key={r.id}
+                      className="flex items-center gap-2 p-3 cursor-pointer text-sm"
+                      style={{
+                        border: active ? '2px solid #0B2D5C' : '1px solid #DCD6C8',
+                        background: active ? '#F1ECDF' : '#FCFAF6',
+                      }}>
+                      <input type="checkbox" checked={active} onChange={() => toggleReason(r.id)} />
+                      <span style={{ color: '#1A1A1A' }}>{r.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </Field>
+
+            <Field label="Anmerkung (optional)">
+              <textarea className="w-full px-3 py-2 text-sm" rows="2" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={comment} onChange={e => setComment(e.target.value)} placeholder="z. B. wo der Schaden ist" />
+            </Field>
+
+            <Field label="Dein Name (optional)">
+              <input className="w-full px-3 py-2 text-sm" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={name} onChange={e => setName(e.target.value)} placeholder="Falls Rückfragen nötig sind" />
+            </Field>
+
+            {error && (
+              <div className="text-sm p-3" style={{ background: '#F5E6E6', color: '#9A2828', borderLeft: '3px solid #9A2828' }}>{error}</div>
+            )}
+
+            <div className="flex gap-2 pt-2">
+              <button type="submit" disabled={busy} className="flex-1 py-3 text-xs uppercase text-white disabled:opacity-50" style={{ background: '#0B2D5C', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                {busy ? '...' : 'Meldung absenden'}
+              </button>
+              <button type="button" onClick={onBack} className="px-5 py-3 text-xs uppercase" style={{ border: '1px solid #DCD6C8', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                Zurück
+              </button>
+            </div>
+          </form>
+        )}
+
+        <div className="text-center mt-6 text-xs" style={{ color: '#807D78' }}>
+          Bleibt sportlich.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="block">
+      <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 11, letterSpacing: '0.18em', color: '#0B2D5C', marginBottom: 6 }}>
+        {label}
+      </div>
+      {children}
+    </label>
+  );
+}

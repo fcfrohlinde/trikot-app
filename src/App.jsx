@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Shirt, Wallet, ShoppingCart, Plus, Trash2, Edit2, Download, ArrowLeft, Check, X, AlertCircle, Package, Euro, FileText, Settings, LogOut, UserCog } from 'lucide-react';
+import { Users, Shirt, Wallet, ShoppingCart, Plus, Trash2, Edit2, Download, ArrowLeft, Check, X, AlertCircle, Package, Euro, FileText, Settings, LogOut, UserCog, Mail, Bell, FileWarning } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth.jsx';
 import LoginScreen from './LoginScreen.jsx';
 import { useData } from './useData.js';
+import { APP_VERSION, CHANGELOG } from './version.js';
 
 const DEFAULT_TEAMS = ['1. Mannschaft', '2. Mannschaft', '3. Mannschaft'];
 const DEFAULT_ITEMS = [];
 
-const CONDITION_FACTORS = {
+const DEFAULT_CONDITION_FACTORS = {
   neu: { label: 'Neuwertig', factor: 1.0 },
   gut: { label: 'Gut', factor: 0.85 },
   mittel: { label: 'Mittel', factor: 0.6 },
@@ -15,8 +16,16 @@ const CONDITION_FACTORS = {
   defekt: { label: 'Defekt / Verloren', factor: 0 },
 };
 
-// Saisonbasierte Abschreibung (pro Saison Verlust in %)
-const SEASON_DEPRECIATION = 0.25;
+const DEFAULT_SEASON_DEPRECIATION = 0.25;
+
+// Aktuelle Pfandregeln aus Settings holen, mit Defaults als Fallback
+function getConditionFactors(settings) {
+  return settings?.conditionFactors || DEFAULT_CONDITION_FACTORS;
+}
+function getSeasonDepreciation(settings) {
+  const v = settings?.seasonDepreciation;
+  return (typeof v === 'number' && v >= 0 && v <= 1) ? v : DEFAULT_SEASON_DEPRECIATION;
+}
 
 export default function App() {
   return (
@@ -160,6 +169,7 @@ function AppContent() {
         )}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
           {view === 'dashboard' && <Dashboard data={data} setView={setView} />}
+          {view === 'reports' && <ReportsView data={data} update={update} />}
           {view === 'players' && <PlayersView data={data} update={update} />}
           {view === 'inventory' && <InventoryView data={data} update={update} />}
           {view === 'deposits' && <DepositsView data={data} update={update} />}
@@ -168,6 +178,12 @@ function AppContent() {
           {view === 'settings' && <SettingsView data={data} update={update} />}
           {view === 'users' && user.role === 'admin' && <UsersView />}
         </main>
+        <footer className="max-w-7xl mx-auto px-4 sm:px-6 py-6 text-xs" style={{ color: 'var(--ink-mute)' }}>
+          <div className="flex justify-between items-center">
+            <span>Trikotverwaltung v{APP_VERSION}</span>
+            <span style={{ fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.18em', color: 'var(--vereinsblau)' }}>#DEINDORFVEREIN</span>
+          </div>
+        </footer>
       </div>
     </div>
   );
@@ -176,6 +192,7 @@ function AppContent() {
 function Header({ view, setView, clubName, user, logout }) {
   const nav = [
     { id: 'dashboard', label: 'Übersicht' },
+    { id: 'reports', label: 'Bedarf' },
     { id: 'players', label: 'Spieler' },
     { id: 'inventory', label: 'Material' },
     { id: 'deposits', label: 'Pfand' },
@@ -311,6 +328,7 @@ function PlayersView({ data, update }) {
   const [filter, setFilter] = useState('alle');
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   const filtered = filter === 'alle' ? data.players : data.players.filter(p => p.team === filter);
 
@@ -323,6 +341,16 @@ function PlayersView({ data, update }) {
     setShowForm(false); setEditing(null);
   }
 
+  function bulkAdd(newPlayers) {
+    const withIds = newPlayers.map((p, i) => ({
+      ...p,
+      id: `p_${Date.now()}_${i}`,
+      number: p.number ? parseInt(p.number) : null,
+    }));
+    update('players', [...data.players, ...withIds]);
+    setShowImport(false);
+  }
+
   function remove(id) {
     if (!confirm('Spieler wirklich löschen?')) return;
     update('players', data.players.filter(p => p.id !== id));
@@ -332,11 +360,18 @@ function PlayersView({ data, update }) {
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
         <PageHeader number="04" label="KADER" title="Spieler & Nummern" subtitle={`${data.players.length} registriert`} />
-        <button onClick={() => { setEditing(null); setShowForm(true); }}
-          className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
-          style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-          <Plus size={14} /> Spieler anlegen
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowImport(true)}
+            className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+            style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <Download size={14} style={{ transform: 'rotate(180deg)' }} /> CSV importieren
+          </button>
+          <button onClick={() => { setEditing(null); setShowForm(true); }}
+            className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+            style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <Plus size={14} /> Spieler anlegen
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-2 mb-4 overflow-x-auto -mx-4 px-4 pb-1">
@@ -353,6 +388,7 @@ function PlayersView({ data, update }) {
       </div>
 
       {showForm && <PlayerForm player={editing} players={data.players} teams={data.teams} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
+      {showImport && <PlayerImport teams={data.teams} existingPlayers={data.players} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
@@ -459,6 +495,306 @@ function PlayerForm({ player, players, teams, onSave, onCancel }) {
   );
 }
 
+// ============ SPIELER-IMPORT ============
+function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
+  const [step, setStep] = useState('upload'); // upload | preview
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState('');
+
+  function downloadTemplate() {
+    const header = ['Vorname', 'Nachname', 'Mannschaft', 'Rückennummer', 'Größe', 'Notizen'];
+    const example = [
+      ['Max', 'Mustermann', teams[0] || '1. Mannschaft', '10', 'L', ''],
+      ['Tim', 'Beispiel', teams[0] || '1. Mannschaft', '7', 'M', 'Kapitän'],
+    ];
+    const csv = [header, ...example].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'spieler_import_vorlage.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError('');
+    try {
+      const text = await file.text();
+      const parsed = parseCSV(text);
+      if (parsed.length === 0) throw new Error('Datei ist leer.');
+      const header = parsed[0].map(h => h.trim().toLowerCase());
+      // Spalten-Indizes finden
+      const col = (...names) => {
+        for (const n of names) {
+          const idx = header.findIndex(h => h === n);
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+      const iVorname = col('vorname', 'firstname', 'first name');
+      const iNachname = col('nachname', 'lastname', 'last name', 'name');
+      const iTeam = col('mannschaft', 'team');
+      const iNumber = col('rückennummer', 'rueckennummer', 'nummer', 'number', 'nr');
+      const iSize = col('größe', 'groesse', 'size');
+      const iNotes = col('notizen', 'notes', 'bemerkung');
+
+      if (iVorname < 0 || iNachname < 0) {
+        throw new Error('Spalten "Vorname" und "Nachname" sind Pflicht. Bitte die Vorlage verwenden.');
+      }
+
+      const dataRows = parsed.slice(1).filter(r => r.some(c => c && c.trim()));
+      const rows = dataRows.map((r, idx) => ({
+        _idx: idx,
+        firstName: (r[iVorname] || '').trim(),
+        lastName: (r[iNachname] || '').trim(),
+        team: iTeam >= 0 ? (r[iTeam] || '').trim() : (teams[0] || ''),
+        number: iNumber >= 0 ? (r[iNumber] || '').trim() : '',
+        size: iSize >= 0 ? ((r[iSize] || '').trim().toUpperCase() || 'L') : 'L',
+        notes: iNotes >= 0 ? (r[iNotes] || '').trim() : '',
+      }));
+
+      setRows(rows);
+      setStep('preview');
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function updateRow(idx, key, value) {
+    setRows(rows.map(r => r._idx === idx ? { ...r, [key]: value } : r));
+  }
+
+  function removeRow(idx) {
+    setRows(rows.filter(r => r._idx !== idx));
+  }
+
+  // Validierung pro Zeile
+  function validate(row, allRows) {
+    const errors = [];
+    if (!row.firstName) errors.push('Vorname fehlt');
+    if (!row.lastName) errors.push('Nachname fehlt');
+    if (!row.team) errors.push('Mannschaft fehlt');
+    else if (!teams.includes(row.team)) errors.push('Mannschaft unbekannt');
+    if (row.number) {
+      const n = parseInt(row.number);
+      if (isNaN(n)) errors.push('Nummer ungültig');
+      else {
+        // Konflikt mit existierenden Spielern
+        const conflictExisting = existingPlayers.some(p => p.team === row.team && String(p.number) === String(n));
+        if (conflictExisting) errors.push('Nummer bereits vergeben');
+        // Konflikt innerhalb der Importliste
+        const conflictImport = allRows.some(o =>
+          o._idx !== row._idx && o.team === row.team && o.number && parseInt(o.number) === n
+        );
+        if (conflictImport) errors.push('Nummer doppelt im Import');
+      }
+    }
+    return errors;
+  }
+
+  const validatedRows = rows.map(r => ({ ...r, errors: validate(r, rows) }));
+  const validCount = validatedRows.filter(r => r.errors.length === 0).length;
+  const errorCount = validatedRows.length - validCount;
+
+  function importValid() {
+    const valid = validatedRows.filter(r => r.errors.length === 0).map(r => ({
+      firstName: r.firstName,
+      lastName: r.lastName,
+      team: r.team,
+      number: r.number,
+      size: r.size,
+      notes: r.notes,
+    }));
+    if (valid.length === 0) { alert('Keine gültigen Zeilen zum Import.'); return; }
+    onImport(valid);
+  }
+
+  return (
+    <div className="bg-white p-7 mb-4" style={{ border: '2px solid var(--vereinsblau)' }}>
+      <div className="flex items-start justify-between mb-5">
+        <div>
+          <div className="section-label mb-2">SPIELER-IMPORT</div>
+          <h2 className="font-display text-3xl" style={{ color: 'var(--ink)' }}>
+            {step === 'upload' ? 'CSV-Datei hochladen' : 'Vorschau & Bestätigung'}
+          </h2>
+        </div>
+        <button onClick={onCancel} className="p-2 hover:bg-stone-100" title="Schließen">
+          <X size={18} />
+        </button>
+      </div>
+
+      {step === 'upload' && (
+        <div>
+          <div className="mb-6 text-sm" style={{ color: 'var(--ink-soft)' }}>
+            <p className="mb-3">So funktioniert's:</p>
+            <ol className="list-decimal pl-5 space-y-1.5">
+              <li>Vorlage herunterladen (CSV mit den richtigen Spalten).</li>
+              <li>In Excel, Numbers oder Google Sheets öffnen und befüllen.</li>
+              <li>Als CSV speichern und hier hochladen.</li>
+              <li>Vorschau prüfen, Fehler korrigieren, importieren.</li>
+            </ol>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            <button onClick={downloadTemplate}
+              className="px-5 py-3 text-xs uppercase flex items-center justify-center gap-2"
+              style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              <Download size={14} /> Vorlage herunterladen
+            </button>
+            <label className="px-5 py-3 text-xs uppercase flex items-center justify-center gap-2 cursor-pointer text-white"
+              style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              <Download size={14} style={{ transform: 'rotate(180deg)' }} /> CSV-Datei wählen
+              <input type="file" accept=".csv,text/csv" onChange={handleFile} className="hidden" />
+            </label>
+          </div>
+
+          <div className="text-xs p-4" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
+            <strong style={{ color: 'var(--vereinsblau)' }}>Pflichtspalten:</strong> Vorname, Nachname<br />
+            <strong style={{ color: 'var(--vereinsblau)' }}>Optionale Spalten:</strong> Mannschaft, Rückennummer, Größe (XS/S/M/L/XL/XXL/3XL), Notizen<br />
+            <strong style={{ color: 'var(--vereinsblau)' }}>Trennzeichen:</strong> Semikolon (;) oder Komma (,) — wird automatisch erkannt<br />
+            <strong style={{ color: 'var(--vereinsblau)' }}>Verfügbare Mannschaften:</strong> {teams.length > 0 ? teams.join(' · ') : '— keine angelegt —'}
+          </div>
+
+          {error && (
+            <div className="mt-4 p-3 text-sm" style={{ background: '#F5E6E6', color: 'var(--danger)', borderLeft: '3px solid var(--danger)' }}>{error}</div>
+          )}
+        </div>
+      )}
+
+      {step === 'preview' && (
+        <div>
+          <div className="grid grid-cols-3 gap-px mb-5" style={{ background: 'var(--rule)' }}>
+            <div className="bg-white p-4">
+              <div className="font-sub text-xs" style={{ color: 'var(--ink-mute)', letterSpacing: '0.18em' }}>GESAMT</div>
+              <div className="stat-number text-3xl" style={{ color: 'var(--ink)' }}>{validatedRows.length}</div>
+            </div>
+            <div className="bg-white p-4">
+              <div className="font-sub text-xs" style={{ color: 'var(--success)', letterSpacing: '0.18em' }}>GÜLTIG</div>
+              <div className="stat-number text-3xl" style={{ color: 'var(--success)' }}>{validCount}</div>
+            </div>
+            <div className="bg-white p-4">
+              <div className="font-sub text-xs" style={{ color: 'var(--danger)', letterSpacing: '0.18em' }}>FEHLER</div>
+              <div className="stat-number text-3xl" style={{ color: 'var(--danger)' }}>{errorCount}</div>
+            </div>
+          </div>
+
+          {errorCount > 0 && (
+            <div className="mb-4 p-3 text-sm" style={{ background: '#F5EBDD', color: 'var(--warn)', borderLeft: '3px solid var(--warn)' }}>
+              Zeilen mit Fehlern können direkt unten korrigiert werden. Beim Import werden nur gültige Zeilen übernommen — fehlerhafte werden übersprungen.
+            </div>
+          )}
+
+          <div className="overflow-x-auto mb-4" style={{ border: '1px solid var(--rule)' }}>
+            <table className="w-full text-xs min-w-[800px]">
+              <thead className="bg-stone-50">
+                <tr>
+                  <th className="text-left p-2">Vorname</th>
+                  <th className="text-left p-2">Nachname</th>
+                  <th className="text-left p-2">Mannschaft</th>
+                  <th className="text-left p-2">Nr.</th>
+                  <th className="text-left p-2">Größe</th>
+                  <th className="text-left p-2">Notizen</th>
+                  <th className="text-left p-2">Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {validatedRows.map(r => (
+                  <tr key={r._idx} style={{ borderTop: '1px solid var(--rule)', background: r.errors.length > 0 ? '#F5E6E6' : 'transparent' }}>
+                    <td className="p-1"><input className="w-full px-2 py-1 text-xs" value={r.firstName} onChange={e => updateRow(r._idx, 'firstName', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                    <td className="p-1"><input className="w-full px-2 py-1 text-xs" value={r.lastName} onChange={e => updateRow(r._idx, 'lastName', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                    <td className="p-1">
+                      <select className="w-full px-2 py-1 text-xs" value={r.team} onChange={e => updateRow(r._idx, 'team', e.target.value)} style={{ border: '1px solid var(--rule)' }}>
+                        <option value="">– wählen –</option>
+                        {teams.map(t => <option key={t}>{t}</option>)}
+                        {r.team && !teams.includes(r.team) && <option value={r.team}>{r.team} (unbekannt)</option>}
+                      </select>
+                    </td>
+                    <td className="p-1"><input type="number" className="w-16 px-2 py-1 text-xs" value={r.number} onChange={e => updateRow(r._idx, 'number', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                    <td className="p-1">
+                      <select className="px-2 py-1 text-xs" value={r.size} onChange={e => updateRow(r._idx, 'size', e.target.value)} style={{ border: '1px solid var(--rule)' }}>
+                        {['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-1"><input className="w-full px-2 py-1 text-xs" value={r.notes} onChange={e => updateRow(r._idx, 'notes', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                    <td className="p-2">
+                      {r.errors.length === 0 ? (
+                        <span style={{ color: 'var(--success)' }}>✓ OK</span>
+                      ) : (
+                        <span style={{ color: 'var(--danger)' }} title={r.errors.join(', ')}>✗ {r.errors[0]}</span>
+                      )}
+                    </td>
+                    <td className="p-1">
+                      <button onClick={() => removeRow(r._idx)} className="p-1 hover:text-red-600" style={{ color: 'var(--ink-mute)' }}>
+                        <Trash2 size={12} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button onClick={importValid} disabled={validCount === 0}
+              className="px-6 py-3 text-xs uppercase text-white disabled:opacity-50"
+              style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              {validCount} {validCount === 1 ? 'Spieler' : 'Spieler'} importieren
+            </button>
+            <button onClick={() => { setStep('upload'); setRows([]); }}
+              className="px-6 py-3 text-xs uppercase"
+              style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              Andere Datei wählen
+            </button>
+            <button onClick={onCancel}
+              className="px-6 py-3 text-xs uppercase"
+              style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              Abbrechen
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// CSV-Parser: erkennt automatisch Semikolon oder Komma als Trenner, behandelt Anführungszeichen
+function parseCSV(text) {
+  // BOM entfernen
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  // Trenner ermitteln: Erste Zeile prüfen
+  const firstLine = text.split(/\r?\n/)[0] || '';
+  const semis = (firstLine.match(/;/g) || []).length;
+  const commas = (firstLine.match(/,/g) || []).length;
+  const sep = semis >= commas ? ';' : ',';
+
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { cell += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      cell += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === sep) { row.push(cell); cell = ''; i++; continue; }
+    if (c === '\r') { i++; continue; }
+    if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; i++; continue; }
+    cell += c; i++;
+  }
+  // Letzte Zeile
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
 // ============ MATERIAL / INVENTORY ============
 function InventoryView({ data, update }) {
   const [filter, setFilter] = useState('alle');
@@ -469,6 +805,7 @@ function InventoryView({ data, update }) {
     if (filter === 'alle') return true;
     if (filter === 'lager') return i.status === 'lager';
     if (filter === 'ausgegeben') return i.status === 'ausgegeben';
+    if (filter === 'markiert') return i.flagged;
     return i.itemType === filter;
   });
 
@@ -524,6 +861,7 @@ function InventoryView({ data, update }) {
           { id: 'alle', label: `Alle (${data.inventory.length})` },
           { id: 'lager', label: `Im Lager (${data.inventory.filter(i => i.status === 'lager').length})` },
           { id: 'ausgegeben', label: `Ausgegeben (${data.inventory.filter(i => i.status === 'ausgegeben').length})` },
+          { id: 'markiert', label: `Markiert (${data.inventory.filter(i => i.flagged).length})` },
         ].map(f => (
           <button key={f.id} onClick={() => setFilter(f.id)}
             className={`px-3 py-1.5 text-xs font-medium whitespace-nowrap ${filter === f.id ? 'bg-stone-900 text-white' : 'bg-white border border-stone-200'}`}>
@@ -562,6 +900,12 @@ function InventoryView({ data, update }) {
                         <span className={`inline-block px-2 py-0.5 text-xs ${i.status === 'lager' ? 'bg-stone-100 text-stone-700' : 'bg-emerald-50 text-emerald-700'}`}>
                           {i.status === 'lager' ? 'Lager' : 'Ausgegeben'}
                         </span>
+                        {i.flagged && (
+                          <span className="inline-block px-2 py-0.5 text-xs ml-1" style={{ background: '#F5EBDD', color: 'var(--warn)' }}
+                            title={`Markiert: ${(i.flagReasons || []).map(x => REASON_LABELS[x] || x).join(', ')}`}>
+                            ⚠ markiert
+                          </span>
+                        )}
                       </td>
                       <td className="p-3">
                         {player ? (
@@ -571,7 +915,7 @@ function InventoryView({ data, update }) {
                           </div>
                         ) : <span className="text-stone-400">–</span>}
                       </td>
-                      <td className="p-3 hidden lg:table-cell text-stone-600">{CONDITION_FACTORS[i.condition]?.label || i.condition}</td>
+                      <td className="p-3 hidden lg:table-cell text-stone-600">{getConditionFactors(data.settings)[i.condition]?.label || i.condition}</td>
                       <td className="p-3 text-right whitespace-nowrap">
                         {i.status === 'lager' ? (
                           <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">Ausgeben</button>
@@ -809,12 +1153,14 @@ function ReturnsView({ data, update }) {
   const playerItems = data.inventory.filter(i => i.assignedTo === selectedPlayer && i.status === 'ausgegeben');
   const deposit = data.deposits.find(d => d.playerId === selectedPlayer && !d.refunded);
 
-  // Berechnung
+  // Berechnung — Pfandregeln aus Settings
+  const conditionFactors = getConditionFactors(data.settings);
+  const seasonDepreciation = getSeasonDepreciation(data.settings);
   const calc = playerItems.map(item => {
     const cond = conditions[item.id] || item.condition || 'gut';
     const seasons = item.seasonsUsed || 0;
-    const seasonValue = Math.max(0, 1 - (seasons * SEASON_DEPRECIATION));
-    const condFactor = CONDITION_FACTORS[cond].factor;
+    const seasonValue = Math.max(0, 1 - (seasons * seasonDepreciation));
+    const condFactor = conditionFactors[cond]?.factor ?? 0;
     const currentValue = item.originalPrice * seasonValue * condFactor;
     const lossValue = item.originalPrice - currentValue;
     return { item, cond, seasons, currentValue, lossValue, condFactor };
@@ -915,7 +1261,7 @@ function ReturnsView({ data, update }) {
                         <td className="p-3 hidden md:table-cell">{item.originalPrice.toFixed(2)} €</td>
                         <td className="p-3">
                           <select className="border border-stone-300 px-2 py-1 text-xs" value={cond} onChange={e => setConditions({ ...conditions, [item.id]: e.target.value })}>
-                            {Object.entries(CONDITION_FACTORS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                            {Object.entries(conditionFactors).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                           </select>
                         </td>
                         <td className="p-3 font-medium">{currentValue.toFixed(2)} €</td>
@@ -1053,6 +1399,7 @@ function OrderForm({ data, onSave, onCancel }) {
   const [supplier, setSupplier] = useState('');
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([]);
+  const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '' });
 
   const teamPlayers = data.players.filter(p => p.team === team);
 
@@ -1096,7 +1443,7 @@ function OrderForm({ data, onSave, onCancel }) {
   function submit() {
     if (!title) return alert('Titel fehlt');
     if (lines.length === 0) return alert('Keine Positionen');
-    onSave({ title, type, team: type === 'komplett' || type === 'teilweise' ? team : null, supplier, notes, lines });
+    onSave({ title, type, team: type === 'komplett' || type === 'teilweise' ? team : null, supplier, notes, lines, sponsors });
   }
 
   return (
@@ -1127,6 +1474,25 @@ function OrderForm({ data, onSave, onCancel }) {
         <div className="sm:col-span-2">
           <Field label="Notizen">
             <textarea className="w-full border border-stone-300 px-3 py-2 text-sm" rows="2" value={notes} onChange={e => setNotes(e.target.value)} />
+          </Field>
+        </div>
+      </div>
+
+      <div className="bg-stone-50 p-4 mb-4" style={{ border: '1px solid var(--rule)' }}>
+        <div className="font-sub text-xs mb-3" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>SPONSOREN-PLATZIERUNG (OPTIONAL)</div>
+        <p className="text-xs mb-3" style={{ color: 'var(--ink-mute)' }}>Wird in der Flock-Liste für den Ausrüster ausgewiesen. Leer lassen, wenn kein Sponsor an dieser Stelle.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Field label="Brust">
+            <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={sponsors.brust}
+              onChange={e => setSponsors({ ...sponsors, brust: e.target.value })} placeholder="z. B. Brabus" />
+          </Field>
+          <Field label="Rücken">
+            <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={sponsors.ruecken}
+              onChange={e => setSponsors({ ...sponsors, ruecken: e.target.value })} placeholder="z. B. Sparkasse" />
+          </Field>
+          <Field label="Ärmel">
+            <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={sponsors.aermel}
+              onChange={e => setSponsors({ ...sponsors, aermel: e.target.value })} placeholder="z. B. Stadtwerke" />
           </Field>
         </div>
       </div>
@@ -1203,7 +1569,8 @@ function OrderDetail({ order, data, onBack, onStatus }) {
   }
 
   function exportFlockList() {
-    const rows = [['Artikel', 'Größe', 'Menge', 'Mannschaft', 'Spieler', 'Rückennummer', 'Flock-Name']];
+    const sponsors = order.sponsors || {};
+    const rows = [['Artikel', 'Größe', 'Menge', 'Mannschaft', 'Spieler', 'Rückennummer', 'Flock-Name', 'Sponsor Brust', 'Sponsor Rücken', 'Sponsor Ärmel']];
     order.lines.forEach(l => {
       const player = data.players.find(p => p.id === l.playerId);
       rows.push([
@@ -1213,6 +1580,9 @@ function OrderDetail({ order, data, onBack, onStatus }) {
         player ? `${player.firstName} ${player.lastName}` : 'Lagerware',
         l.number || '–',
         l.name || '–',
+        sponsors.brust || '',
+        sponsors.ruecken || '',
+        sponsors.aermel || '',
       ]);
     });
     downloadCSV(rows, `flockliste_${order.title.replace(/\s+/g, '_')}.csv`);
@@ -1263,10 +1633,28 @@ function OrderDetail({ order, data, onBack, onStatus }) {
         </div>
       </div>
 
+      {(order.sponsors?.brust || order.sponsors?.ruecken || order.sponsors?.aermel) && (
+        <div className="bg-white border border-stone-200 mb-4 p-5">
+          <div className="font-sub text-xs mb-3" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>SPONSOREN-PLATZIERUNG</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[
+              { key: 'brust', label: 'Brust' },
+              { key: 'ruecken', label: 'Rücken' },
+              { key: 'aermel', label: 'Ärmel' },
+            ].map(s => order.sponsors[s.key] && (
+              <div key={s.key} className="border-l-2 pl-3" style={{ borderColor: 'var(--gold)' }}>
+                <div className="font-sub text-xs" style={{ color: 'var(--ink-mute)', letterSpacing: '0.18em' }}>{s.label.toUpperCase()}</div>
+                <div className="font-display text-xl" style={{ color: 'var(--ink)' }}>{order.sponsors[s.key]}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white border border-stone-200 overflow-hidden mb-4">
         <div className="p-4 border-b border-stone-200 bg-stone-50">
           <h2 className="font-display text-xl">FLOCK-LISTE FÜR DEN AUSRÜSTER</h2>
-          <p className="text-xs text-stone-500 mt-1">Diese Übersicht enthält alle Beflockungen pro Teil</p>
+          <p className="text-xs text-stone-500 mt-1">Diese Übersicht enthält alle Beflockungen pro Teil. Sponsoren-Platzierungen sind oben gelistet und gelten für alle Teile dieser Bestellung.</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -1488,25 +1876,109 @@ function SettingsView({ data, update }) {
       </div>
 
       <div className="bg-white border border-stone-200 p-6 mb-4">
-        <h2 className="font-display text-2xl mb-4">ZUSTANDS-FAKTOREN</h2>
-        <p className="text-xs text-stone-500 mb-3">Für die Zeitwertberechnung bei Rückgabe (fest definiert):</p>
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm">
-          {Object.entries(CONDITION_FACTORS).map(([k, v]) => (
-            <div key={k} className="border border-stone-200 p-3 text-center">
-              <div className="font-medium">{v.label}</div>
-              <div className="font-display text-2xl text-stone-900">{(v.factor * 100).toFixed(0)}%</div>
+        <h2 className="font-display text-2xl mb-2">PFANDREGELN</h2>
+        <p className="text-xs text-stone-500 mb-4">Diese Regeln bestimmen, wie der Zeitwert eines Materialteils bei der Rückgabe berechnet wird. Formel: Neupreis × (1 − Saisons × Abschreibung) × Zustandsfaktor.</p>
+
+        <div className="mb-5">
+          <Field label="Saison-Abschreibung pro Saison (%)">
+            <input type="number" min="0" max="100" step="1" className="w-32 border border-stone-300 px-3 py-2 text-sm"
+              value={Math.round((settings.seasonDepreciation ?? DEFAULT_SEASON_DEPRECIATION) * 100)}
+              onChange={e => setSettings({ ...settings, seasonDepreciation: (parseFloat(e.target.value) || 0) / 100 })} />
+          </Field>
+          <p className="text-xs text-stone-500 mt-1">Üblich: 25 % — also nach 4 Saisons ist der Zeitwert allein durch Alter null.</p>
+        </div>
+
+        <div className="mb-3">
+          <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>ZUSTANDS-FAKTOREN</div>
+          <p className="text-xs text-stone-500 mb-3">Faktor 100 % = voller Zeitwert · 0 % = kein Wert (z. B. verloren oder zerstört). Bezeichnungen können angepasst werden, die Schlüssel (links) bleiben fest.</p>
+        </div>
+
+        <div className="space-y-2">
+          {Object.entries(getConditionFactors(settings)).map(([k, v]) => (
+            <div key={k} className="grid grid-cols-12 gap-2 items-center">
+              <div className="col-span-3 text-xs uppercase tracking-wider" style={{ color: 'var(--ink-mute)' }}>{k}</div>
+              <input
+                className="col-span-6 border border-stone-300 px-3 py-2 text-sm"
+                value={v.label}
+                onChange={e => setSettings({
+                  ...settings,
+                  conditionFactors: {
+                    ...getConditionFactors(settings),
+                    [k]: { ...v, label: e.target.value },
+                  },
+                })}
+              />
+              <div className="col-span-3 flex items-center gap-1">
+                <input
+                  type="number" min="0" max="100" step="1"
+                  className="w-20 border border-stone-300 px-3 py-2 text-sm text-right"
+                  value={Math.round(v.factor * 100)}
+                  onChange={e => setSettings({
+                    ...settings,
+                    conditionFactors: {
+                      ...getConditionFactors(settings),
+                      [k]: { ...v, factor: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) / 100 },
+                    },
+                  })}
+                />
+                <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>%</span>
+              </div>
             </div>
           ))}
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4">
+        <h2 className="font-display text-2xl mb-2">WOCHENBERICHT-VERSAND</h2>
+        <p className="text-xs text-stone-500 mb-4">Aus den eingegangenen Bedarfsmeldungen wird ein Wochenbericht generiert. Wenn aktiviert, kann er per Mail versendet werden. Erfordert in Vercel die Umgebungsvariable RESEND_API_KEY.</p>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)' }}>
+            <input type="checkbox" checked={!!settings.weeklyReportEnabled}
+              onChange={e => setSettings({ ...settings, weeklyReportEnabled: e.target.checked })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium" style={{ color: 'var(--ink)' }}>Versand aktiv</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Nur wenn aktiv, kann der Wochenbericht versendet werden</div>
+            </div>
+          </label>
+          <Field label="Empfänger-E-Mail (Komma-separiert für mehrere)">
+            <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={settings.weeklyReportEmail || ''}
+              onChange={e => setSettings({ ...settings, weeklyReportEmail: e.target.value })}
+              placeholder="zeugwart@fc-frohlinde.de, vorstand@fc-frohlinde.de" />
+          </Field>
+          <Field label="Absender-Adresse (optional, Domain muss in Resend verifiziert sein)">
+            <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={settings.weeklyReportFrom || ''}
+              onChange={e => setSettings({ ...settings, weeklyReportFrom: e.target.value })}
+              placeholder="Trikotverwaltung <noreply@fc-frohlinde.de>" />
+          </Field>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-6">
         <button onClick={saveSettings} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Speichern</button>
         <button onClick={exportAll} className="border border-stone-300 px-4 py-2 text-sm flex items-center gap-1"><Download size={14} /> Backup exportieren</button>
         <label className="border border-stone-300 px-4 py-2 text-sm cursor-pointer">
           Backup importieren
           <input type="file" accept=".json" onChange={importAll} className="hidden" />
         </label>
+      </div>
+
+      <div className="bg-white border border-stone-200 p-6 mb-4">
+        <h2 className="font-display text-2xl mb-2">VERSION & VERLAUF</h2>
+        <p className="text-sm" style={{ color: 'var(--ink-soft)' }}>Aktuelle Version: <strong style={{ color: 'var(--vereinsblau)' }}>v{APP_VERSION}</strong></p>
+        <div className="mt-4 space-y-3">
+          {CHANGELOG.map(entry => (
+            <div key={entry.version} className="border-l-2 pl-4" style={{ borderColor: 'var(--rule)' }}>
+              <div className="flex items-baseline gap-2">
+                <span className="font-sub text-sm" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.12em' }}>v{entry.version}</span>
+                <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>{entry.date}</span>
+              </div>
+              <ul className="mt-1 text-xs space-y-0.5" style={{ color: 'var(--ink-soft)' }}>
+                {entry.changes.map((c, i) => <li key={i}>· {c}</li>)}
+              </ul>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -1648,6 +2120,349 @@ function UsersView() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============ BEDARFSMELDUNGEN ============
+const REASON_LABELS = {
+  verloren: 'Verloren',
+  verschlissen: 'Verschlissen',
+  flock_kaputt: 'Flock kaputt',
+  beschaedigt: 'Beschädigt',
+};
+
+function ReportsView({ data, update }) {
+  const { authFetch } = useAuth();
+  const [reports, setReports] = useState(data.reports || []);
+  const [filter, setFilter] = useState('offen');
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
+  const [lastSent, setLastSent] = useState(null);
+
+  // Reports werden serverseitig direkt vom öffentlichen Endpunkt geschrieben.
+  // Damit eingegangene Meldungen sichtbar werden, hier ein Refresh aus useData via update wäre umständlich.
+  // Wir lesen sie über die normale data.reports-Loading-Logik mit (siehe useData.js).
+  useEffect(() => { setReports(data.reports || []); }, [data.reports]);
+
+  // Filter
+  const filtered = filter === 'alle' ? reports : reports.filter(r => r.status === filter);
+
+  function getPlayer(team, number) {
+    return data.players.find(p => p.team === team && String(p.number) === String(number));
+  }
+  function getItem(itemId) {
+    return data.items.find(i => i.id === itemId);
+  }
+
+  function setStatus(id, status) {
+    const updated = reports.map(r => r.id === id ? { ...r, status, handledAt: new Date().toISOString() } : r);
+    setReports(updated);
+    update('reports', updated);
+  }
+
+  function removeReport(id) {
+    if (!confirm('Meldung wirklich löschen?')) return;
+    const updated = reports.filter(r => r.id !== id);
+    setReports(updated);
+    update('reports', updated);
+  }
+
+  // Material-Markierung: alle Inventory-Items dieses Spielers, die zu diesem Artikel passen,
+  // mit dem Grund-Tag versehen
+  function markMaterial(report) {
+    const player = getPlayer(report.team, report.number);
+    if (!player) {
+      alert('Spieler mit dieser Nummer in dieser Mannschaft nicht gefunden. Material kann nicht automatisch markiert werden.');
+      return;
+    }
+    const matchingItems = data.inventory.filter(i =>
+      i.assignedTo === player.id && i.itemType === report.item && i.status === 'ausgegeben'
+    );
+    if (matchingItems.length === 0) {
+      alert('Kein passendes ausgegebenes Material gefunden. Bitte manuell prüfen.');
+      return;
+    }
+    const updated = data.inventory.map(i => {
+      if (matchingItems.find(m => m.id === i.id)) {
+        return {
+          ...i,
+          flagged: true,
+          flagReasons: report.reasons,
+          flagComment: report.comment,
+          flagReportId: report.id,
+          flagAt: new Date().toISOString(),
+        };
+      }
+      return i;
+    });
+    update('inventory', updated);
+    setStatus(report.id, 'gesehen');
+    alert(`${matchingItems.length} Materialteil(e) markiert.`);
+  }
+
+  // Wochenbericht aggregieren
+  const openReports = reports.filter(r => r.status === 'offen' || r.status === 'gesehen');
+  const aggregation = {};
+  openReports.forEach(r => {
+    const key = `${r.team}__${r.item}`;
+    if (!aggregation[key]) {
+      aggregation[key] = { team: r.team, itemId: r.item, count: 0, reportIds: [] };
+    }
+    aggregation[key].count += 1;
+    aggregation[key].reportIds.push(r.id);
+  });
+  const aggArray = Object.values(aggregation);
+
+  async function sendReport() {
+    setSending(true);
+    setSendResult(null);
+    try {
+      const r = await authFetch('/api/reports/weekly', { method: 'POST' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Versand fehlgeschlagen');
+      setSendResult({ ok: true, sentAt: d.sentAt });
+      setLastSent(d.sentAt);
+    } catch (e) {
+      setSendResult({ ok: false, error: e.message });
+    }
+    setSending(false);
+  }
+
+  function exportReportCSV() {
+    const rows = [['Mannschaft', 'Nr.', 'Spieler', 'Artikel', 'Anzahl Meldungen', 'Gründe (zusammengefasst)']];
+    aggArray.forEach(a => {
+      const item = getItem(a.itemId);
+      const reportsForKey = openReports.filter(r => a.reportIds.includes(r.id));
+      const reasonsSet = new Set();
+      reportsForKey.forEach(r => r.reasons.forEach(x => reasonsSet.add(x)));
+      // Pro Spieler eine Zeile
+      const byPlayer = {};
+      reportsForKey.forEach(r => {
+        const k = `${r.team}__${r.number}`;
+        if (!byPlayer[k]) byPlayer[k] = { team: r.team, number: r.number, reasons: new Set() };
+        r.reasons.forEach(x => byPlayer[k].reasons.add(x));
+      });
+      Object.values(byPlayer).forEach(bp => {
+        const player = getPlayer(bp.team, bp.number);
+        rows.push([
+          bp.team,
+          bp.number,
+          player ? `${player.firstName} ${player.lastName}` : '–',
+          item?.name || a.itemId,
+          1,
+          [...bp.reasons].map(x => REASON_LABELS[x] || x).join(', '),
+        ]);
+      });
+    });
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `wochenbericht_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Bestellung aus offenen Meldungen erzeugen
+  function createOrder() {
+    if (openReports.length === 0) return;
+    const lines = [];
+    openReports.forEach(r => {
+      const player = getPlayer(r.team, r.number);
+      const item = getItem(r.item);
+      lines.push({
+        id: `l_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        itemType: r.item,
+        size: player?.size || 'L',
+        qty: 1,
+        playerId: player?.id || '',
+        number: r.number,
+        name: player ? player.lastName.toUpperCase() : '',
+        reportRef: r.id,
+        reasons: r.reasons,
+      });
+    });
+    const newOrder = {
+      id: `ord_${Date.now()}`,
+      title: `Bedarfsbestellung ${new Date().toLocaleDateString('de-DE')}`,
+      type: 'einzeln',
+      team: null,
+      supplier: '',
+      notes: `Aus ${openReports.length} Bedarfsmeldungen erzeugt.`,
+      lines,
+      sponsors: { brust: '', ruecken: '', aermel: '' },
+      status: 'angelegt',
+      createdAt: new Date().toISOString(),
+      fromReports: openReports.map(r => r.id),
+    };
+    update('orders', [...data.orders, newOrder]);
+    // Meldungen auf "bestellt" setzen
+    const updatedReports = reports.map(r => openReports.find(o => o.id === r.id) ? { ...r, status: 'bestellt', orderId: newOrder.id } : r);
+    setReports(updatedReports);
+    update('reports', updatedReports);
+    alert(`Bestellung mit ${lines.length} Position(en) angelegt. Findest du im Tab "Bestellungen".`);
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
+        <PageHeader number="03" label="MELDUNGEN" title="Bedarf der Spieler" subtitle={`${openReports.length} offen · ${reports.length} gesamt`} />
+      </div>
+
+      {/* Wochenbericht-Panel */}
+      {openReports.length > 0 && (
+        <div className="p-7 mb-6 text-white" style={{ background: 'var(--vereinsblau)' }}>
+          <div className="flex flex-wrap justify-between items-start gap-4">
+            <div>
+              <div className="font-sub text-xs mb-2" style={{ color: 'var(--gold)', letterSpacing: '0.18em' }}>WOCHENBERICHT</div>
+              <h3 className="font-display text-3xl">{aggArray.length} Artikel · {openReports.length} Meldungen</h3>
+              <p className="text-sm mt-2" style={{ color: '#A8B8D0' }}>
+                {data.settings.weeklyReportEnabled ? 'Mailversand aktiv' : 'Mailversand inaktiv'}
+                {data.settings.weeklyReportEmail ? ` · An: ${data.settings.weeklyReportEmail}` : ''}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={exportReportCSV} className="px-4 py-2 text-xs uppercase flex items-center gap-2"
+                style={{ background: 'rgba(255,255,255,0.15)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                <Download size={14} /> CSV
+              </button>
+              {data.settings.weeklyReportEnabled && data.settings.weeklyReportEmail && (
+                <button onClick={sendReport} disabled={sending} className="px-4 py-2 text-xs uppercase flex items-center gap-2 disabled:opacity-50"
+                  style={{ background: 'var(--gold)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                  <Mail size={14} /> {sending ? 'Sende...' : 'Per Mail senden'}
+                </button>
+              )}
+              <button onClick={createOrder} className="px-4 py-2 text-xs uppercase flex items-center gap-2"
+                style={{ background: 'white', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                <ShoppingCart size={14} /> Bestellung erzeugen
+              </button>
+            </div>
+          </div>
+          {sendResult && (
+            <div className="mt-4 text-sm p-3" style={{ background: sendResult.ok ? 'rgba(155, 216, 157, 0.2)' : 'rgba(245, 198, 198, 0.2)' }}>
+              {sendResult.ok ? `✓ Versendet um ${new Date(sendResult.sentAt).toLocaleTimeString('de-DE')}` : `✗ ${sendResult.error}`}
+            </div>
+          )}
+
+          <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-px" style={{ background: 'rgba(255,255,255,0.1)' }}>
+            {aggArray.map(a => {
+              const item = getItem(a.itemId);
+              return (
+                <div key={`${a.team}__${a.itemId}`} className="p-3 text-sm" style={{ background: 'var(--vereinsblau)' }}>
+                  <div className="flex justify-between">
+                    <div className="font-medium">{item?.name || a.itemId}</div>
+                    <div className="stat-number text-xl" style={{ color: 'var(--gold)' }}>{a.count}</div>
+                  </div>
+                  <div className="text-xs" style={{ color: '#A8B8D0' }}>{a.team}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Filter */}
+      <div className="flex gap-2 mb-4 overflow-x-auto -mx-4 px-4 pb-1">
+        {[
+          { id: 'offen', label: `Offen (${reports.filter(r => r.status === 'offen').length})` },
+          { id: 'gesehen', label: `In Bearbeitung (${reports.filter(r => r.status === 'gesehen').length})` },
+          { id: 'bestellt', label: `Bestellt (${reports.filter(r => r.status === 'bestellt').length})` },
+          { id: 'erledigt', label: `Erledigt (${reports.filter(r => r.status === 'erledigt').length})` },
+          { id: 'alle', label: `Alle (${reports.length})` },
+        ].map(f => (
+          <button key={f.id} onClick={() => setFilter(f.id)}
+            className="px-3 py-1.5 text-xs uppercase whitespace-nowrap"
+            style={{
+              background: filter === f.id ? 'var(--vereinsblau)' : 'white',
+              color: filter === f.id ? 'white' : 'var(--ink-soft)',
+              fontFamily: "'Bebas Neue', sans-serif",
+              letterSpacing: '0.12em',
+              border: '1px solid var(--rule)',
+            }}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Liste */}
+      <div className="bg-white border border-stone-200 overflow-hidden">
+        {filtered.length === 0 ? (
+          <div className="p-12 text-center text-sm" style={{ color: 'var(--ink-mute)' }}>
+            Keine Meldungen in dieser Auswahl.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-stone-50 text-xs uppercase tracking-wider">
+                <tr>
+                  <th className="text-left p-3">Eingegangen</th>
+                  <th className="text-left p-3">Mannschaft / Nr.</th>
+                  <th className="text-left p-3">Artikel</th>
+                  <th className="text-left p-3">Gründe</th>
+                  <th className="text-left p-3 hidden lg:table-cell">Anmerkung</th>
+                  <th className="text-left p-3">Status</th>
+                  <th className="p-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...filtered].reverse().map(r => {
+                  const player = getPlayer(r.team, r.number);
+                  const item = getItem(r.item);
+                  return (
+                    <tr key={r.id} className="border-t border-stone-100">
+                      <td className="p-3 text-xs" style={{ color: 'var(--ink-mute)' }}>
+                        {new Date(r.createdAt).toLocaleDateString('de-DE')}<br />
+                        {new Date(r.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td className="p-3">
+                        <div className="font-medium">{r.team} · #{r.number}</div>
+                        <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+                          {player ? `${player.firstName} ${player.lastName}` : '— Spieler nicht gefunden —'}
+                        </div>
+                      </td>
+                      <td className="p-3 font-medium">{item?.name || r.item}</td>
+                      <td className="p-3">
+                        <div className="flex flex-wrap gap-1">
+                          {r.reasons.map(x => (
+                            <span key={x} className="text-xs px-2 py-0.5"
+                              style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
+                              {REASON_LABELS[x] || x}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="p-3 hidden lg:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>
+                        {r.comment || '–'}
+                        {r.reporterName && <div style={{ color: 'var(--ink-mute)' }}>– {r.reporterName}</div>}
+                      </td>
+                      <td className="p-3">
+                        <select value={r.status} onChange={e => setStatus(r.id, e.target.value)} className="text-xs border border-stone-300 px-2 py-1">
+                          <option value="offen">offen</option>
+                          <option value="gesehen">gesehen</option>
+                          <option value="bestellt">bestellt</option>
+                          <option value="erledigt">erledigt</option>
+                        </select>
+                      </td>
+                      <td className="p-3 whitespace-nowrap text-right">
+                        {(r.status === 'offen' || r.status === 'gesehen') && player && (
+                          <button onClick={() => markMaterial(r)} className="text-xs px-2 py-1 mr-1"
+                            style={{ background: 'var(--paper-dark)', color: 'var(--ink)' }}
+                            title="Materialteil im Lager markieren">
+                            <FileWarning size={12} className="inline" /> Markieren
+                          </button>
+                        )}
+                        <button onClick={() => removeReport(r.id)} className="p-1" style={{ color: 'var(--ink-mute)' }}>
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

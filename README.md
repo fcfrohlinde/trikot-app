@@ -5,12 +5,15 @@ Web-App zur Verwaltung von Trikots, Trainingsausstattung, Pfandbeträgen und Bes
 ## Features
 
 - Spieler- und Rückennummern-Verwaltung pro Mannschaft
+- CSV-Import für Spieler mit Validierung und Vorschau
 - Mannschaften frei konfigurierbar (anlegen, umbenennen, löschen)
-- Materialbestand mit Status (Lager / ausgegeben / verloren)
-- Pfandkasse mit Ein- und Auszahlungshistorie
-- Saison-Rückgabe mit automatischer Zeitwertberechnung
-- Bestellungen (Komplett, Teilbestellung, Einzelteile) mit CSV-Export der Flock-Liste
+- Materialbestand mit Status (Lager / ausgegeben / markiert)
+- Pfandkasse mit editierbaren Pfandregeln und Saison-Rückgabe
+- Bestellungen mit Sponsoren-Platzierung (Brust, Rücken, Ärmel) und Flock-Liste
+- **Bedarfsmeldungen für Spieler ohne Login** (öffentlich, mit Rate-Limiting)
+- Wochenbericht mit optionalem Mailversand (Resend)
 - Multi-User-Login mit Rollen (Admin / Nutzer)
+- Versionsnummer und Changelog
 
 ## Schritt-für-Schritt-Anleitung zum Deployment
 
@@ -88,6 +91,35 @@ Wenn die App unter einer Adresse wie `trikot.fc-frohlinde.de` erreichbar sein so
 2. Wunschdomain eintragen, „Add" klicken.
 3. Vercel zeigt dann zwei DNS-Einträge (A oder CNAME), die beim Domain-Anbieter (z. B. IONOS, Strato) eingetragen werden müssen.
 4. Nach 5–60 Minuten ist die Domain aktiv (inkl. kostenlosem SSL-Zertifikat).
+
+### 8) Mailversand für Wochenberichte (optional)
+
+Damit der Wochenbericht aus den Bedarfsmeldungen per E-Mail versendet werden kann, brauchst du einen Resend-Account:
+
+1. Auf https://resend.com kostenlos registrieren (kein Kreditkartennachweis nötig).
+2. Im Resend-Dashboard → API Keys → **Create API Key** → Namen vergeben (z. B. `trikotverwaltung`) → Key kopieren.
+3. In Vercel → Projekt → Settings → Environment Variables → **Add New**:
+   - Name: `RESEND_API_KEY`
+   - Value: der kopierte Key
+   - Environment: alle drei Häkchen
+   - **Save**
+4. Im Projekt → Deployments → letztes Deployment → ••• → **Redeploy**.
+5. In der App → Einstellungen → Wochenbericht-Versand:
+   - Häkchen bei „Versand aktiv"
+   - Empfänger-Adresse eintragen (mehrere mit Komma trennen)
+   - Speichern
+
+Standardmäßig wird mit der Resend-Test-Absenderadresse `onboarding@resend.dev` gesendet — das funktioniert sofort, sieht aber unprofessionell aus. Für eine eigene Absender-Domain (z. B. `noreply@fc-frohlinde.de`) musst du in Resend deine Domain verifizieren (DNS-Einträge setzen). Anleitung dazu im Resend-Dashboard.
+
+### 9) Bedarfsmeldungs-URL für Spieler
+
+Auf der Login-Seite der App gibt es einen gelben Button „Bedarfsmeldung abgeben" — öffentlich, ohne Login. Du kannst Spielern direkt diese URL schicken:
+
+```
+https://deine-trikot-app.vercel.app/#bedarfsmeldung
+```
+
+Der Hash `#bedarfsmeldung` öffnet sofort das Formular. Praktisch als QR-Code im Vereinsheim, in WhatsApp-Mannschaftsgruppen oder auf der Vereinsseite.
 
 ## Lokal testen (optional)
 
