@@ -2283,8 +2283,10 @@ function SettingsView({ data, update }) {
       </div>
 
       <div className="bg-white border border-stone-200 p-6 mb-4">
-        <h2 className="font-display text-2xl mb-2">WOCHENBERICHT-VERSAND</h2>
-        <p className="text-xs text-stone-500 mb-4">Aus den eingegangenen Bedarfsmeldungen wird ein Wochenbericht generiert. Wenn aktiviert, kann er per Mail versendet werden. Erfordert in Vercel die Umgebungsvariable RESEND_API_KEY.</p>
+        <h2 className="font-display text-2xl mb-2">WOCHENBERICHT-VERSAND (SMTP)</h2>
+        <p className="text-xs text-stone-500 mb-4">
+          Aus den eingegangenen Bedarfsmeldungen wird ein Wochenbericht erzeugt und per E-Mail versendet. SMTP-Zugangsdaten werden als Umgebungsvariablen in Vercel hinterlegt — siehe Anleitung im README oder unten.
+        </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)' }}>
@@ -2300,12 +2302,43 @@ function SettingsView({ data, update }) {
               onChange={e => setSettings({ ...settings, weeklyReportEmail: e.target.value })}
               placeholder="zeugwart@fc-frohlinde.de, vorstand@fc-frohlinde.de" />
           </Field>
-          <Field label="Absender-Adresse (optional, Domain muss in Resend verifiziert sein)">
-            <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={settings.weeklyReportFrom || ''}
-              onChange={e => setSettings({ ...settings, weeklyReportFrom: e.target.value })}
-              placeholder="Trikotverwaltung <noreply@fc-frohlinde.de>" />
-          </Field>
         </div>
+
+        <SmtpStatus />
+
+        <details className="mt-4">
+          <summary className="cursor-pointer text-xs uppercase tracking-wider" style={{ color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.18em' }}>
+            ▸ Anleitung: SMTP in Vercel einrichten
+          </summary>
+          <div className="mt-3 text-xs p-4" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', lineHeight: 1.6 }}>
+            <p className="mb-2">In Vercel → Projekt → Settings → Environment Variables die folgenden Variablen anlegen:</p>
+            <table className="w-full mt-2 text-xs" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: 'white' }}>
+                  <th className="text-left p-2" style={{ border: '1px solid var(--rule)', color: 'var(--vereinsblau)' }}>Name</th>
+                  <th className="text-left p-2" style={{ border: '1px solid var(--rule)', color: 'var(--vereinsblau)' }}>Beispielwert</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td className="p-2" style={{ border: '1px solid var(--rule)' }}><code>SMTP_HOST</code></td><td className="p-2" style={{ border: '1px solid var(--rule)' }}>smtp.ionos.de</td></tr>
+                <tr><td className="p-2" style={{ border: '1px solid var(--rule)' }}><code>SMTP_PORT</code></td><td className="p-2" style={{ border: '1px solid var(--rule)' }}>587</td></tr>
+                <tr><td className="p-2" style={{ border: '1px solid var(--rule)' }}><code>SMTP_SECURE</code></td><td className="p-2" style={{ border: '1px solid var(--rule)' }}>false (für Port 587 mit STARTTLS) oder true (für Port 465)</td></tr>
+                <tr><td className="p-2" style={{ border: '1px solid var(--rule)' }}><code>SMTP_USER</code></td><td className="p-2" style={{ border: '1px solid var(--rule)' }}>noreply@fc-frohlinde.de</td></tr>
+                <tr><td className="p-2" style={{ border: '1px solid var(--rule)' }}><code>SMTP_PASS</code></td><td className="p-2" style={{ border: '1px solid var(--rule)' }}>(Postfach-Passwort)</td></tr>
+                <tr><td className="p-2" style={{ border: '1px solid var(--rule)' }}><code>SMTP_FROM</code></td><td className="p-2" style={{ border: '1px solid var(--rule)' }}>FC Frohlinde Trikotverwaltung &lt;noreply@fc-frohlinde.de&gt;</td></tr>
+              </tbody>
+            </table>
+            <p className="mt-3"><strong>Typische Anbieter:</strong></p>
+            <ul className="list-disc pl-5 mt-1 space-y-0.5">
+              <li>IONOS: Host smtp.ionos.de, Port 587, Secure false</li>
+              <li>Strato: Host smtp.strato.de, Port 465, Secure true</li>
+              <li>Telekom: Host securesmtp.t-online.de, Port 465, Secure true</li>
+              <li>Gmail: Host smtp.gmail.com, Port 587, Secure false (App-Passwort nötig)</li>
+              <li>Microsoft 365: Host smtp.office365.com, Port 587, Secure false</li>
+            </ul>
+            <p className="mt-3">Nach dem Setzen der Variablen einmal in Vercel → Deployments → letztes Deployment → ⋯ → <strong>Redeploy</strong>, damit die Variablen aktiv werden.</p>
+          </div>
+        </details>
       </div>
 
       <div className="flex flex-wrap gap-2 mb-6">
@@ -2334,6 +2367,74 @@ function SettingsView({ data, update }) {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// SMTP-Status anzeigen + Test-Mail senden können
+function SmtpStatus() {
+  const { authFetch } = useAuth();
+  const [status, setStatus] = useState(null); // null | { configured, lastSent }
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    authFetch('/api/reports/weekly')
+      .then(r => r.json())
+      .then(d => { if (active) setStatus({ configured: !!d.smtpConfigured, lastSent: d.lastSent }); })
+      .catch(() => { if (active) setStatus({ configured: false, lastSent: null }); });
+    return () => { active = false; };
+  }, []);
+
+  async function sendTest() {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await authFetch('/api/reports/weekly', {
+        method: 'POST',
+        body: JSON.stringify({ test: true }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || 'Test-Versand fehlgeschlagen');
+      setTestResult({ ok: true, msg: `Test-Mail gesendet (Message-ID: ${d.messageId || '–'})` });
+    } catch (e) {
+      setTestResult({ ok: false, msg: e.message });
+    }
+    setTesting(false);
+  }
+
+  if (!status) return <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Lade SMTP-Status...</div>;
+
+  return (
+    <div className="mt-2 p-4" style={{ background: status.configured ? '#EBF0E5' : '#F5EBDD', borderLeft: `3px solid ${status.configured ? 'var(--success)' : 'var(--warn)'}` }}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm" style={{ color: 'var(--ink)' }}>
+          <strong>{status.configured ? '✓ SMTP konfiguriert' : '⚠ SMTP nicht konfiguriert'}</strong>
+          {status.lastSent && (
+            <span className="text-xs ml-2" style={{ color: 'var(--ink-mute)' }}>
+              Letzter Versand: {new Date(status.lastSent).toLocaleString('de-DE')}
+            </span>
+          )}
+        </div>
+        {status.configured && (
+          <button onClick={sendTest} disabled={testing}
+            className="px-4 py-2 text-xs uppercase flex items-center gap-2 disabled:opacity-50"
+            style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <Mail size={14} /> {testing ? 'Sende Test...' : 'Test-Mail senden'}
+          </button>
+        )}
+      </div>
+      {testResult && (
+        <div className="mt-3 text-xs p-2" style={{ background: testResult.ok ? 'rgba(74,107,58,0.1)' : 'rgba(154,40,40,0.1)', color: testResult.ok ? 'var(--success)' : 'var(--danger)' }}>
+          {testResult.ok ? '✓ ' : '✗ '}{testResult.msg}
+        </div>
+      )}
+      {!status.configured && (
+        <div className="mt-2 text-xs" style={{ color: 'var(--ink-soft)' }}>
+          SMTP-Zugangsdaten als Umgebungsvariablen in Vercel hinterlegen (siehe Anleitung unten), dann <strong>Redeploy</strong> auslösen.
+        </div>
+      )}
     </div>
   );
 }

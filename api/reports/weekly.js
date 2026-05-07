@@ -1,4 +1,5 @@
 import { kv, requireAuth } from '../_lib/auth.js';
+import { sendMail, getSmtpConfig } from '../_lib/mailer.js';
 
 export default async function handler(req, res) {
   const user = await requireAuth(req, res);
@@ -7,13 +8,14 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     // Wochenbericht-Daten zurückliefern (für die Anzeige in der App)
     const data = await loadReportData();
-    return res.json(data);
+    const smtp = getSmtpConfig();
+    return res.json({ ...data, smtpConfigured: smtp.configured });
   }
 
   if (req.method === 'POST') {
-    // Versand des Wochenberichts
     const data = await loadReportData();
     const settings = (await kv.get('data:settings')) || {};
+    const isTest = req.body?.test === true;
 
     if (!settings.weeklyReportEnabled) {
       return res.status(400).json({ error: 'Wochenbericht-Versand ist in den Einstellungen deaktiviert.' });
@@ -22,40 +24,31 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Keine Empfänger-E-Mail in den Einstellungen hinterlegt.' });
     }
 
-    const apiKey = process.env.RESEND_API_KEY;
-    if (!apiKey) {
+    const smtp = getSmtpConfig();
+    if (!smtp.configured) {
       return res.status(500).json({
-        error: 'Mailversand nicht konfiguriert. RESEND_API_KEY in Vercel-Umgebungsvariablen setzen.',
+        error: 'SMTP nicht konfiguriert. Bitte SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_FROM in Vercel-Umgebungsvariablen setzen.',
       });
     }
 
-    const html = renderEmail(data, settings);
-    const subject = `Trikot-Wochenbericht — ${new Date().toLocaleDateString('de-DE')} — ${data.openReports.length} offene Meldungen`;
+    const html = renderEmail(data, settings, isTest);
+    const subjectPrefix = isTest ? '[TEST] ' : '';
+    const subject = `${subjectPrefix}Trikot-Wochenbericht — ${new Date().toLocaleDateString('de-DE')} — ${data.openReports.length} offene Meldungen`;
 
     try {
-      const r = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          from: settings.weeklyReportFrom || 'Trikotverwaltung <onboarding@resend.dev>',
-          to: settings.weeklyReportEmail.split(',').map(e => e.trim()),
-          subject,
-          html,
-        }),
+      const result = await sendMail({
+        to: settings.weeklyReportEmail.split(',').map(e => e.trim()).filter(Boolean),
+        subject,
+        html,
       });
-      if (!r.ok) {
-        const errBody = await r.text();
-        throw new Error(`Mailversand fehlgeschlagen: ${errBody}`);
-      }
-      // Letzten Versand merken
       const sentAt = new Date().toISOString();
-      await kv.set('meta:weeklyReportLastSent', sentAt);
-      return res.json({ ok: true, sentAt });
+      if (!isTest) {
+        await kv.set('meta:weeklyReportLastSent', sentAt);
+      }
+      return res.json({ ok: true, sentAt, messageId: result.messageId, accepted: result.accepted });
     } catch (e) {
-      return res.status(500).json({ error: e.message });
+      // Detailfehler durchreichen, damit der Nutzer im UI sieht, woran's liegt
+      return res.status(500).json({ error: `SMTP-Fehler: ${e.message}` });
     }
   }
 
@@ -109,7 +102,7 @@ const REASON_LABELS = {
   beschaedigt: 'beschädigt',
 };
 
-function renderEmail(data, settings) {
+function renderEmail(data, settings, isTest = false) {
   const styles = `
     body { font-family: 'Source Sans 3', Arial, sans-serif; background:#F8F5F0; margin:0; padding:24px; color:#1A1A1A; }
     .wrap { max-width:640px; margin:0 auto; background:#fff; border:1px solid #DCD6C8; }
@@ -124,6 +117,7 @@ function renderEmail(data, settings) {
     .stat b { font-family:Georgia,serif; font-size:24px; display:block; line-height:1; color:#0B2D5C; }
     .stat span { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:#807D78; }
     .foot { padding:16px 24px; font-size:12px; color:#807D78; border-top:1px solid #DCD6C8; }
+    .test-banner { background:#C9A227; color:#0B2D5C; padding:8px 24px; font-size:12px; font-weight:bold; letter-spacing:0.12em; text-transform:uppercase; }
   `;
 
   const aggregationRows = data.aggregation.map(a => `
@@ -136,6 +130,7 @@ function renderEmail(data, settings) {
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${styles}</style></head>
   <body><div class="wrap">
+    ${isTest ? '<div class="test-banner">⚙ TEST-VERSAND — Diese Mail dient nur zur Konfigurationsprüfung</div>' : ''}
     <div class="head">
       <div class="label">WOCHENBERICHT</div>
       <h1>Trikot-Bedarfsmeldungen</h1>

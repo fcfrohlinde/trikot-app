@@ -1,8 +1,17 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.4.0';
+export const APP_VERSION = '1.5.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.5.0',
+    date: '2026-05-07',
+    changes: [
+      'Mailversand auf SMTP umgestellt (statt Resend) — funktioniert mit jedem Mail-Provider',
+      'Test-Mail-Funktion in den Einstellungen mit SMTP-Statusanzeige',
+      'Anleitung für SMTP-Einrichtung direkt in der App (mit Beispielen für IONOS, Strato, Telekom, Gmail, M365)',
+    ],
+  },
   {
     version: '1.4.0',
     date: '2026-05-07',
