@@ -1,8 +1,31 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.2';
+export const APP_VERSION = '1.4.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.4.0',
+    date: '2026-05-07',
+    changes: [
+      'FCF-Pfandordnung 2025 als Standard hinterlegt (Pfand 70 €, 8 Standardteile mit Ersatzwerten)',
+      'Zwei Pfandmodi: Pauschal-Modus (FCF-Standard) und Saison-Abschreibung (alt)',
+      'Ersatzwert pro Artikel im Katalog editierbar',
+      'Total-Verfall des Pfands per Checkbox bei Rückgabe (Punkt 8 Pfandordnung)',
+      'Auszug der Pfand- & Kleiderordnung in den Einstellungen',
+      'Fotos werden nach 90 Tagen automatisch aus der Datenbank gelöscht',
+      'Quick-Action "FCF-Pfandordnung laden" stellt Defaults wieder her',
+    ],
+  },
+  {
+    version: '1.3.0',
+    date: '2026-05-07',
+    changes: [
+      'Foto-Upload bei Bedarfsmeldungen (Browser-Komprimierung auf max. 1280px / ~150 KB)',
+      'Foto-Anzeige in der Bedarfsübersicht (Klick öffnet Großansicht)',
+      'PDF-Export für Bestellungen mit integrierter Flock-Liste, Sponsoren und Vereins-Branding',
+      'Badge mit Anzahl offener Bedarfsmeldungen am Tab "Bedarf"',
+    ],
+  },
   {
     version: '1.2.2',
     date: '2026-05-07',

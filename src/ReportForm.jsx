@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 const REASONS = [
   { id: 'verloren', label: 'Verloren' },
@@ -6,6 +6,41 @@ const REASONS = [
   { id: 'flock_kaputt', label: 'Flock kaputt' },
   { id: 'beschaedigt', label: 'Beschädigt' },
 ];
+
+// Komprimiert ein Foto im Browser auf max. 1280px, JPEG-Qualität 0.7
+async function compressImage(file, maxDim = 1280, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width >= height) {
+            height = Math.round(height * (maxDim / width));
+            width = maxDim;
+          } else {
+            width = Math.round(width * (maxDim / height));
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function ReportForm({ onBack }) {
   const [info, setInfo] = useState(null);
@@ -15,9 +50,13 @@ export default function ReportForm({ onBack }) {
   const [reasons, setReasons] = useState([]);
   const [comment, setComment] = useState('');
   const [name, setName] = useState('');
+  const [photo, setPhoto] = useState(null);
+  const [photoSize, setPhotoSize] = useState(0);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     fetch('/api/public/info')
@@ -34,6 +73,40 @@ export default function ReportForm({ onBack }) {
     setReasons(reasons.includes(id) ? reasons.filter(r => r !== id) : [...reasons, id]);
   }
 
+  async function handlePhoto(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError('');
+    if (!file.type.startsWith('image/')) {
+      setError('Bitte ein Bild auswählen.');
+      return;
+    }
+    setPhotoBusy(true);
+    try {
+      const compressed = await compressImage(file);
+      // Größe abschätzen: Base64-Länge × 0,75 ergibt ungefähre Byte-Größe
+      const sizeKb = Math.round((compressed.length * 0.75) / 1024);
+      if (sizeKb > 800) {
+        // Zweiter Versuch mit niedrigerer Qualität
+        const compressed2 = await compressImage(file, 1024, 0.5);
+        setPhoto(compressed2);
+        setPhotoSize(Math.round((compressed2.length * 0.75) / 1024));
+      } else {
+        setPhoto(compressed);
+        setPhotoSize(sizeKb);
+      }
+    } catch (e) {
+      setError('Bild konnte nicht verarbeitet werden.');
+    }
+    setPhotoBusy(false);
+  }
+
+  function removePhoto() {
+    setPhoto(null);
+    setPhotoSize(0);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
   async function submit(e) {
     e.preventDefault();
     setError('');
@@ -46,7 +119,7 @@ export default function ReportForm({ onBack }) {
       const r = await fetch('/api/public/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team, number, item, reasons, comment, name }),
+        body: JSON.stringify({ team, number, item, reasons, comment, name, photo }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Meldung fehlgeschlagen');
@@ -62,8 +135,11 @@ export default function ReportForm({ onBack }) {
     setReasons([]);
     setComment('');
     setName('');
+    setPhoto(null);
+    setPhotoSize(0);
     setDone(false);
     setError('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
   return (
@@ -151,6 +227,28 @@ export default function ReportForm({ onBack }) {
 
             <Field label="Anmerkung (optional)">
               <textarea className="w-full px-3 py-2 text-sm" rows="2" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={comment} onChange={e => setComment(e.target.value)} placeholder="z. B. wo der Schaden ist" />
+            </Field>
+
+            <Field label="Foto (optional)">
+              {photo ? (
+                <div className="space-y-2">
+                  <div className="relative" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6', padding: 8 }}>
+                    <img src={photo} alt="Vorschau" style={{ width: '100%', maxHeight: 240, objectFit: 'contain' }} />
+                    <div className="text-xs mt-2 flex justify-between" style={{ color: '#807D78' }}>
+                      <span>Bild bereit · {photoSize} KB</span>
+                      <button type="button" onClick={removePhoto} className="hover:underline" style={{ color: '#9A2828' }}>Entfernen</button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <label className="block cursor-pointer text-center py-6"
+                  style={{ border: '1px dashed #DCD6C8', background: '#FCFAF6', color: '#807D78' }}>
+                  <div style={{ fontSize: 24, marginBottom: 4 }}>📷</div>
+                  <div className="text-sm">{photoBusy ? 'Bild wird komprimiert...' : 'Foto auswählen oder fotografieren'}</div>
+                  <div className="text-xs mt-1" style={{ color: '#9C9892' }}>Wird automatisch verkleinert</div>
+                  <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handlePhoto} className="hidden" />
+                </label>
+              )}
             </Field>
 
             <Field label="Dein Name (optional)">

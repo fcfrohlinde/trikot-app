@@ -9,6 +9,18 @@ import { ErrorBoundary } from './ErrorBoundary.jsx';
 const DEFAULT_TEAMS = ['1. Mannschaft', '2. Mannschaft', '3. Mannschaft'];
 const DEFAULT_ITEMS = [];
 
+// FCF-Standardausstattung gemäß Pfandordnung (Stand 2025)
+const FCF_DEFAULT_ITEMS = [
+  { id: 'praesentationsjacke', name: 'Präsentationsjacke', price: 40, replacementValue: 25 },
+  { id: 'praesentationshose', name: 'Präsentationshose', price: 29, replacementValue: 20 },
+  { id: 'aufwaermshirt', name: 'Aufwärmshirt', price: 30, replacementValue: 20 },
+  { id: 'trainingsshirt', name: 'Trainingsshirt', price: 18, replacementValue: 10 },
+  { id: 'trainingshose_kurz', name: 'Trainingshose kurz', price: 14, replacementValue: 10 },
+  { id: 'trainingshose_lang', name: 'Trainingshose lang', price: 29, replacementValue: 20 },
+  { id: 'zip_top', name: 'Zip Top', price: 40, replacementValue: 25 },
+  { id: 'pullover_sweat', name: 'Pullover / Sweat', price: 35, replacementValue: 22 },
+];
+
 const DEFAULT_CONDITION_FACTORS = {
   neu: { label: 'Neuwertig', factor: 1.0 },
   gut: { label: 'Gut', factor: 0.85 },
@@ -19,6 +31,10 @@ const DEFAULT_CONDITION_FACTORS = {
 
 const DEFAULT_SEASON_DEPRECIATION = 0.25;
 
+// Pfandregel-Modus: 'pauschal' (FCF-Standard) oder 'saison' (Abschreibung × Zustand)
+const DEFAULT_DEPOSIT_MODE = 'pauschal';
+const DEFAULT_DEPOSIT_AMOUNT = 70;
+
 // Aktuelle Pfandregeln aus Settings holen, mit Defaults als Fallback
 function getConditionFactors(settings) {
   return settings?.conditionFactors || DEFAULT_CONDITION_FACTORS;
@@ -26,6 +42,9 @@ function getConditionFactors(settings) {
 function getSeasonDepreciation(settings) {
   const v = settings?.seasonDepreciation;
   return (typeof v === 'number' && v >= 0 && v <= 1) ? v : DEFAULT_SEASON_DEPRECIATION;
+}
+function getDepositMode(settings) {
+  return settings?.depositMode || DEFAULT_DEPOSIT_MODE;
 }
 
 export default function App() {
@@ -57,6 +76,8 @@ function AppContent() {
   const { user, logout } = useAuth();
 
   if (loading) return <FullScreenLoader />;
+
+  const openReportsCount = (data.reports || []).filter(r => r.status === 'offen' || r.status === 'gesehen').length;
 
   return (
     <div className="min-h-screen bg-stone-50">
@@ -162,7 +183,7 @@ function AppContent() {
         thead.bg-stone-50 tr th { color: var(--vereinsblau) !important; font-family: 'Bebas Neue', sans-serif; letter-spacing: 0.12em; }
       `}</style>
       <div className="font-body">
-        <Header view={view} setView={setView} clubName={data.settings.clubName} user={user} logout={logout} />
+        <Header view={view} setView={setView} clubName={data.settings.clubName} user={user} logout={logout} openReportsCount={openReportsCount} />
         {saveError && (
           <div className="bg-red-100 border-b border-red-200 text-red-800 text-sm px-4 py-2">
             ⚠ Speicherfehler: {saveError}
@@ -192,10 +213,10 @@ function AppContent() {
   );
 }
 
-function Header({ view, setView, clubName, user, logout }) {
+function Header({ view, setView, clubName, user, logout, openReportsCount = 0 }) {
   const nav = [
     { id: 'dashboard', label: 'Übersicht' },
-    { id: 'reports', label: 'Bedarf' },
+    { id: 'reports', label: 'Bedarf', badge: openReportsCount },
     { id: 'players', label: 'Spieler' },
     { id: 'inventory', label: 'Material' },
     { id: 'deposits', label: 'Pfand' },
@@ -226,7 +247,7 @@ function Header({ view, setView, clubName, user, logout }) {
             <button
               key={n.id}
               onClick={() => setView(n.id)}
-              className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition uppercase tracking-wider ${
+              className={`relative px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium whitespace-nowrap transition uppercase tracking-wider ${
                 view === n.id ? 'text-white' : 'hover:bg-stone-100'
               }`}
               style={{
@@ -235,7 +256,20 @@ function Header({ view, setView, clubName, user, logout }) {
                 fontFamily: "'Bebas Neue', sans-serif",
                 letterSpacing: '0.12em',
               }}
-            >{n.label}</button>
+            >
+              {n.label}
+              {n.badge > 0 && (
+                <span className="ml-1.5 inline-flex items-center justify-center text-[10px] font-bold"
+                  style={{
+                    background: view === n.id ? 'var(--gold)' : '#9A2828',
+                    color: view === n.id ? 'var(--vereinsblau)' : 'white',
+                    minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                    fontFamily: "'Source Sans 3', sans-serif", letterSpacing: 0,
+                  }}>
+                  {n.badge > 99 ? '99+' : n.badge}
+                </span>
+              )}
+            </button>
           ))}
         </nav>
       </div>
@@ -1150,26 +1184,46 @@ function DepositForm({ players, deposits, defaultAmount, onSave, onCancel }) {
 function ReturnsView({ data, update }) {
   const [selectedPlayer, setSelectedPlayer] = useState('');
   const [conditions, setConditions] = useState({});
+  const [totalForfeit, setTotalForfeit] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   const player = data.players.find(p => p.id === selectedPlayer);
   const playerItems = data.inventory.filter(i => i.assignedTo === selectedPlayer && i.status === 'ausgegeben');
   const deposit = data.deposits.find(d => d.playerId === selectedPlayer && !d.refunded);
 
-  // Berechnung — Pfandregeln aus Settings
+  // Berechnung — abhängig vom Pfandmodus
+  const mode = getDepositMode(data.settings);
   const conditionFactors = getConditionFactors(data.settings);
   const seasonDepreciation = getSeasonDepreciation(data.settings);
+
   const calc = playerItems.map(item => {
-    const cond = conditions[item.id] || item.condition || 'gut';
-    const seasons = item.seasonsUsed || 0;
-    const seasonValue = Math.max(0, 1 - (seasons * seasonDepreciation));
-    const condFactor = conditionFactors[cond]?.factor ?? 0;
-    const currentValue = item.originalPrice * seasonValue * condFactor;
-    const lossValue = item.originalPrice - currentValue;
-    return { item, cond, seasons, currentValue, lossValue, condFactor };
+    const cond = conditions[item.id] || (mode === 'pauschal' ? 'ok' : (item.condition || 'gut'));
+    let lossValue = 0;
+    let currentValue = item.originalPrice;
+
+    if (mode === 'pauschal') {
+      // FCF-Pfandordnung: Festwert nur bei "beschädigt" oder "fehlt"
+      // ok = vollständig & nutzbar → 0 € Abzug
+      // beschaedigt / fehlt → Ersatzwert wird abgezogen
+      if (cond === 'beschaedigt' || cond === 'fehlt') {
+        const item_def = data.items.find(i => i.id === item.itemType);
+        lossValue = item_def?.replacementValue ?? Math.round(item.originalPrice * 0.6);
+        currentValue = item.originalPrice - lossValue;
+      }
+    } else {
+      // Saison-Modell: Abschreibung × Zustandsfaktor
+      const seasons = item.seasonsUsed || 0;
+      const seasonValue = Math.max(0, 1 - (seasons * seasonDepreciation));
+      const condFactor = conditionFactors[cond]?.factor ?? 0;
+      currentValue = item.originalPrice * seasonValue * condFactor;
+      lossValue = item.originalPrice - currentValue;
+    }
+    return { item, cond, currentValue, lossValue };
   });
 
-  const totalLoss = calc.reduce((s, c) => s + c.lossValue, 0);
+  const itemLossSum = calc.reduce((s, c) => s + c.lossValue, 0);
+  // Pauschal-Modus: Wenn "Total-Verfall" angehakt ist, verfällt das ganze Pfand (Punkt 8 Pfandordnung)
+  const totalLoss = (mode === 'pauschal' && totalForfeit) ? (deposit?.amount ?? 0) : itemLossSum;
   const refund = deposit ? Math.max(0, deposit.amount - totalLoss) : 0;
   const retained = deposit ? deposit.amount - refund : 0;
 
@@ -1179,12 +1233,21 @@ function ReturnsView({ data, update }) {
     // Material zurück ins Lager mit Zustandsupdate
     const newInv = data.inventory.map(i => {
       if (i.assignedTo === selectedPlayer && i.status === 'ausgegeben') {
-        const cond = conditions[i.id] || 'gut';
-        if (cond === 'defekt') {
+        const cond = conditions[i.id] || (mode === 'pauschal' ? 'ok' : 'gut');
+        // Status "verloren" / nicht mehr im Lager: bei Pauschal-Modus "fehlt", bei Saison "defekt"
+        const isLost = (mode === 'pauschal' && cond === 'fehlt') || (mode === 'saison' && cond === 'defekt');
+        if (isLost) {
           return { ...i, status: 'verloren', returnedAt: now, condition: cond };
         }
-        return { ...i, status: 'lager', assignedTo: null, assignedNumber: null,
-          returnedAt: now, condition: cond, seasonsUsed: (i.seasonsUsed || 0) + 1 };
+        return {
+          ...i,
+          status: 'lager',
+          assignedTo: null,
+          assignedNumber: null,
+          returnedAt: now,
+          condition: cond,
+          seasonsUsed: (i.seasonsUsed || 0) + 1,
+        };
       }
       return i;
     });
@@ -1249,33 +1312,65 @@ function ReturnsView({ data, update }) {
                   <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                     <tr>
                       <th className="text-left p-3">Artikel</th>
-                      <th className="text-left p-3 hidden sm:table-cell">Saisons</th>
-                      <th className="text-left p-3 hidden md:table-cell">Neupreis</th>
-                      <th className="text-left p-3">Zustand</th>
-                      <th className="text-left p-3">Zeitwert</th>
-                      <th className="text-left p-3 hidden lg:table-cell">Verlust</th>
+                      {mode === 'saison' && <th className="text-left p-3 hidden sm:table-cell">Saisons</th>}
+                      <th className="text-left p-3 hidden md:table-cell">{mode === 'pauschal' ? 'Ersatzwert' : 'Neupreis'}</th>
+                      <th className="text-left p-3">{mode === 'pauschal' ? 'Rückgabe-Status' : 'Zustand'}</th>
+                      <th className="text-left p-3 hidden lg:table-cell">Abzug</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {calc.map(({ item, cond, seasons, currentValue, lossValue }) => (
-                      <tr key={item.id} className="border-t border-stone-100">
-                        <td className="p-3"><div className="font-medium">{item.itemName}</div><div className="text-xs text-stone-500">Größe {item.size}</div></td>
-                        <td className="p-3 hidden sm:table-cell">{seasons}</td>
-                        <td className="p-3 hidden md:table-cell">{item.originalPrice.toFixed(2)} €</td>
-                        <td className="p-3">
-                          <select className="border border-stone-300 px-2 py-1 text-xs" value={cond} onChange={e => setConditions({ ...conditions, [item.id]: e.target.value })}>
-                            {Object.entries(conditionFactors).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                          </select>
-                        </td>
-                        <td className="p-3 font-medium">{currentValue.toFixed(2)} €</td>
-                        <td className="p-3 hidden lg:table-cell text-orange-700">{lossValue.toFixed(2)} €</td>
-                      </tr>
-                    ))}
+                    {calc.map(({ item, cond, lossValue }) => {
+                      const itemDef = data.items.find(i => i.id === item.itemType);
+                      const replacementValue = itemDef?.replacementValue ?? Math.round(item.originalPrice * 0.6);
+                      return (
+                        <tr key={item.id} className="border-t border-stone-100">
+                          <td className="p-3"><div className="font-medium">{item.itemName}</div><div className="text-xs text-stone-500">Größe {item.size}</div></td>
+                          {mode === 'saison' && <td className="p-3 hidden sm:table-cell">{item.seasonsUsed || 0}</td>}
+                          <td className="p-3 hidden md:table-cell">
+                            {mode === 'pauschal' ? `${replacementValue.toFixed(2)} €` : `${item.originalPrice.toFixed(2)} €`}
+                          </td>
+                          <td className="p-3">
+                            {mode === 'pauschal' ? (
+                              <select className="border border-stone-300 px-2 py-1 text-xs"
+                                value={cond}
+                                onChange={e => setConditions({ ...conditions, [item.id]: e.target.value })}>
+                                <option value="ok">✓ Vollständig & nutzbar</option>
+                                <option value="beschaedigt">O Beschädigt</option>
+                                <option value="fehlt">X Fehlt</option>
+                              </select>
+                            ) : (
+                              <select className="border border-stone-300 px-2 py-1 text-xs"
+                                value={cond}
+                                onChange={e => setConditions({ ...conditions, [item.id]: e.target.value })}>
+                                {Object.entries(conditionFactors).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                              </select>
+                            )}
+                          </td>
+                          <td className="p-3 hidden lg:table-cell" style={{ color: lossValue > 0 ? 'var(--warn)' : 'var(--ink-mute)' }}>
+                            {lossValue.toFixed(2)} €
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             )}
           </div>
+
+          {mode === 'pauschal' && deposit && (
+            <div className="bg-white p-4 mb-4" style={{ border: '1px solid var(--rule)', borderLeft: '3px solid var(--warn)' }}>
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" checked={totalForfeit} onChange={e => setTotalForfeit(e.target.checked)} className="mt-1" />
+                <div>
+                  <div className="text-sm font-medium" style={{ color: 'var(--ink)' }}>Pfand vollständig einbehalten (gemäß Punkt 8 Pfandordnung)</div>
+                  <div className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>
+                    Anwenden, wenn keine Kleidung zurückgegeben wurde, die Kleidung stark beschädigt / nicht nutzbar ist, oder Rückgabehinweise mehrfach ignoriert wurden.
+                  </div>
+                </div>
+              </label>
+            </div>
+          )}
 
           {deposit && (
             <div className="p-7 mb-4 text-white" style={{ background: 'var(--vereinsblau)' }}>
@@ -1606,6 +1701,155 @@ function OrderDetail({ order, data, onBack, onStatus }) {
     downloadCSV(rows, `bestellliste_${order.title.replace(/\s+/g, '_')}.csv`);
   }
 
+  async function exportPDF() {
+    // Dynamischer Import, damit der Hauptbundle klein bleibt
+    const [{ default: jsPDF }, autoTableModule] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ]);
+    const autoTable = autoTableModule.default || autoTableModule.autoTable;
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const W = doc.internal.pageSize.getWidth();
+    const sponsors = order.sponsors || {};
+    const settings = data.settings || {};
+
+    // Kopfblock mit Vereinsblau
+    doc.setFillColor(11, 45, 92); // Vereinsblau
+    doc.rect(0, 0, W, 30, 'F');
+    doc.setTextColor(201, 162, 39); // Gold
+    doc.setFontSize(8);
+    doc.text('BESTELLUNG · TRIKOTVERWALTUNG', 14, 11);
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.text(order.title, 14, 21);
+    doc.setFontSize(9);
+    doc.setTextColor(168, 184, 208);
+    doc.text(settings.clubName || 'F. C. Frohlinde 1949 e. V.', 14, 27);
+
+    // Metadaten-Block
+    let y = 40;
+    doc.setTextColor(26, 26, 26);
+    doc.setFontSize(9);
+    doc.text(`Erstellt: ${new Date(order.createdAt).toLocaleDateString('de-DE')}`, 14, y);
+    doc.text(`Status: ${order.status}`, 14, y + 5);
+    if (order.team) doc.text(`Mannschaft: ${order.team}`, 14, y + 10);
+    if (order.supplier) doc.text(`Lieferant: ${order.supplier}`, W - 14, y, { align: 'right' });
+    doc.text(`${order.lines.reduce((s, l) => s + l.qty, 0)} Teile gesamt`, W - 14, y + 5, { align: 'right' });
+    y += 18;
+
+    if (order.notes) {
+      doc.setFontSize(9);
+      doc.setTextColor(74, 72, 69);
+      const noteLines = doc.splitTextToSize(`Notiz: ${order.notes}`, W - 28);
+      doc.text(noteLines, 14, y);
+      y += noteLines.length * 4 + 4;
+    }
+
+    // Sponsoren-Block
+    if (sponsors.brust || sponsors.ruecken || sponsors.aermel) {
+      doc.setFillColor(241, 236, 223);
+      doc.rect(14, y, W - 28, 22, 'F');
+      doc.setTextColor(11, 45, 92);
+      doc.setFontSize(8);
+      doc.text('SPONSOREN-PLATZIERUNG', 18, y + 5);
+      doc.setTextColor(26, 26, 26);
+      doc.setFontSize(10);
+      const colW = (W - 28) / 3;
+      const labels = [
+        { k: 'brust', l: 'BRUST' },
+        { k: 'ruecken', l: 'RÜCKEN' },
+        { k: 'aermel', l: 'ÄRMEL' },
+      ];
+      labels.forEach((s, i) => {
+        const x = 18 + i * colW;
+        doc.setFontSize(7);
+        doc.setTextColor(128, 125, 120);
+        doc.text(s.l, x, y + 11);
+        doc.setFontSize(11);
+        doc.setTextColor(26, 26, 26);
+        doc.text(sponsors[s.k] || '–', x, y + 17);
+      });
+      y += 26;
+    }
+
+    // Aggregierte Bestellliste
+    const agg = {};
+    order.lines.forEach(l => {
+      const key = `${l.itemType}__${l.size}`;
+      if (!agg[key]) {
+        const item = data.items.find(i => i.id === l.itemType);
+        agg[key] = { name: item?.name || l.itemType, size: l.size, qty: 0 };
+      }
+      agg[key].qty += l.qty;
+    });
+
+    autoTable(doc, {
+      startY: y,
+      head: [['BESTELLLISTE FÜR LIEFERANTEN', '', '']],
+      body: [],
+      theme: 'plain',
+      headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
+      margin: { left: 14, right: 14 },
+    });
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY,
+      head: [['Artikel', 'Größe', 'Menge']],
+      body: Object.values(agg).map(a => [a.name, a.size, String(a.qty)]),
+      headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
+      bodyStyles: { fontSize: 9 },
+      alternateRowStyles: { fillColor: [252, 250, 246] },
+      columnStyles: { 2: { halign: 'right' } },
+      margin: { left: 14, right: 14 },
+    });
+
+    // Flock-Liste
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY + 8,
+      head: [['FLOCK-LISTE FÜR DEN AUSRÜSTER', '', '', '', '', '']],
+      body: [],
+      theme: 'plain',
+      headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
+      margin: { left: 14, right: 14 },
+    });
+    autoTable(doc, {
+      startY: doc.lastAutoTable.finalY,
+      head: [['Artikel', 'Gr.', 'Mge', 'Mannschaft / Spieler', 'Nr.', 'Flock-Name']],
+      body: order.lines.map(l => {
+        const player = data.players.find(p => p.id === l.playerId);
+        const item = data.items.find(i => i.id === l.itemType);
+        return [
+          item?.name || l.itemType,
+          l.size,
+          String(l.qty),
+          player ? `${player.team || order.team || '–'}\n${player.firstName} ${player.lastName}` : `${order.team || '–'}\nLagerware`,
+          l.number ? String(l.number) : '–',
+          l.name || '–',
+        ];
+      }),
+      headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
+      bodyStyles: { fontSize: 9, valign: 'middle' },
+      alternateRowStyles: { fillColor: [252, 250, 246] },
+      columnStyles: {
+        1: { halign: 'center' },
+        2: { halign: 'right' },
+        4: { halign: 'center', fontStyle: 'bold', fontSize: 11 },
+        5: { fontStyle: 'bold' },
+      },
+      margin: { left: 14, right: 14 },
+      didDrawPage: (data) => {
+        // Footer
+        const pageHeight = doc.internal.pageSize.getHeight();
+        doc.setFontSize(8);
+        doc.setTextColor(128, 125, 120);
+        doc.text(`Seite ${doc.internal.getNumberOfPages()}`, W - 14, pageHeight - 8, { align: 'right' });
+        doc.text(`${settings.clubName || 'F. C. Frohlinde'} · #DeinDorfverein`, 14, pageHeight - 8);
+      },
+    });
+
+    doc.save(`bestellung_${order.title.replace(/\s+/g, '_')}.pdf`);
+  }
+
   const totalQty = order.lines.reduce((s, l) => s + l.qty, 0);
 
   return (
@@ -1627,10 +1871,13 @@ function OrderDetail({ order, data, onBack, onStatus }) {
           </div>
           <div className="flex gap-2 flex-wrap">
             <button onClick={exportOrderList} className="px-4 py-2 text-xs uppercase flex items-center gap-2" style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-              <Download size={14} /> Bestellliste
+              <Download size={14} /> Bestellliste CSV
             </button>
-            <button onClick={exportFlockList} className="px-4 py-2 text-xs uppercase flex items-center gap-2 text-white" style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-              <Download size={14} /> Flock-Liste
+            <button onClick={exportFlockList} className="px-4 py-2 text-xs uppercase flex items-center gap-2" style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              <Download size={14} /> Flock-Liste CSV
+            </button>
+            <button onClick={exportPDF} className="px-4 py-2 text-xs uppercase flex items-center gap-2 text-white" style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              <FileText size={14} /> Komplett-PDF
             </button>
           </div>
         </div>
@@ -1773,7 +2020,17 @@ function SettingsView({ data, update }) {
   }
 
   function addItem() {
-    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30 }]);
+    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30, replacementValue: 20 }]);
+  }
+
+  function loadFCFDefaults() {
+    if (!confirm('FCF-Pfandordnung 2025 laden? Der aktuelle Artikelkatalog wird ersetzt. Pfand: 70 €, 8 Standardteile mit Ersatzwerten gemäß Pfandordnung.')) return;
+    setItems(FCF_DEFAULT_ITEMS);
+    setSettings({
+      ...settings,
+      defaultDeposit: 70,
+      depositMode: 'pauschal',
+    });
   }
 
   function exportAll() {
@@ -1879,73 +2136,150 @@ function SettingsView({ data, update }) {
 
       <div className="bg-white border border-stone-200 p-6 mb-4">
         <div className="flex justify-between items-center mb-4">
-          <h2 className="font-display text-2xl">ARTIKELKATALOG & NEUPREISE</h2>
+          <h2 className="font-display text-2xl">ARTIKELKATALOG</h2>
           <button onClick={addItem} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1"><Plus size={12} /> Artikel</button>
         </div>
-        <p className="text-xs text-stone-500 mb-3">Neupreise sind Basis für die Zeitwertberechnung bei der Rückgabe. Abschreibung pro Saison: {Math.round(getSeasonDepreciation(settings) * 100)}% (in Pfandregeln änderbar).</p>
+        <p className="text-xs text-stone-500 mb-3">
+          Neupreis wird im Saison-Modell zur Zeitwertberechnung genutzt. Ersatzwert ist der Festbetrag, der im Pauschal-Modus (FCF-Pfandordnung) bei beschädigten oder verlorenen Teilen vom Pfand abgezogen wird.
+        </p>
+        <div className="grid grid-cols-12 gap-2 text-xs uppercase tracking-wider mb-2" style={{ color: 'var(--ink-mute)' }}>
+          <div className="col-span-6">Artikel</div>
+          <div className="col-span-3 text-right">Neupreis</div>
+          <div className="col-span-2 text-right">Ersatzwert</div>
+        </div>
         <div className="space-y-2">
           {items.map((it, idx) => (
-            <div key={it.id} className="flex gap-2 items-center">
-              <input className="flex-1 border border-stone-300 px-3 py-2 text-sm" value={it.name} onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
-              <input type="number" step="0.01" className="w-24 border border-stone-300 px-3 py-2 text-sm" value={it.price} onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, price: parseFloat(e.target.value) || 0 } : i))} />
-              <span className="text-xs text-stone-500">€</span>
-              <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="text-stone-400 hover:text-red-600 p-1"><Trash2 size={14} /></button>
+            <div key={it.id} className="grid grid-cols-12 gap-2 items-center">
+              <input className="col-span-6 border border-stone-300 px-3 py-2 text-sm" value={it.name}
+                onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
+              <div className="col-span-3 flex items-center gap-1">
+                <input type="number" step="0.01" className="flex-1 border border-stone-300 px-2 py-2 text-sm text-right"
+                  value={Number.isFinite(it.price) ? it.price : 0}
+                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, price: parseFloat(e.target.value) || 0 } : i))} />
+                <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>€</span>
+              </div>
+              <div className="col-span-2 flex items-center gap-1">
+                <input type="number" step="0.01" className="flex-1 border border-stone-300 px-2 py-2 text-sm text-right"
+                  value={Number.isFinite(it.replacementValue) ? it.replacementValue : ''}
+                  placeholder="–"
+                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, replacementValue: e.target.value === '' ? null : (parseFloat(e.target.value) || 0) } : i))} />
+                <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>€</span>
+              </div>
+              <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="col-span-1 text-stone-400 hover:text-red-600 p-1 justify-self-end"><Trash2 size={14} /></button>
             </div>
           ))}
+        </div>
+        <div className="mt-3 text-xs flex justify-between items-center" style={{ color: 'var(--ink-mute)' }}>
+          <span>Summe aktueller Artikelwerte (Neupreis): {items.reduce((s, i) => s + (i.price || 0), 0).toFixed(2)} €</span>
+          <button onClick={loadFCFDefaults}
+            className="px-3 py-1.5 text-xs uppercase"
+            style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            FCF-Pfandordnung laden
+          </button>
         </div>
       </div>
 
       <div className="bg-white border border-stone-200 p-6 mb-4">
         <h2 className="font-display text-2xl mb-2">PFANDREGELN</h2>
-        <p className="text-xs text-stone-500 mb-4">Diese Regeln bestimmen, wie der Zeitwert eines Materialteils bei der Rückgabe berechnet wird. Formel: Neupreis × (1 − Saisons × Abschreibung) × Zustandsfaktor.</p>
+        <p className="text-xs text-stone-500 mb-4">Wie wird bei der Rückgabe abgerechnet? Wähle das Modell, das zur Pfandordnung des Vereins passt.</p>
 
-        <div className="mb-5">
-          <Field label="Saison-Abschreibung pro Saison (%)">
-            <input type="number" min="0" max="100" step="1" className="w-32 border border-stone-300 px-3 py-2 text-sm"
-              value={Math.round((settings.seasonDepreciation ?? DEFAULT_SEASON_DEPRECIATION) * 100)}
-              onChange={e => setSettings({ ...settings, seasonDepreciation: (parseFloat(e.target.value) || 0) / 100 })} />
-          </Field>
-          <p className="text-xs text-stone-500 mt-1">Üblich: 25 % — also nach 4 Saisons ist der Zeitwert allein durch Alter null.</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+          <label className="flex items-start gap-3 p-4 cursor-pointer"
+            style={{ border: settings.depositMode === 'pauschal' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: settings.depositMode === 'pauschal' ? '#F1ECDF' : 'white' }}>
+            <input type="radio" name="depositMode" value="pauschal" checked={settings.depositMode === 'pauschal' || !settings.depositMode}
+              onChange={e => setSettings({ ...settings, depositMode: 'pauschal' })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium" style={{ color: 'var(--ink)' }}>Pauschal-Modus (FCF-Standard)</div>
+              <div className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>
+                Pfand wird voll zurückgezahlt, wenn alles vollständig & nutzbar ist. Bei beschädigten oder verlorenen Teilen wird der Ersatzwert (siehe Artikelkatalog) abgezogen. Punkt 8: Bei Total-Verlust verfällt das gesamte Pfand.
+              </div>
+            </div>
+          </label>
+          <label className="flex items-start gap-3 p-4 cursor-pointer"
+            style={{ border: settings.depositMode === 'saison' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: settings.depositMode === 'saison' ? '#F1ECDF' : 'white' }}>
+            <input type="radio" name="depositMode" value="saison" checked={settings.depositMode === 'saison'}
+              onChange={e => setSettings({ ...settings, depositMode: 'saison' })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium" style={{ color: 'var(--ink)' }}>Saison-Abschreibung</div>
+              <div className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>
+                Zeitwert pro Teil = Neupreis × (1 − Saisons × Abschreibung) × Zustandsfaktor. Differenz wird vom Pfand abgezogen.
+              </div>
+            </div>
+          </label>
         </div>
 
-        <div className="mb-3">
-          <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>ZUSTANDS-FAKTOREN</div>
-          <p className="text-xs text-stone-500 mb-3">Faktor 100 % = voller Zeitwert · 0 % = kein Wert (z. B. verloren oder zerstört). Bezeichnungen können angepasst werden, die Schlüssel (links) bleiben fest.</p>
-        </div>
+        {settings.depositMode === 'saison' && (<>
+          <div className="mb-5">
+            <Field label="Saison-Abschreibung pro Saison (%)">
+              <input type="number" min="0" max="100" step="1" className="w-32 border border-stone-300 px-3 py-2 text-sm"
+                value={Math.round((settings.seasonDepreciation ?? DEFAULT_SEASON_DEPRECIATION) * 100)}
+                onChange={e => setSettings({ ...settings, seasonDepreciation: (parseFloat(e.target.value) || 0) / 100 })} />
+            </Field>
+            <p className="text-xs text-stone-500 mt-1">Üblich: 25 % — also nach 4 Saisons ist der Zeitwert allein durch Alter null.</p>
+          </div>
 
-        <div className="space-y-2">
-          {Object.entries(getConditionFactors(settings)).map(([k, v]) => (
-            <div key={k} className="grid grid-cols-12 gap-2 items-center">
-              <div className="col-span-3 text-xs uppercase tracking-wider" style={{ color: 'var(--ink-mute)' }}>{k}</div>
-              <input
-                className="col-span-6 border border-stone-300 px-3 py-2 text-sm"
-                value={v.label}
-                onChange={e => setSettings({
-                  ...settings,
-                  conditionFactors: {
-                    ...getConditionFactors(settings),
-                    [k]: { ...v, label: e.target.value },
-                  },
-                })}
-              />
-              <div className="col-span-3 flex items-center gap-1">
+          <div className="mb-3">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>ZUSTANDS-FAKTOREN</div>
+            <p className="text-xs text-stone-500 mb-3">Faktor 100 % = voller Zeitwert · 0 % = kein Wert (z. B. verloren oder zerstört). Bezeichnungen anpassbar, Schlüssel (links) bleiben fest.</p>
+          </div>
+
+          <div className="space-y-2">
+            {Object.entries(getConditionFactors(settings)).map(([k, v]) => (
+              <div key={k} className="grid grid-cols-12 gap-2 items-center">
+                <div className="col-span-3 text-xs uppercase tracking-wider" style={{ color: 'var(--ink-mute)' }}>{k}</div>
                 <input
-                  type="number" min="0" max="100" step="1"
-                  className="w-20 border border-stone-300 px-3 py-2 text-sm text-right"
-                  value={Math.round(v.factor * 100)}
+                  className="col-span-6 border border-stone-300 px-3 py-2 text-sm"
+                  value={v.label}
                   onChange={e => setSettings({
                     ...settings,
                     conditionFactors: {
                       ...getConditionFactors(settings),
-                      [k]: { ...v, factor: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) / 100 },
+                      [k]: { ...v, label: e.target.value },
                     },
                   })}
                 />
-                <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>%</span>
+                <div className="col-span-3 flex items-center gap-1">
+                  <input
+                    type="number" min="0" max="100" step="1"
+                    className="w-20 border border-stone-300 px-3 py-2 text-sm text-right"
+                    value={Math.round(v.factor * 100)}
+                    onChange={e => setSettings({
+                      ...settings,
+                      conditionFactors: {
+                        ...getConditionFactors(settings),
+                        [k]: { ...v, factor: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) / 100 },
+                      },
+                    })}
+                  />
+                  <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>%</span>
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </>)}
+
+        {settings.depositMode === 'pauschal' && (
+          <div className="text-xs p-4" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
+            <strong style={{ color: 'var(--vereinsblau)' }}>Hinweis zum Pauschal-Modus:</strong> Die Ersatzwerte für jedes Kleidungsstück werden im Artikelkatalog gepflegt. Die Standardwerte folgen der FCF-Pfandordnung 2025. Ein Klick auf „FCF-Pfandordnung laden" stellt die Werte wieder her.
+          </div>
+        )}
+      </div>
+
+      {/* Folgende Block (alter Wochenbericht-Versand) wird unverändert weitergeführt */}
+
+      <div className="bg-white border border-stone-200 p-6 mb-4">
+        <h2 className="font-display text-2xl mb-2">PFAND- & KLEIDERORDNUNG (FCF, STAND 2025)</h2>
+        <p className="text-xs text-stone-500 mb-4">Diese Regelung ist im aktuellen Pauschal-Modus hinterlegt. Ein Auszug für die Spielersicht — die vollständige Ordnung gibt's als PDF-Anhang.</p>
+        <ol className="text-sm space-y-2 pl-5 list-decimal" style={{ color: 'var(--ink-soft)' }}>
+          <li>Vereinsausstattung bleibt Eigentum des FC Frohlinde, Ausgabe als Leihgabe gegen Pfand.</li>
+          <li>Standardausstattung im Wert von ca. 200 € umfasst Präsentationsjacke, Präsentationshose, Aufwärmshirt, Trainingsshirt, Trainingshose kurz, Trainingshose lang und Pullover/Sweat.</li>
+          <li>Laufzeit bis zum nächsten Kollektionswechsel; normaler Verschleiß wird ersetzt.</li>
+          <li><strong>Pfandbetrag: 70 €</strong> — vollständig erstattet bei sauberer, vollständiger und nutzbarer Rückgabe.</li>
+          <li>Rückgabe sauber (gewaschen, trocken), vollständig und funktionsfähig (Reißverschlüsse, Nähte, Logos intakt).</li>
+          <li>Fehlende oder beschädigte Teile werden mit dem Ersatzwert (siehe Artikelkatalog) vom Pfand abgezogen. Übersteigen die Kosten den Pfand, wird die Differenz nachgefordert.</li>
+          <li><strong>Vollständiger Pfandverfall</strong>, wenn keine Kleidung zurückgegeben wird, die Kleidung stark beschädigt / nicht mehr nutzbar ist oder Rückgabehinweise mehrfach ignoriert werden.</li>
+          <li>Mit Entgegennahme der Ausstattung erkennen Spieler/Erziehungsberechtigte diese Pfand- & Kleiderordnung an.</li>
+        </ol>
       </div>
 
       <div className="bg-white border border-stone-200 p-6 mb-4">
@@ -2164,6 +2498,30 @@ function ReportsView({ data, update }) {
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState(null);
   const [lastSent, setLastSent] = useState(null);
+  const [photoModal, setPhotoModal] = useState(null); // { id, url } | null
+  const [photoCache, setPhotoCache] = useState({});
+
+  async function showPhoto(reportId) {
+    if (photoCache[reportId]) {
+      setPhotoModal({ id: reportId, url: photoCache[reportId] });
+      return;
+    }
+    setPhotoModal({ id: reportId, url: null });
+    try {
+      const r = await authFetch(`/api/reports/photo?id=${encodeURIComponent(reportId)}`);
+      const d = await r.json();
+      if (d.photo) {
+        setPhotoCache(prev => ({ ...prev, [reportId]: d.photo }));
+        setPhotoModal({ id: reportId, url: d.photo });
+      } else {
+        setPhotoModal(null);
+        alert('Foto nicht gefunden.');
+      }
+    } catch (e) {
+      setPhotoModal(null);
+      alert('Foto konnte nicht geladen werden.');
+    }
+  }
 
   // Reports werden serverseitig direkt vom öffentlichen Endpunkt geschrieben.
   // Damit eingegangene Meldungen sichtbar werden, hier ein Refresh aus useData via update wäre umständlich.
@@ -2459,6 +2817,12 @@ function ReportsView({ data, update }) {
                       <td className="p-3 hidden lg:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>
                         {r.comment || '–'}
                         {r.reporterName && <div style={{ color: 'var(--ink-mute)' }}>– {r.reporterName}</div>}
+                        {r.hasPhoto && (
+                          <button onClick={() => showPhoto(r.id)} className="mt-1 inline-flex items-center gap-1 text-xs hover:underline"
+                            style={{ color: 'var(--vereinsblau)' }}>
+                            📷 Foto ansehen
+                          </button>
+                        )}
                       </td>
                       <td className="p-3">
                         <select value={r.status} onChange={e => setStatus(r.id, e.target.value)} className="text-xs border border-stone-300 px-2 py-1">
@@ -2488,6 +2852,26 @@ function ReportsView({ data, update }) {
           </div>
         )}
       </div>
+
+      {photoModal && (
+        <div onClick={() => setPhotoModal(null)}
+          className="fixed inset-0 flex items-center justify-center p-4 z-50"
+          style={{ background: 'rgba(0,0,0,0.85)' }}>
+          <div onClick={e => e.stopPropagation()} className="bg-white p-3 max-w-3xl w-full" style={{ border: '1px solid var(--rule)' }}>
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>Foto zur Bedarfsmeldung</span>
+              <button onClick={() => setPhotoModal(null)} className="p-1 hover:bg-stone-100">
+                <X size={18} />
+              </button>
+            </div>
+            {photoModal.url ? (
+              <img src={photoModal.url} alt="Bedarfsfoto" style={{ width: '100%', maxHeight: '80vh', objectFit: 'contain', display: 'block' }} />
+            ) : (
+              <div className="p-12 text-center text-sm" style={{ color: 'var(--ink-mute)' }}>Lade Foto...</div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
