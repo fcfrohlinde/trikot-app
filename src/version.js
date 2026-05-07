@@ -1,8 +1,25 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.5.0';
+export const APP_VERSION = '1.5.2';
 
 export const CHANGELOG = [
+  {
+    version: '1.5.2',
+    date: '2026-05-07',
+    changes: [
+      'Hotfix: MIME-Type-Header für JS-Module in vercel.json korrigiert',
+      'PDF-Bibliotheken werden jetzt direkt ins Hauptbundle gepackt (kein Lazy-Loading mehr)',
+    ],
+  },
+  {
+    version: '1.5.1',
+    date: '2026-05-07',
+    changes: [
+      'Hotfix: PDF-Export funktioniert jetzt zuverlässig (statischer Import von jspdf, Side-Effect-API)',
+      'PDF-Fehler werden sichtbar angezeigt statt stillschweigend zu scheitern',
+      'Sicherer Dateiname beim PDF-Speichern',
+    ],
+  },
   {
     version: '1.5.0',
     date: '2026-05-07',

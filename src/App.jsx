@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Shirt, Wallet, ShoppingCart, Plus, Trash2, Edit2, Download, ArrowLeft, Check, X, AlertCircle, Package, Euro, FileText, Settings, LogOut, UserCog, Mail, Bell, FileWarning } from 'lucide-react';
+import jsPDF from 'jspdf';
+import 'jspdf-autotable';
 import { AuthProvider, useAuth } from './auth.jsx';
 import LoginScreen from './LoginScreen.jsx';
 import { useData } from './useData.js';
@@ -1701,153 +1703,157 @@ function OrderDetail({ order, data, onBack, onStatus }) {
     downloadCSV(rows, `bestellliste_${order.title.replace(/\s+/g, '_')}.csv`);
   }
 
-  async function exportPDF() {
-    // Dynamischer Import, damit der Hauptbundle klein bleibt
-    const [{ default: jsPDF }, autoTableModule] = await Promise.all([
-      import('jspdf'),
-      import('jspdf-autotable'),
-    ]);
-    const autoTable = autoTableModule.default || autoTableModule.autoTable;
-
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const W = doc.internal.pageSize.getWidth();
-    const sponsors = order.sponsors || {};
-    const settings = data.settings || {};
-
-    // Kopfblock mit Vereinsblau
-    doc.setFillColor(11, 45, 92); // Vereinsblau
-    doc.rect(0, 0, W, 30, 'F');
-    doc.setTextColor(201, 162, 39); // Gold
-    doc.setFontSize(8);
-    doc.text('BESTELLUNG · TRIKOTVERWALTUNG', 14, 11);
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.text(order.title, 14, 21);
-    doc.setFontSize(9);
-    doc.setTextColor(168, 184, 208);
-    doc.text(settings.clubName || 'F. C. Frohlinde 1949 e. V.', 14, 27);
-
-    // Metadaten-Block
-    let y = 40;
-    doc.setTextColor(26, 26, 26);
-    doc.setFontSize(9);
-    doc.text(`Erstellt: ${new Date(order.createdAt).toLocaleDateString('de-DE')}`, 14, y);
-    doc.text(`Status: ${order.status}`, 14, y + 5);
-    if (order.team) doc.text(`Mannschaft: ${order.team}`, 14, y + 10);
-    if (order.supplier) doc.text(`Lieferant: ${order.supplier}`, W - 14, y, { align: 'right' });
-    doc.text(`${order.lines.reduce((s, l) => s + l.qty, 0)} Teile gesamt`, W - 14, y + 5, { align: 'right' });
-    y += 18;
-
-    if (order.notes) {
-      doc.setFontSize(9);
-      doc.setTextColor(74, 72, 69);
-      const noteLines = doc.splitTextToSize(`Notiz: ${order.notes}`, W - 28);
-      doc.text(noteLines, 14, y);
-      y += noteLines.length * 4 + 4;
-    }
-
-    // Sponsoren-Block
-    if (sponsors.brust || sponsors.ruecken || sponsors.aermel) {
-      doc.setFillColor(241, 236, 223);
-      doc.rect(14, y, W - 28, 22, 'F');
-      doc.setTextColor(11, 45, 92);
-      doc.setFontSize(8);
-      doc.text('SPONSOREN-PLATZIERUNG', 18, y + 5);
-      doc.setTextColor(26, 26, 26);
-      doc.setFontSize(10);
-      const colW = (W - 28) / 3;
-      const labels = [
-        { k: 'brust', l: 'BRUST' },
-        { k: 'ruecken', l: 'RÜCKEN' },
-        { k: 'aermel', l: 'ÄRMEL' },
-      ];
-      labels.forEach((s, i) => {
-        const x = 18 + i * colW;
-        doc.setFontSize(7);
-        doc.setTextColor(128, 125, 120);
-        doc.text(s.l, x, y + 11);
-        doc.setFontSize(11);
-        doc.setTextColor(26, 26, 26);
-        doc.text(sponsors[s.k] || '–', x, y + 17);
-      });
-      y += 26;
-    }
-
-    // Aggregierte Bestellliste
-    const agg = {};
-    order.lines.forEach(l => {
-      const key = `${l.itemType}__${l.size}`;
-      if (!agg[key]) {
-        const item = data.items.find(i => i.id === l.itemType);
-        agg[key] = { name: item?.name || l.itemType, size: l.size, qty: 0 };
+  function exportPDF() {
+    try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      // jspdf-autotable installiert sich beim Import auf den jsPDF-Prototyp.
+      // Wir nutzen die Instanz-Methode doc.autoTable(...) — das ist die zuverlässigste API.
+      if (typeof doc.autoTable !== 'function') {
+        throw new Error('jspdf-autotable ist nicht korrekt geladen.');
       }
-      agg[key].qty += l.qty;
-    });
 
-    autoTable(doc, {
-      startY: y,
-      head: [['BESTELLLISTE FÜR LIEFERANTEN', '', '']],
-      body: [],
-      theme: 'plain',
-      headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
-      margin: { left: 14, right: 14 },
-    });
-    autoTable(doc, {
-      startY: doc.lastAutoTable.finalY,
-      head: [['Artikel', 'Größe', 'Menge']],
-      body: Object.values(agg).map(a => [a.name, a.size, String(a.qty)]),
-      headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
-      bodyStyles: { fontSize: 9 },
-      alternateRowStyles: { fillColor: [252, 250, 246] },
-      columnStyles: { 2: { halign: 'right' } },
-      margin: { left: 14, right: 14 },
-    });
+      const W = doc.internal.pageSize.getWidth();
+      const sponsors = order.sponsors || {};
+      const settings = data.settings || {};
 
-    // Flock-Liste
-    autoTable(doc, {
-      startY: doc.lastAutoTable.finalY + 8,
-      head: [['FLOCK-LISTE FÜR DEN AUSRÜSTER', '', '', '', '', '']],
-      body: [],
-      theme: 'plain',
-      headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
-      margin: { left: 14, right: 14 },
-    });
-    autoTable(doc, {
-      startY: doc.lastAutoTable.finalY,
-      head: [['Artikel', 'Gr.', 'Mge', 'Mannschaft / Spieler', 'Nr.', 'Flock-Name']],
-      body: order.lines.map(l => {
-        const player = data.players.find(p => p.id === l.playerId);
-        const item = data.items.find(i => i.id === l.itemType);
-        return [
-          item?.name || l.itemType,
-          l.size,
-          String(l.qty),
-          player ? `${player.team || order.team || '–'}\n${player.firstName} ${player.lastName}` : `${order.team || '–'}\nLagerware`,
-          l.number ? String(l.number) : '–',
-          l.name || '–',
-        ];
-      }),
-      headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
-      bodyStyles: { fontSize: 9, valign: 'middle' },
-      alternateRowStyles: { fillColor: [252, 250, 246] },
-      columnStyles: {
-        1: { halign: 'center' },
-        2: { halign: 'right' },
-        4: { halign: 'center', fontStyle: 'bold', fontSize: 11 },
-        5: { fontStyle: 'bold' },
-      },
-      margin: { left: 14, right: 14 },
-      didDrawPage: (data) => {
-        // Footer
-        const pageHeight = doc.internal.pageSize.getHeight();
+      // Kopfblock mit Vereinsblau
+      doc.setFillColor(11, 45, 92);
+      doc.rect(0, 0, W, 30, 'F');
+      doc.setTextColor(201, 162, 39);
+      doc.setFontSize(8);
+      doc.text('BESTELLUNG · TRIKOTVERWALTUNG', 14, 11);
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(18);
+      doc.text(order.title, 14, 21);
+      doc.setFontSize(9);
+      doc.setTextColor(168, 184, 208);
+      doc.text(settings.clubName || 'F. C. Frohlinde 1949 e. V.', 14, 27);
+
+      // Metadaten-Block
+      let y = 40;
+      doc.setTextColor(26, 26, 26);
+      doc.setFontSize(9);
+      doc.text(`Erstellt: ${new Date(order.createdAt).toLocaleDateString('de-DE')}`, 14, y);
+      doc.text(`Status: ${order.status}`, 14, y + 5);
+      if (order.team) doc.text(`Mannschaft: ${order.team}`, 14, y + 10);
+      if (order.supplier) doc.text(`Lieferant: ${order.supplier}`, W - 14, y, { align: 'right' });
+      doc.text(`${order.lines.reduce((s, l) => s + l.qty, 0)} Teile gesamt`, W - 14, y + 5, { align: 'right' });
+      y += 18;
+
+      if (order.notes) {
+        doc.setFontSize(9);
+        doc.setTextColor(74, 72, 69);
+        const noteLines = doc.splitTextToSize(`Notiz: ${order.notes}`, W - 28);
+        doc.text(noteLines, 14, y);
+        y += noteLines.length * 4 + 4;
+      }
+
+      // Sponsoren-Block
+      if (sponsors.brust || sponsors.ruecken || sponsors.aermel) {
+        doc.setFillColor(241, 236, 223);
+        doc.rect(14, y, W - 28, 22, 'F');
+        doc.setTextColor(11, 45, 92);
         doc.setFontSize(8);
-        doc.setTextColor(128, 125, 120);
-        doc.text(`Seite ${doc.internal.getNumberOfPages()}`, W - 14, pageHeight - 8, { align: 'right' });
-        doc.text(`${settings.clubName || 'F. C. Frohlinde'} · #DeinDorfverein`, 14, pageHeight - 8);
-      },
-    });
+        doc.text('SPONSOREN-PLATZIERUNG', 18, y + 5);
+        doc.setTextColor(26, 26, 26);
+        doc.setFontSize(10);
+        const colW = (W - 28) / 3;
+        const labels = [
+          { k: 'brust', l: 'BRUST' },
+          { k: 'ruecken', l: 'RUECKEN' },
+          { k: 'aermel', l: 'AERMEL' },
+        ];
+        labels.forEach((s, i) => {
+          const x = 18 + i * colW;
+          doc.setFontSize(7);
+          doc.setTextColor(128, 125, 120);
+          doc.text(s.l, x, y + 11);
+          doc.setFontSize(11);
+          doc.setTextColor(26, 26, 26);
+          doc.text(sponsors[s.k] || '-', x, y + 17);
+        });
+        y += 26;
+      }
 
-    doc.save(`bestellung_${order.title.replace(/\s+/g, '_')}.pdf`);
+      // Aggregierte Bestellliste
+      const agg = {};
+      order.lines.forEach(l => {
+        const key = `${l.itemType}__${l.size}`;
+        if (!agg[key]) {
+          const item = data.items.find(i => i.id === l.itemType);
+          agg[key] = { name: item?.name || l.itemType, size: l.size, qty: 0 };
+        }
+        agg[key].qty += l.qty;
+      });
+
+      doc.autoTable({
+        startY: y,
+        head: [['BESTELLLISTE FUER LIEFERANTEN', '', '']],
+        body: [],
+        theme: 'plain',
+        headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
+        margin: { left: 14, right: 14 },
+      });
+      doc.autoTable({
+        startY: doc.lastAutoTable.finalY,
+        head: [['Artikel', 'Groesse', 'Menge']],
+        body: Object.values(agg).map(a => [a.name, a.size, String(a.qty)]),
+        headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 9 },
+        alternateRowStyles: { fillColor: [252, 250, 246] },
+        columnStyles: { 2: { halign: 'right' } },
+        margin: { left: 14, right: 14 },
+      });
+
+      // Flock-Liste
+      doc.autoTable({
+        startY: doc.lastAutoTable.finalY + 8,
+        head: [['FLOCK-LISTE FUER DEN AUSRUESTER', '', '', '', '', '']],
+        body: [],
+        theme: 'plain',
+        headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
+        margin: { left: 14, right: 14 },
+      });
+      doc.autoTable({
+        startY: doc.lastAutoTable.finalY,
+        head: [['Artikel', 'Gr.', 'Mge', 'Mannschaft / Spieler', 'Nr.', 'Flock-Name']],
+        body: order.lines.map(l => {
+          const player = data.players.find(p => p.id === l.playerId);
+          const item = data.items.find(i => i.id === l.itemType);
+          return [
+            item?.name || l.itemType,
+            l.size,
+            String(l.qty),
+            player ? `${player.team || order.team || '-'}\n${player.firstName} ${player.lastName}` : `${order.team || '-'}\nLagerware`,
+            l.number ? String(l.number) : '-',
+            l.name || '-',
+          ];
+        }),
+        headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
+        bodyStyles: { fontSize: 9, valign: 'middle' },
+        alternateRowStyles: { fillColor: [252, 250, 246] },
+        columnStyles: {
+          1: { halign: 'center' },
+          2: { halign: 'right' },
+          4: { halign: 'center', fontStyle: 'bold', fontSize: 11 },
+          5: { fontStyle: 'bold' },
+        },
+        margin: { left: 14, right: 14 },
+        didDrawPage: () => {
+          const pageHeight = doc.internal.pageSize.getHeight();
+          doc.setFontSize(8);
+          doc.setTextColor(128, 125, 120);
+          doc.text(`Seite ${doc.internal.getNumberOfPages()}`, W - 14, pageHeight - 8, { align: 'right' });
+          doc.text(`${settings.clubName || 'F. C. Frohlinde'} · #DeinDorfverein`, 14, pageHeight - 8);
+        },
+      });
+
+      const safeName = (order.title || 'bestellung').replace(/[^\w\-]+/g, '_');
+      doc.save(`bestellung_${safeName}.pdf`);
+    } catch (e) {
+      console.error('PDF-Export fehlgeschlagen:', e);
+      alert(`PDF konnte nicht erstellt werden: ${e.message}\n\nBitte den Fehler an den Vorstand melden oder die CSV-Exporte nutzen.`);
+    }
   }
 
   const totalQty = order.lines.reduce((s, l) => s + l.qty, 0);
