@@ -1,8 +1,23 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.2.2';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.2',
+    date: '2026-05-07',
+    changes: [
+      'Hotfix: ReferenceError beim Öffnen der Einstellungen behoben (übersehene Konstante)',
+    ],
+  },
+  {
+    version: '1.2.1',
+    date: '2026-05-07',
+    changes: [
+      'Hotfix: Crash beim Öffnen der Einstellungen behoben (Default-Werte für conditionFactors abgesichert)',
+      'Error-Boundary: Fehler in einzelnen Bereichen blockieren nicht mehr die ganze App',
+    ],
+  },
   {
     version: '1.2.0',
     date: '2026-05-07',

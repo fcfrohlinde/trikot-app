@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './auth.jsx';
 import LoginScreen from './LoginScreen.jsx';
 import { useData } from './useData.js';
 import { APP_VERSION, CHANGELOG } from './version.js';
+import { ErrorBoundary } from './ErrorBoundary.jsx';
 
 const DEFAULT_TEAMS = ['1. Mannschaft', '2. Mannschaft', '3. Mannschaft'];
 const DEFAULT_ITEMS = [];
@@ -168,15 +169,17 @@ function AppContent() {
           </div>
         )}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
-          {view === 'dashboard' && <Dashboard data={data} setView={setView} />}
-          {view === 'reports' && <ReportsView data={data} update={update} />}
-          {view === 'players' && <PlayersView data={data} update={update} />}
-          {view === 'inventory' && <InventoryView data={data} update={update} />}
-          {view === 'deposits' && <DepositsView data={data} update={update} />}
-          {view === 'orders' && <OrdersView data={data} update={update} />}
-          {view === 'returns' && <ReturnsView data={data} update={update} />}
-          {view === 'settings' && <SettingsView data={data} update={update} />}
-          {view === 'users' && user.role === 'admin' && <UsersView />}
+          <ErrorBoundary key={view} onReset={() => setView('dashboard')}>
+            {view === 'dashboard' && <Dashboard data={data} setView={setView} />}
+            {view === 'reports' && <ReportsView data={data} update={update} />}
+            {view === 'players' && <PlayersView data={data} update={update} />}
+            {view === 'inventory' && <InventoryView data={data} update={update} />}
+            {view === 'deposits' && <DepositsView data={data} update={update} />}
+            {view === 'orders' && <OrdersView data={data} update={update} />}
+            {view === 'returns' && <ReturnsView data={data} update={update} />}
+            {view === 'settings' && <SettingsView data={data} update={update} />}
+            {view === 'users' && user.role === 'admin' && <UsersView />}
+          </ErrorBoundary>
         </main>
         <footer className="max-w-7xl mx-auto px-4 sm:px-6 py-6 text-xs" style={{ color: 'var(--ink-mute)' }}>
           <div className="flex justify-between items-center">
@@ -1695,8 +1698,25 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 
 // ============ EINSTELLUNGEN ============
 function SettingsView({ data, update }) {
-  const [settings, setSettings] = useState(data.settings);
-  const [items, setItems] = useState(data.items);
+  const [settings, setSettings] = useState({
+    defaultDeposit: 100,
+    clubName: 'FC Frohlinde 1949 e.V.',
+    seasonDepreciation: DEFAULT_SEASON_DEPRECIATION,
+    conditionFactors: DEFAULT_CONDITION_FACTORS,
+    weeklyReportEnabled: false,
+    weeklyReportEmail: '',
+    weeklyReportFrom: '',
+    ...(data.settings || {}),
+    // conditionFactors absichern: jedes Feld muss label und factor haben
+    conditionFactors: Object.fromEntries(
+      Object.entries({ ...DEFAULT_CONDITION_FACTORS, ...(data.settings?.conditionFactors || {}) })
+        .map(([k, v]) => [k, {
+          label: typeof v?.label === 'string' ? v.label : (DEFAULT_CONDITION_FACTORS[k]?.label || k),
+          factor: typeof v?.factor === 'number' ? v.factor : (DEFAULT_CONDITION_FACTORS[k]?.factor ?? 0),
+        }])
+    ),
+  });
+  const [items, setItems] = useState(Array.isArray(data.items) ? data.items : []);
   const [newTeam, setNewTeam] = useState('');
   const [renamingTeam, setRenamingTeam] = useState(null);
   const [renameValue, setRenameValue] = useState('');
@@ -1787,7 +1807,7 @@ function SettingsView({ data, update }) {
             <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={settings.clubName} onChange={e => setSettings({ ...settings, clubName: e.target.value })} />
           </Field>
           <Field label="Standard-Pfandbetrag (€)">
-            <input type="number" className="w-full border border-stone-300 px-3 py-2 text-sm" value={settings.defaultDeposit} onChange={e => setSettings({ ...settings, defaultDeposit: parseFloat(e.target.value) || 0 })} />
+            <input type="number" className="w-full border border-stone-300 px-3 py-2 text-sm" value={Number.isFinite(settings.defaultDeposit) ? settings.defaultDeposit : 0} onChange={e => setSettings({ ...settings, defaultDeposit: parseFloat(e.target.value) || 0 })} />
           </Field>
         </div>
       </div>
@@ -1862,7 +1882,7 @@ function SettingsView({ data, update }) {
           <h2 className="font-display text-2xl">ARTIKELKATALOG & NEUPREISE</h2>
           <button onClick={addItem} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1"><Plus size={12} /> Artikel</button>
         </div>
-        <p className="text-xs text-stone-500 mb-3">Neupreise sind Basis für die Zeitwertberechnung bei der Rückgabe. Abschreibung pro Saison: {(SEASON_DEPRECIATION * 100)}%.</p>
+        <p className="text-xs text-stone-500 mb-3">Neupreise sind Basis für die Zeitwertberechnung bei der Rückgabe. Abschreibung pro Saison: {Math.round(getSeasonDepreciation(settings) * 100)}% (in Pfandregeln änderbar).</p>
         <div className="space-y-2">
           {items.map((it, idx) => (
             <div key={it.id} className="flex gap-2 items-center">
