@@ -1,8 +1,25 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.7.3';
+export const APP_VERSION = '1.7.4';
 
 export const CHANGELOG = [
+  {
+    version: '1.7.4',
+    date: '2026-05-08',
+    changes: [
+      'Standard-Sets für Spieler und Trainer in den Einstellungen konfigurierbar (jeder Artikel mit eigener Stückzahl)',
+      'Im Bestellformular zwei Buttons: „Spieler-Set" und „Spieler + Trainer-Set" — erzeugt die komplette Erstausstattung in einem Klick',
+      'Standard-Set-Buttons sind jetzt unabhängig vom Bestelltyp verfügbar (auch für Teilbestellungen)',
+      'Trainer-Erstausstattung wird nur erzeugt, wenn ein Trainer-Set definiert ist und Trainer in der Mannschaft sind',
+      'Doppelte Zeilen pro Person×Artikel×Größe werden beim Erzeugen automatisch übersprungen (kein doppelter Eintrag bei mehrfachem Klick)',
+      'Bestellliste und Flock-Liste sind jetzt nach Artikel × Größe gruppiert — keine Einzelposten mehr',
+      'Pro Gruppe werden alle Beflockungen mit Nummer/Initialen und Flock-Name in einer Spalte aufgelistet',
+      'Lagerware ohne Beflockung wird separat ausgewiesen („+ 3× ohne Beflockung")',
+      'Bestellliste mit Gesamtsumme am Ende (in Vereinsblau hervorgehoben)',
+      'Trainer-Beflockungen werden in Bebas Neue dargestellt (passend zur Initialen-Logik)',
+      'Beflockungs-Sortierung: Spieler nach Nummer, Trainer nach Initialen',
+    ],
+  },
   {
     version: '1.7.3',
     date: '2026-05-08',

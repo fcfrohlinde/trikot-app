@@ -2413,21 +2413,69 @@ function OrderForm({ data, onSave, onCancel }) {
     setLines(lines.flatMap(l => l.id === lineId ? newLines : [l]));
   }
 
-  function generateComplete() {
-    // Komplettbestellung: für jeden Spieler der Mannschaft eine Standard-Set
+  // Standard-Sets aus den Settings holen (Fallback: erste 3 Katalog-Artikel)
+  const settings = data.settings || {};
+  const standardSetPlayer = Array.isArray(settings.standardSetPlayer) && settings.standardSetPlayer.length > 0
+    ? settings.standardSetPlayer
+    : data.items.slice(0, 3).map(i => ({ itemId: i.id, qty: 1 }));
+  const standardSetCoach = Array.isArray(settings.standardSetCoach) && settings.standardSetCoach.length > 0
+    ? settings.standardSetCoach
+    : []; // für Trainer keinen Fallback — wenn nicht definiert, nur Spieler
+
+  function generateStandardSet({ includeCoaches = false } = {}) {
+    // Erstausstattung: für jeden Spieler (und optional Trainer) der gefilterten Mannschaft die definierten Sets erzeugen.
     const newLines = [];
+    const seen = new Set(lines.map(l => `${l.playerId}__${l.itemType}__${l.size}`));
+
     teamPlayers.forEach(p => {
-      data.items.slice(0, 3).forEach((item, j) => {
+      standardSetPlayer.forEach((entry, j) => {
+        const item = data.items.find(i => i.id === entry.itemId);
+        if (!item) return;
+        const size = p.size || 'L';
+        const key = `${p.id}__${item.id}__${size}`;
+        if (seen.has(key)) return;
+        seen.add(key);
         newLines.push({
-          id: `l_${Date.now()}_${p.id}_${j}`,
-          itemType: item.id, size: p.size || 'L', qty: 1,
-          playerId: p.id, personKind: 'player',
+          id: `l_${Date.now()}_${p.id}_${j}_${Math.random().toString(36).slice(2, 5)}`,
+          itemType: item.id,
+          size,
+          qty: Number(entry.qty) || 1,
+          playerId: p.id,
+          personKind: 'player',
           number: p.number != null ? String(p.number) : '',
           name: (p.lastName || '').toUpperCase(),
         });
       });
     });
-    setLines(newLines);
+
+    if (includeCoaches && standardSetCoach.length > 0) {
+      teamCoaches.forEach(c => {
+        standardSetCoach.forEach((entry, j) => {
+          const item = data.items.find(i => i.id === entry.itemId);
+          if (!item) return;
+          const size = c.size || 'L';
+          const key = `${c.id}__${item.id}__${size}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          newLines.push({
+            id: `l_${Date.now()}_${c.id}_${j}_${Math.random().toString(36).slice(2, 5)}`,
+            itemType: item.id,
+            size,
+            qty: Number(entry.qty) || 1,
+            playerId: c.id,
+            personKind: 'coach',
+            number: c.number != null ? String(c.number) : '',
+            name: (c.lastName || '').toUpperCase(),
+          });
+        });
+      });
+    }
+
+    if (newLines.length === 0) {
+      alert('Es konnten keine Zeilen erzeugt werden — bitte Standard-Sets in den Einstellungen pflegen oder Personen prüfen.');
+      return;
+    }
+    setLines([...lines, ...newLines]);
   }
 
   function submit() {
@@ -2542,9 +2590,14 @@ function OrderForm({ data, onSave, onCancel }) {
           style={{ background: 'var(--vereinsblau)' }}>
           <Users size={12} /> Personen auswählen…
         </button>
-        {type === 'komplett' && teamPlayers.length > 0 && (
-          <button onClick={generateComplete} className="text-xs bg-stone-100 px-3 py-1.5">
-            Standard-Set für {teamPlayers.length} Spieler erzeugen
+        {teamPlayers.length > 0 && standardSetPlayer.length > 0 && (
+          <button onClick={() => generateStandardSet({ includeCoaches: false })} className="text-xs bg-stone-100 px-3 py-1.5">
+            Spieler-Set ({teamPlayers.length} × {standardSetPlayer.length} Pos.)
+          </button>
+        )}
+        {teamCoaches.length > 0 && standardSetCoach.length > 0 && (
+          <button onClick={() => generateStandardSet({ includeCoaches: true })} className="text-xs bg-stone-100 px-3 py-1.5">
+            Spieler + Trainer-Set ({teamPlayers.length + teamCoaches.length} Personen)
           </button>
         )}
       </div>
@@ -2901,21 +2954,92 @@ function OrderDetail({ order, data, onBack, onStatus }) {
     URL.revokeObjectURL(url);
   }
 
+  // Gruppiert die Bestellzeilen nach Artikel × Größe und sammelt pro Gruppe
+  // alle Beflockungen (Personen mit Nummer/Initialen und Flock-Name) sowie
+  // unbedruckte Lagerware. Größen-Reihenfolge: XS, S, M, L, XL, XXL, dann numerisch.
+  function buildFlockGroups() {
+    const map = new Map();
+    (order.lines || []).forEach(l => {
+      const key = `${l.itemType}__${l.size}`;
+      if (!map.has(key)) {
+        const item = data.items.find(i => i.id === l.itemType);
+        map.set(key, {
+          itemType: l.itemType,
+          itemName: item?.name || l.itemType,
+          articleNumber: item?.articleNumber || '',
+          size: l.size,
+          totalQty: 0,
+          flockEntries: [],   // [{ number, name, personKind, qty, personName, team }]
+          plainQty: 0,        // Lagerware ohne Beflockung
+        });
+      }
+      const g = map.get(key);
+      g.totalQty += l.qty || 0;
+
+      const hasFlock = (l.number && String(l.number).trim() !== '') || (l.name && String(l.name).trim() !== '');
+      if (!hasFlock) {
+        g.plainQty += l.qty || 0;
+      } else {
+        const person = findPerson(data, l.playerId);
+        g.flockEntries.push({
+          number: l.number || '',
+          name: l.name || '',
+          personKind: l.personKind || (person ? 'player' : null),
+          qty: l.qty || 1,
+          personName: person ? `${person.firstName} ${person.lastName}` : '',
+          team: person?.team || order.team || '',
+        });
+      }
+    });
+
+    // Sortierung der Gruppen: Artikel alphabetisch, dann Größen-Reihenfolge
+    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '3XL', '116', '128', '140', '152', '164', '176', '188'];
+    const sizeIdx = (s) => {
+      const i = sizeOrder.indexOf(s);
+      return i === -1 ? 999 : i;
+    };
+
+    // Beflockungen pro Gruppe sortieren: Spieler zuerst (nach Nummer), dann Trainer (nach Initialen)
+    const groups = [...map.values()].map(g => ({
+      ...g,
+      flockEntries: g.flockEntries.sort((a, b) => {
+        const aIsCoach = a.personKind === 'coach';
+        const bIsCoach = b.personKind === 'coach';
+        if (aIsCoach !== bIsCoach) return aIsCoach ? 1 : -1;
+        if (aIsCoach) return String(a.number).localeCompare(String(b.number));
+        return (Number(a.number) || 999) - (Number(b.number) || 999);
+      }),
+    }));
+
+    groups.sort((a, b) => {
+      if (a.itemName !== b.itemName) return a.itemName.localeCompare(b.itemName);
+      return sizeIdx(a.size) - sizeIdx(b.size);
+    });
+    return groups;
+  }
+
+  function formatFlockEntry(e) {
+    // Anzeige-Format: "#7 MÜLLER" oder "DH HASECKE (Trainer)" oder "x2 #5 SCHMITZ" wenn qty > 1
+    const isCoach = e.personKind === 'coach';
+    const num = e.number ? (isCoach ? e.number : `#${e.number}`) : '';
+    const namePart = e.name || '';
+    const qtyPrefix = e.qty > 1 ? `${e.qty}× ` : '';
+    const coachMark = isCoach ? ' (T)' : '';
+    return `${qtyPrefix}${num}${num && namePart ? ' ' : ''}${namePart}${coachMark}`.trim();
+  }
+
   function exportFlockList() {
     const sponsors = order.sponsors || {};
-    const rows = [['Art.-Nr.', 'Artikel', 'Größe', 'Menge', 'Mannschaft', 'Person', 'Rolle', 'Nr./Init.', 'Flock-Name', 'Sponsor Brust', 'Sponsor Rücken', 'Sponsor Ärmel']];
-    order.lines.forEach(l => {
-      const item = data.items.find(i => i.id === l.itemType);
-      const player = findPerson(data, l.playerId);
+    const rows = [['Art.-Nr.', 'Artikel', 'Größe', 'Menge gesamt', 'Lagerware', 'Beflockungen', 'Sponsor Brust', 'Sponsor Rücken', 'Sponsor Ärmel']];
+    buildFlockGroups().forEach(g => {
+      const flockText = g.flockEntries.map(formatFlockEntry).join(' · ');
       rows.push([
-        item?.articleNumber || '',
-        item?.name || l.itemType,
-        l.size, l.qty,
-        player?.team || order.team || '–',
-        player ? `${player.firstName} ${player.lastName}` : 'Lagerware',
-        l.personKind === 'coach' ? 'Trainer' : (l.personKind === 'player' ? 'Spieler' : ''),
-        l.number || '–',
-        l.name || '–',
+        g.articleNumber || '',
+        g.itemName,
+        g.size,
+        g.totalQty,
+        g.plainQty || '',
+        flockText,
         sponsors.brust || '',
         sponsors.ruecken || '',
         sponsors.aermel || '',
@@ -2926,22 +3050,12 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 
   function exportOrderList() {
     const rows = [['Art.-Nr.', 'Artikel', 'Größe', 'Menge']];
-    // Aggregiert nach Artikel + Größe (für Lieferantenbestellung)
-    const agg = {};
-    order.lines.forEach(l => {
-      const key = `${l.itemType}__${l.size}`;
-      if (!agg[key]) agg[key] = { ...l, qty: 0 };
-      agg[key].qty += l.qty;
+    let total = 0;
+    buildFlockGroups().forEach(g => {
+      rows.push([g.articleNumber || '', g.itemName, g.size, g.totalQty]);
+      total += g.totalQty;
     });
-    Object.values(agg).forEach(l => {
-      const item = data.items.find(i => i.id === l.itemType);
-      rows.push([
-        item?.articleNumber || '',
-        item?.name || l.itemType,
-        l.size,
-        l.qty,
-      ]);
-    });
+    rows.push(['', 'GESAMT', '', total]);
     downloadCSV(rows, `bestellliste_${order.title.replace(/\s+/g, '_')}.csv`);
   }
 
@@ -3025,21 +3139,9 @@ function OrderDetail({ order, data, onBack, onStatus }) {
         y += 26;
       }
 
-      // Aggregierte Bestellliste
-      const agg = {};
-      order.lines.forEach(l => {
-        const key = `${l.itemType}__${l.size}`;
-        if (!agg[key]) {
-          const item = data.items.find(i => i.id === l.itemType);
-          agg[key] = {
-            articleNumber: item?.articleNumber || '',
-            name: item?.name || l.itemType,
-            size: l.size,
-            qty: 0,
-          };
-        }
-        agg[key].qty += l.qty;
-      });
+      // Aggregierte Bestellliste + Flock-Liste teilen sich die Gruppierung
+      const groups = buildFlockGroups();
+      const totalAll = groups.reduce((s, g) => s + g.totalQty, 0);
 
       doc.autoTable({
         startY: y,
@@ -3052,7 +3154,10 @@ function OrderDetail({ order, data, onBack, onStatus }) {
       doc.autoTable({
         startY: doc.lastAutoTable.finalY,
         head: [['Art.-Nr.', 'Artikel', 'Groesse', 'Menge']],
-        body: Object.values(agg).map(a => [a.articleNumber || '-', a.name, a.size, String(a.qty)]),
+        body: [
+          ...groups.map(g => [g.articleNumber || '-', g.itemName, g.size, String(g.totalQty)]),
+          ['', 'GESAMT', '', String(totalAll)],
+        ],
         headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
         bodyStyles: { fontSize: 9 },
         alternateRowStyles: { fillColor: [252, 250, 246] },
@@ -3061,47 +3166,54 @@ function OrderDetail({ order, data, onBack, onStatus }) {
           2: { halign: 'center', cellWidth: 18 },
           3: { halign: 'right', cellWidth: 18 },
         },
+        // Letzte Zeile (Gesamt) hervorheben
+        didParseCell: (hookData) => {
+          if (hookData.section === 'body' && hookData.row.index === groups.length) {
+            hookData.cell.styles.fontStyle = 'bold';
+            hookData.cell.styles.fillColor = [11, 45, 92];
+            hookData.cell.styles.textColor = [255, 255, 255];
+          }
+        },
         margin: { left: 14, right: 14 },
       });
 
-      // Flock-Liste
+      // Flock-Liste — gruppiert nach Artikel × Größe, alle Beflockungen je Gruppe in einer Zelle
       doc.autoTable({
         startY: doc.lastAutoTable.finalY + 8,
-        head: [['FLOCK-LISTE FUER DEN AUSRUESTER', '', '', '', '', '', '']],
+        head: [['FLOCK-LISTE FUER DEN AUSRUESTER (gruppiert nach Artikel & Groesse)', '', '', '', '', '']],
         body: [],
         theme: 'plain',
         headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
         margin: { left: 14, right: 14 },
       });
+
+      // Pro Gruppe eine Zeile, mit Beflockungen mehrzeilig (jede Person in einer Zeile)
+      const flockBody = groups.map(g => {
+        const flockLines = g.flockEntries.map(e => formatFlockEntry(e));
+        if (g.plainQty > 0) {
+          flockLines.push(`(${g.plainQty}x ohne Beflockung / Lagerware)`);
+        }
+        return [
+          g.articleNumber || '-',
+          g.itemName,
+          g.size,
+          String(g.totalQty),
+          flockLines.length > 0 ? flockLines.join('\n') : '—',
+        ];
+      });
+
       doc.autoTable({
         startY: doc.lastAutoTable.finalY,
-        head: [['Art.-Nr.', 'Artikel', 'Gr.', 'Mge', 'Mannschaft / Person', 'Nr./Init.', 'Flock-Name']],
-        body: order.lines.map(l => {
-          const player = findPerson(data, l.playerId);
-          const item = data.items.find(i => i.id === l.itemType);
-          const isCoach = l.personKind === 'coach';
-          const personLine = player
-            ? `${player.team || order.team || '-'}\n${player.firstName} ${player.lastName}${isCoach ? ' (Trainer)' : ''}`
-            : `${order.team || '-'}\nLagerware`;
-          return [
-            item?.articleNumber || '-',
-            item?.name || l.itemType,
-            l.size,
-            String(l.qty),
-            personLine,
-            l.number ? String(l.number) : '-',
-            l.name || '-',
-          ];
-        }),
+        head: [['Art.-Nr.', 'Artikel', 'Gr.', 'Mge', 'Beflockungen (Nr./Init. + Name)']],
+        body: flockBody,
         headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
-        bodyStyles: { fontSize: 9, valign: 'middle' },
+        bodyStyles: { fontSize: 9, valign: 'top' },
         alternateRowStyles: { fillColor: [252, 250, 246] },
         columnStyles: {
           0: { fontStyle: 'bold', cellWidth: 22 },
           2: { halign: 'center', cellWidth: 12 },
           3: { halign: 'right', cellWidth: 12 },
-          5: { halign: 'center', fontStyle: 'bold', fontSize: 11, cellWidth: 18 },
-          6: { fontStyle: 'bold' },
+          4: { fontStyle: 'normal' },
         },
         margin: { left: 14, right: 14 },
         didDrawPage: () => {
@@ -3188,8 +3300,8 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 
       <div className="bg-white border border-stone-200 overflow-hidden mb-4">
         <div className="p-4 border-b border-stone-200 bg-stone-50">
-          <h2 className="font-display text-xl">FLOCK-LISTE FÜR DEN AUSRÜSTER</h2>
-          <p className="text-xs text-stone-500 mt-1">Diese Übersicht enthält alle Beflockungen pro Teil. Sponsoren-Platzierungen sind oben gelistet und gelten für alle Teile dieser Bestellung.</p>
+          <h2 className="font-display text-xl">BESTELLLISTE FÜR LIEFERANTEN</h2>
+          <p className="text-xs text-stone-500 mt-1">Aggregiert nach Artikel und Größe — die reine Stückzahl, die der Lieferant produziert.</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -3198,42 +3310,96 @@ function OrderDetail({ order, data, onBack, onStatus }) {
                 <th className="text-left p-3">Art.-Nr.</th>
                 <th className="text-left p-3">Artikel</th>
                 <th className="text-left p-3">Größe</th>
-                <th className="text-left p-3">Menge</th>
-                <th className="text-left p-3">Mannschaft</th>
-                <th className="text-left p-3">Person</th>
-                <th className="text-left p-3 font-display text-base">NR./INIT.</th>
-                <th className="text-left p-3 font-display text-base">FLOCK-NAME</th>
+                <th className="text-right p-3">Menge</th>
               </tr>
             </thead>
             <tbody>
-              {order.lines.map(l => {
-                const player = findPerson(data, l.playerId);
-                const item = data.items.find(i => i.id === l.itemType);
-                const isCoach = l.personKind === 'coach';
-                return (
-                  <tr key={l.id} className="border-t border-stone-100">
-                    <td className="p-3 font-mono text-xs" style={{ color: 'var(--ink-soft)' }}>{item?.articleNumber || '–'}</td>
-                    <td className="p-3">{item?.name}</td>
-                    <td className="p-3">{l.size}</td>
-                    <td className="p-3 font-medium">{l.qty}</td>
-                    <td className="p-3 text-stone-600">{player?.team || order.team || '–'}</td>
-                    <td className="p-3">
-                      {player ? (
-                        <>
-                          {player.firstName} {player.lastName}
-                          {isCoach && (
-                            <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
-                          )}
-                        </>
-                      ) : <span className="text-stone-400">Lagerware</span>}
-                    </td>
-                    <td className={`p-3 ${isCoach ? 'font-sub text-xl' : 'font-display text-2xl'}`} style={isCoach ? { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.05em' } : undefined}>
-                      {l.number || '–'}
-                    </td>
-                    <td className="p-3 font-display text-xl tracking-wider">{l.name || '–'}</td>
-                  </tr>
-                );
-              })}
+              {(() => {
+                const groups = buildFlockGroups();
+                const total = groups.reduce((s, g) => s + g.totalQty, 0);
+                return [
+                  ...groups.map(g => (
+                    <tr key={`bl_${g.itemType}_${g.size}`} className="border-t border-stone-100">
+                      <td className="p-3 font-mono text-xs" style={{ color: 'var(--ink-soft)' }}>{g.articleNumber || '–'}</td>
+                      <td className="p-3">{g.itemName}</td>
+                      <td className="p-3">{g.size}</td>
+                      <td className="p-3 text-right font-medium">{g.totalQty}</td>
+                    </tr>
+                  )),
+                  <tr key="bl_total" style={{ background: 'var(--vereinsblau)', color: 'white' }}>
+                    <td className="p-3" colSpan={2}><strong>GESAMT</strong></td>
+                    <td className="p-3"></td>
+                    <td className="p-3 text-right font-medium">{total}</td>
+                  </tr>,
+                ];
+              })()}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-white border border-stone-200 overflow-hidden mb-4">
+        <div className="p-4 border-b border-stone-200 bg-stone-50">
+          <h2 className="font-display text-xl">FLOCK-LISTE FÜR DEN AUSRÜSTER</h2>
+          <p className="text-xs text-stone-500 mt-1">Gruppiert nach Artikel × Größe. Pro Gruppe sind alle Beflockungen aufgelistet — eine Zeile pro Person mit Nummer/Initialen und Flock-Name. Sponsoren oben gelten für alle Teile.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
+              <tr>
+                <th className="text-left p-3">Art.-Nr.</th>
+                <th className="text-left p-3">Artikel</th>
+                <th className="text-left p-3">Größe</th>
+                <th className="text-right p-3">Menge</th>
+                <th className="text-left p-3">Beflockungen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {buildFlockGroups().map(g => (
+                <tr key={`fl_${g.itemType}_${g.size}`} className="border-t border-stone-100" style={{ verticalAlign: 'top' }}>
+                  <td className="p-3 font-mono text-xs" style={{ color: 'var(--ink-soft)' }}>{g.articleNumber || '–'}</td>
+                  <td className="p-3 font-medium">{g.itemName}</td>
+                  <td className="p-3">{g.size}</td>
+                  <td className="p-3 text-right font-medium">{g.totalQty}</td>
+                  <td className="p-3">
+                    {g.flockEntries.length === 0 && g.plainQty === g.totalQty ? (
+                      <span className="text-stone-400 text-xs">— ohne Beflockung (Lagerware) —</span>
+                    ) : (
+                      <div className="space-y-1">
+                        {g.flockEntries.map((e, i) => {
+                          const isCoach = e.personKind === 'coach';
+                          return (
+                            <div key={i} className="flex items-baseline gap-2">
+                              {e.qty > 1 && (
+                                <span className="text-xs px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>{e.qty}×</span>
+                              )}
+                              <span className={isCoach ? 'font-sub text-base' : 'font-display text-lg'}
+                                style={isCoach
+                                  ? { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.05em', color: 'var(--vereinsblau)', minWidth: '2.5rem', display: 'inline-block' }
+                                  : { color: 'var(--vereinsblau)', minWidth: '2.5rem', display: 'inline-block' }
+                                }>
+                                {e.number ? (isCoach ? e.number : `#${e.number}`) : '–'}
+                              </span>
+                              <span className="font-display text-base tracking-wider">{e.name || '–'}</span>
+                              {isCoach && (
+                                <span className="text-[10px] px-1 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
+                              )}
+                              {e.personName && (
+                                <span className="text-xs ml-1" style={{ color: 'var(--ink-mute)' }}>· {e.personName}</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {g.plainQty > 0 && (
+                          <div className="text-xs italic pt-1" style={{ color: 'var(--ink-mute)' }}>
+                            + {g.plainQty}× ohne Beflockung (Lagerware)
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -3252,6 +3418,8 @@ function SettingsView({ data, update }) {
     weeklyReportEnabled: false,
     weeklyReportEmail: '',
     weeklyReportFrom: '',
+    standardSetPlayer: [],   // [{ itemId, qty }]
+    standardSetCoach: [],    // [{ itemId, qty }]
     ...(data.settings || {}),
     // conditionFactors absichern: jedes Feld muss label und factor haben
     conditionFactors: Object.fromEntries(
@@ -3261,6 +3429,9 @@ function SettingsView({ data, update }) {
           factor: typeof v?.factor === 'number' ? v.factor : (DEFAULT_CONDITION_FACTORS[k]?.factor ?? 0),
         }])
     ),
+    // Standard-Sets als Array sichern
+    standardSetPlayer: Array.isArray(data.settings?.standardSetPlayer) ? data.settings.standardSetPlayer : [],
+    standardSetCoach: Array.isArray(data.settings?.standardSetCoach) ? data.settings.standardSetCoach : [],
   });
   const [items, setItems] = useState(Array.isArray(data.items) ? data.items : []);
   const [newTeam, setNewTeam] = useState('');
@@ -3615,6 +3786,29 @@ function SettingsView({ data, update }) {
       <SuppliersBlock data={data} update={update} />
 
       <div className="bg-white border border-stone-200 p-6 mb-4">
+        <h2 className="font-display text-2xl mb-2">STANDARD-SETS (ERSTAUSSTATTUNG)</h2>
+        <p className="text-xs text-stone-500 mb-4">
+          Lege fest, welche Artikel und in welcher Stückzahl Spieler bzw. Trainer als Erstausstattung erhalten. Diese Sets werden als Vorlage in der Bestellung über den Button „Standard-Set anwenden" genutzt.
+        </p>
+
+        <StandardSetEditor
+          label="STANDARD-SET SPIELER"
+          items={items}
+          set={settings.standardSetPlayer || []}
+          onChange={(newSet) => setSettings({ ...settings, standardSetPlayer: newSet })}
+        />
+
+        <div className="h-px my-5" style={{ background: 'var(--rule)' }} />
+
+        <StandardSetEditor
+          label="STANDARD-SET TRAINER"
+          items={items}
+          set={settings.standardSetCoach || []}
+          onChange={(newSet) => setSettings({ ...settings, standardSetCoach: newSet })}
+        />
+      </div>
+
+      <div className="bg-white border border-stone-200 p-6 mb-4">
         <h2 className="font-display text-2xl mb-2">WOCHENBERICHT-VERSAND (SMTP)</h2>
         <p className="text-xs text-stone-500 mb-4">
           Aus den eingegangenen Bedarfsmeldungen wird ein Wochenbericht erzeugt und per E-Mail versendet. SMTP-Zugangsdaten werden als Umgebungsvariablen in Vercel hinterlegt — siehe Anleitung im README oder unten.
@@ -3699,6 +3893,89 @@ function SettingsView({ data, update }) {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Editor für Standard-Sets (Spieler/Trainer-Erstausstattung)
+function StandardSetEditor({ label, items, set, onChange }) {
+  const validItems = (items || []).filter(i => i && i.id && i.name);
+
+  function addRow() {
+    if (validItems.length === 0) {
+      alert('Bitte zuerst Artikel im Katalog anlegen.');
+      return;
+    }
+    // Default: erster noch nicht im Set vorhandener Artikel
+    const used = new Set(set.map(s => s.itemId));
+    const available = validItems.find(i => !used.has(i.id)) || validItems[0];
+    onChange([...set, { itemId: available.id, qty: 1 }]);
+  }
+
+  function updateRow(idx, key, value) {
+    const next = set.map((row, i) => i === idx ? { ...row, [key]: value } : row);
+    onChange(next);
+  }
+
+  function removeRow(idx) {
+    onChange(set.filter((_, i) => i !== idx));
+  }
+
+  const totalPieces = set.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-3">
+        <div className="font-sub text-xs" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>{label}</div>
+        <button onClick={addRow} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1">
+          <Plus size={12} /> Artikel
+        </button>
+      </div>
+
+      {set.length === 0 ? (
+        <div className="text-xs py-4 px-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-mute)' }}>
+          Kein Standard-Set definiert. Klicke auf „Artikel", um die Erstausstattung zusammenzustellen.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="grid grid-cols-12 gap-2 text-xs uppercase tracking-wider" style={{ color: 'var(--ink-mute)' }}>
+            <div className="col-span-8">Artikel</div>
+            <div className="col-span-3 text-right">Stückzahl</div>
+          </div>
+          {set.map((row, idx) => {
+            const item = validItems.find(i => i.id === row.itemId);
+            return (
+              <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                <select
+                  className="col-span-8 border border-stone-300 px-3 py-2 text-sm"
+                  value={row.itemId}
+                  onChange={e => updateRow(idx, 'itemId', e.target.value)}
+                >
+                  {!item && <option value={row.itemId}>— unbekannter Artikel —</option>}
+                  {validItems.map(i => (
+                    <option key={i.id} value={i.id}>
+                      {i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min="1"
+                  className="col-span-3 border border-stone-300 px-2 py-2 text-sm text-right"
+                  value={row.qty}
+                  onChange={e => updateRow(idx, 'qty', parseInt(e.target.value) || 1)}
+                />
+                <button onClick={() => removeRow(idx)} className="col-span-1 text-stone-400 hover:text-red-600 p-1 justify-self-end">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            );
+          })}
+          <div className="text-xs pt-2" style={{ color: 'var(--ink-mute)' }}>
+            Summe: {totalPieces} Teile pro Person
+          </div>
+        </div>
+      )}
     </div>
   );
 }
