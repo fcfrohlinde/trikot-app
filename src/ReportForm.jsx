@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 
 const REASONS = [
-  { id: 'verloren', label: 'Verloren' },
-  { id: 'verschlissen', label: 'Verschlissen' },
-  { id: 'flock_kaputt', label: 'Flock kaputt' },
-  { id: 'beschaedigt', label: 'Beschädigt' },
+  { id: 'verloren', label: 'Verloren', photoRequired: false },
+  { id: 'verschlissen', label: 'Verschlissen', photoRequired: true },
+  { id: 'flock_kaputt', label: 'Flock kaputt', photoRequired: true },
+  { id: 'beschaedigt', label: 'Beschädigt', photoRequired: true },
 ];
+
+const PHOTO_REQUIRED_REASONS = REASONS.filter(r => r.photoRequired).map(r => r.id);
 
 // Komprimiert ein Foto im Browser auf max. 1280px, JPEG-Qualität 0.7
 async function compressImage(file, maxDim = 1280, quality = 0.7) {
@@ -114,11 +116,19 @@ export default function ReportForm({ onBack }) {
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
+  // Foto ist bei diesen Gründen Pflicht — wir prüfen das clientseitig vorab,
+  // damit der Nutzer nicht erst submitten muss, um die Fehlermeldung zu sehen.
+  const photoRequired = reasons.some(r => PHOTO_REQUIRED_REASONS.includes(r));
+
   async function submit(e) {
     e.preventDefault();
     setError('');
     if (reasons.length === 0) {
       setError('Bitte mindestens einen Grund auswählen.');
+      return;
+    }
+    if (photoRequired && !photo) {
+      setError('Bei „verschlissen", „Flock kaputt" oder „beschädigt" ist ein Foto Pflicht. Bitte ein Bild des Teils hochladen.');
       return;
     }
     setBusy(true);
@@ -243,18 +253,22 @@ export default function ReportForm({ onBack }) {
                         background: active ? '#F1ECDF' : '#FCFAF6',
                       }}>
                       <input type="checkbox" checked={active} onChange={() => toggleReason(r.id)} />
-                      <span style={{ color: '#1A1A1A' }}>{r.label}</span>
+                      <span style={{ color: '#1A1A1A' }}>
+                        {r.label}
+                        {r.photoRequired && <span title="Foto-Beleg Pflicht" style={{ marginLeft: 4, color: '#9A2828' }}>📷*</span>}
+                      </span>
                     </label>
                   );
                 })}
               </div>
+              <p className="text-xs mt-1" style={{ color: '#807D78' }}>* bei diesen Gründen ist ein Foto Pflicht.</p>
             </Field>
 
             <Field label="Anmerkung (optional)">
               <textarea className="w-full px-3 py-2 text-sm" rows="2" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={comment} onChange={e => setComment(e.target.value)} placeholder="z. B. wo der Schaden ist" />
             </Field>
 
-            <Field label="Foto (optional)">
+            <Field label={photoRequired ? 'Foto (Pflicht!)' : 'Foto (optional)'}>
               {photo ? (
                 <div className="space-y-2">
                   <div className="relative" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6', padding: 8 }}>
@@ -267,9 +281,15 @@ export default function ReportForm({ onBack }) {
                 </div>
               ) : (
                 <label className="block cursor-pointer text-center py-6"
-                  style={{ border: '1px dashed #DCD6C8', background: '#FCFAF6', color: '#807D78' }}>
+                  style={{
+                    border: photoRequired ? '2px dashed #9A2828' : '1px dashed #DCD6C8',
+                    background: photoRequired ? '#FFF3F3' : '#FCFAF6',
+                    color: '#807D78',
+                  }}>
                   <div style={{ fontSize: 24, marginBottom: 4 }}>📷</div>
-                  <div className="text-sm">{photoBusy ? 'Bild wird komprimiert...' : 'Foto auswählen oder fotografieren'}</div>
+                  <div className="text-sm" style={{ color: photoRequired ? '#9A2828' : '#807D78', fontWeight: photoRequired ? 600 : 400 }}>
+                    {photoBusy ? 'Bild wird komprimiert...' : (photoRequired ? 'Foto-Beleg erforderlich – jetzt fotografieren' : 'Foto auswählen oder fotografieren')}
+                  </div>
                   <div className="text-xs mt-1" style={{ color: '#9C9892' }}>Wird automatisch verkleinert</div>
                   <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handlePhoto} className="hidden" />
                 </label>

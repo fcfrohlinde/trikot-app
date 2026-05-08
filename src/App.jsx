@@ -293,6 +293,7 @@ function Header({ view, setView, clubName, user, logout, openReportsCount = 0 })
 
 function Dashboard({ data, setView }) {
   const totalPlayers = data.players.length;
+  const totalCoaches = (data.coaches || []).length;
   const playersWithMaterial = data.players.filter(p =>
     data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben')
   ).length;
@@ -301,7 +302,7 @@ function Dashboard({ data, setView }) {
   const openOrders = data.orders.filter(o => o.status !== 'geliefert' && o.status !== 'storniert').length;
 
   const cards = [
-    { label: 'Spieler', value: totalPlayers, target: 'players', sub: `${playersWithMaterial} mit Material` },
+    { label: 'Spieler & Trainer', value: totalPlayers + totalCoaches, target: 'players', sub: `${totalPlayers} Spieler · ${totalCoaches} Trainer` },
     { label: 'Material im Lager', value: unusedItems, target: 'inventory', sub: `von ${data.inventory.length} gesamt` },
     { label: 'Pfand gehalten', value: `${totalDeposits.toFixed(0)} €`, target: 'deposits', sub: `${data.deposits.filter(d => !d.refunded).length} aktive Pfänder` },
     { label: 'Offene Bestellungen', value: openOrders, target: 'orders', sub: `${data.orders.length} gesamt` },
@@ -356,14 +357,20 @@ function Dashboard({ data, setView }) {
               <div className="p-3 bg-white text-sm" style={{ color: 'var(--ink-mute)' }}>Noch keine Mannschaften angelegt. In den Einstellungen anlegen.</div>
             ) : data.teams.map(team => {
               const teamPlayers = data.players.filter(p => p.team === team);
+              const teamCoaches = (data.coaches || []).filter(c => c.team === team);
               const withMat = teamPlayers.filter(p => data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben')).length;
               return (
                 <div key={team} className="p-3 bg-white flex items-center justify-between">
                   <div>
                     <div className="font-medium text-sm" style={{ color: 'var(--ink)' }}>{team}</div>
-                    <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>{teamPlayers.length} Spieler · {withMat} mit Material</div>
+                    <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+                      {teamPlayers.length} Spieler · {teamCoaches.length} Trainer · {withMat} mit Material
+                    </div>
                   </div>
-                  <div className="stat-number text-3xl" style={{ color: 'var(--vereinsblau)' }}>{teamPlayers.length}</div>
+                  <div className="text-right">
+                    <div className="stat-number text-3xl leading-none" style={{ color: 'var(--vereinsblau)' }}>{teamPlayers.length + teamCoaches.length}</div>
+                    <div className="text-[10px] uppercase tracking-wider mt-0.5" style={{ color: 'var(--ink-mute)' }}>Personen</div>
+                  </div>
                 </div>
               );
             })}
@@ -1304,7 +1311,7 @@ function InventoryView({ data, update }) {
   const [filter, setFilter] = useState('alle');
   const [showForm, setShowForm] = useState(false);
   const [showAssign, setShowAssign] = useState(null);
-  const [showCatalogImport, setShowCatalogImport] = useState(false);
+  const [showPrintDialog, setShowPrintDialog] = useState(false);
   const [view, setView] = useState('aggregiert'); // 'aggregiert' | 'einzeln'
   const [openGroups, setOpenGroups] = useState({}); // {groupKey: true}
 
@@ -1365,27 +1372,48 @@ function InventoryView({ data, update }) {
     setOpenGroups({});
   }
 
-  function applyCatalogImport(mergedItems) {
-    // CatalogImport liefert die fertige Liste (inkl. Merge-Logik) — wir speichern sie direkt.
-    update('items', mergedItems);
-    setShowCatalogImport(false);
-  }
+  function handleInventoryBatch({ newInventory, orderId, lineDeltas }) {
+    if (!newInventory || newInventory.length === 0) {
+      setShowForm(false);
+      return;
+    }
 
-  function addBulk(itemType, qty, size) {
-    const item = data.items.find(i => i.id === itemType);
-    const newOnes = Array.from({ length: qty }, (_, idx) => ({
-      id: `inv_${Date.now()}_${idx}`,
-      itemType,
-      itemName: item.name,
-      size,
-      status: 'lager',
-      assignedTo: null,
-      acquiredAt: new Date().toISOString(),
-      seasonsUsed: 0,
-      condition: 'neu',
-      originalPrice: item.price,
-    }));
-    update('inventory', [...data.inventory, ...newOnes]);
+    // Inventur erweitern
+    update('inventory', [...data.inventory, ...newInventory]);
+
+    // Bestell-Status aktualisieren, falls Wareneingang an einer Bestellung
+    if (orderId) {
+      const order = data.orders.find(o => o.id === orderId);
+      if (order) {
+        // Wieviel ist insgesamt offen über alle Lines?
+        // Schon-eingebuchte Inventur-Items zählen + neue dazuaddieren
+        const receivedAfter = {};
+        const allInv = [...data.inventory, ...newInventory];
+        allInv.forEach(inv => {
+          if (inv.fromLineId) {
+            receivedAfter[inv.fromLineId] = (receivedAfter[inv.fromLineId] || 0) + 1;
+          }
+        });
+
+        let totalExpected = 0, totalReceived = 0;
+        (order.lines || []).forEach(l => {
+          totalExpected += Number(l.qty) || 0;
+          totalReceived += receivedAfter[l.id] || 0;
+        });
+
+        let newStatus = order.status;
+        if (totalReceived === 0) newStatus = order.status; // unverändert
+        else if (totalReceived >= totalExpected) newStatus = 'geliefert';
+        else newStatus = 'teilweise_geliefert';
+
+        if (newStatus !== order.status) {
+          update('orders', data.orders.map(o => o.id === orderId
+            ? { ...o, status: newStatus, lastReceivedAt: new Date().toISOString() }
+            : o));
+        }
+      }
+    }
+
     setShowForm(false);
   }
 
@@ -1461,9 +1489,9 @@ function InventoryView({ data, update }) {
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
         <PageHeader number="05" label="AUSSTATTUNG" title="Material & Bestand" subtitle={`${data.inventory.length} Teile gesamt · ${data.inventory.filter(i => i.status === 'lager').length} im Lager · ${data.items.length} Katalog-Artikel`} />
         <div className="flex gap-2 flex-wrap">
-          <button onClick={() => setShowCatalogImport(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+          <button onClick={() => setShowPrintDialog(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
             style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-            <Download size={14} style={{ transform: 'rotate(180deg)' }} /> Artikelkatalog importieren
+            <FileText size={14} /> Bestandsliste drucken (PDF)
           </button>
           <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
             style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
@@ -1505,9 +1533,9 @@ function InventoryView({ data, update }) {
         </div>
       </div>
 
-      {showForm && <InventoryAddForm items={data.items} onSave={addBulk} onCancel={() => setShowForm(false)} />}
+      {showForm && <InventoryAddForm data={data} onSaveBatch={handleInventoryBatch} onCancel={() => setShowForm(false)} />}
       {showAssign && <AssignForm inv={showAssign} persons={allPersons(data)} inventory={data.inventory} onAssign={assign} onCancel={() => setShowAssign(null)} />}
-      {showCatalogImport && <CatalogImport existingItems={data.items} suppliers={data.suppliers || []} onImport={applyCatalogImport} onCancel={() => setShowCatalogImport(false)} />}
+      {showPrintDialog && <InventoryPrintDialog data={data} onClose={() => setShowPrintDialog(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
@@ -1636,32 +1664,670 @@ function InventoryView({ data, update }) {
   );
 }
 
-function InventoryAddForm({ items, onSave, onCancel }) {
-  const [itemType, setItemType] = useState(items[0].id);
-  const [qty, setQty] = useState(1);
-  const [size, setSize] = useState('L');
+function InventoryAddForm({ data, onSaveBatch, onCancel }) {
+  const items = data.items || [];
+  const orders = data.orders || [];
+
+  // Modus: 'free' = freies Einbuchen, 'order' = an Bestellung gebunden
+  const [mode, setMode] = useState('order');
+  const [selectedOrderId, setSelectedOrderId] = useState('');
+
+  // Freie Einbuchungs-Zeilen: [{ itemType, size, qty, number, name, personKind }]
+  const [freeRows, setFreeRows] = useState([
+    { id: `r_${Date.now()}`, itemType: items[0]?.id || '', size: 'L', qty: 1, number: '', name: '' },
+  ]);
+
+  // Bestell-Eingangs-Zeilen: für jede offene Order-Line eine Zuordnung
+  // { lineId, itemType, size, expectedQty, alreadyReceived, deliveredQty, number, name, personKind }
+  const [receiptRows, setReceiptRows] = useState([]);
+
+  // Bestellungen, die offen oder teilweise geliefert sind
+  const eligibleOrders = orders.filter(o =>
+    !['storniert', 'geliefert'].includes(o.status)
+  ).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+  // Sobald eine Bestellung gewählt wird: receiptRows initialisieren
+  useEffect(() => {
+    if (mode !== 'order' || !selectedOrderId) {
+      setReceiptRows([]);
+      return;
+    }
+    const order = orders.find(o => o.id === selectedOrderId);
+    if (!order) { setReceiptRows([]); return; }
+
+    // Wieviele Stück pro Bestell-Line wurden schon eingebucht?
+    const receivedCounts = {};
+    (data.inventory || []).forEach(inv => {
+      if (inv.fromLineId) {
+        receivedCounts[inv.fromLineId] = (receivedCounts[inv.fromLineId] || 0) + 1;
+      }
+    });
+
+    const rows = (order.lines || []).map(l => {
+      const item = items.find(i => i.id === l.itemType);
+      const expected = Number(l.qty) || 0;
+      const received = receivedCounts[l.id] || 0;
+      const open = Math.max(0, expected - received);
+      return {
+        lineId: l.id,
+        itemType: l.itemType,
+        itemName: item?.name || l.itemType,
+        articleNumber: item?.articleNumber || '',
+        size: l.size,
+        playerId: l.playerId || null,
+        personKind: l.personKind || null,
+        number: l.number || '',
+        name: l.name || '',
+        expectedQty: expected,
+        alreadyReceived: received,
+        openQty: open,
+        deliveredNow: open, // Default: alle offenen Stück werden jetzt eingebucht
+      };
+    });
+    setReceiptRows(rows);
+  }, [selectedOrderId, mode]);
+
+  function updateFreeRow(id, key, value) {
+    setFreeRows(freeRows.map(r => r.id === id ? { ...r, [key]: value } : r));
+  }
+  function addFreeRow() {
+    const last = freeRows[freeRows.length - 1];
+    setFreeRows([...freeRows, {
+      id: `r_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      itemType: last?.itemType || items[0]?.id || '',
+      size: last?.size || 'L',
+      qty: 1, number: '', name: '',
+    }]);
+  }
+  function removeFreeRow(id) {
+    if (freeRows.length === 1) {
+      setFreeRows([{ id: `r_${Date.now()}`, itemType: items[0]?.id || '', size: 'L', qty: 1, number: '', name: '' }]);
+    } else {
+      setFreeRows(freeRows.filter(r => r.id !== id));
+    }
+  }
+
+  function updateReceiptRow(lineId, key, value) {
+    setReceiptRows(receiptRows.map(r => r.lineId === lineId ? { ...r, [key]: value } : r));
+  }
+
+  function submit() {
+    const newInventory = [];
+    let order = null;
+    let lineDeltas = {}; // { lineId: deliveredCount } — für Status-Berechnung
+
+    if (mode === 'order' && selectedOrderId) {
+      order = orders.find(o => o.id === selectedOrderId);
+      if (!order) { alert('Bestellung nicht gefunden'); return; }
+
+      receiptRows.forEach(r => {
+        const qty = Number(r.deliveredNow) || 0;
+        if (qty <= 0) return;
+        const item = items.find(i => i.id === r.itemType);
+        for (let i = 0; i < qty; i++) {
+          newInventory.push({
+            id: `inv_${Date.now()}_${r.lineId}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+            itemType: r.itemType,
+            itemName: r.itemName,
+            articleNumber: r.articleNumber || null,
+            size: r.size,
+            status: 'lager',
+            assignedTo: null,
+            assignedNumber: r.number || null,
+            assignedName: r.name || null,
+            personKind: r.personKind || null,
+            acquiredAt: new Date().toISOString(),
+            seasonsUsed: 0,
+            condition: 'neu',
+            originalPrice: item?.price || 0,
+            fromOrderId: order.id,
+            fromLineId: r.lineId,
+          });
+        }
+        lineDeltas[r.lineId] = qty;
+      });
+
+      if (newInventory.length === 0) {
+        alert('Keine Stücke zum Einbuchen — bitte Mengen eintragen.');
+        return;
+      }
+    } else {
+      // Freier Modus
+      const valid = freeRows.filter(r => r.itemType && r.qty > 0);
+      if (valid.length === 0) {
+        alert('Bitte mindestens eine Position mit Menge angeben.');
+        return;
+      }
+      valid.forEach(r => {
+        const item = items.find(i => i.id === r.itemType);
+        for (let i = 0; i < r.qty; i++) {
+          newInventory.push({
+            id: `inv_${Date.now()}_${r.id}_${i}_${Math.random().toString(36).slice(2, 5)}`,
+            itemType: r.itemType,
+            itemName: item?.name || r.itemType,
+            articleNumber: item?.articleNumber || null,
+            size: r.size,
+            status: 'lager',
+            assignedTo: null,
+            assignedNumber: r.number || null,
+            assignedName: r.name || null,
+            personKind: null,
+            acquiredAt: new Date().toISOString(),
+            seasonsUsed: 0,
+            condition: 'neu',
+            originalPrice: item?.price || 0,
+          });
+        }
+      });
+    }
+
+    onSaveBatch({ newInventory, orderId: order?.id || null, lineDeltas });
+  }
+
+  // Übersicht: wieviel ist offen, wieviel kommt jetzt rein
+  const openTotal = receiptRows.reduce((s, r) => s + r.openQty, 0);
+  const deliveryTotal = receiptRows.reduce((s, r) => s + (Number(r.deliveredNow) || 0), 0);
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
       <h2 className="font-display text-2xl mb-4">MATERIAL EINBUCHEN</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Field label="Artikel">
-          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={itemType} onChange={e => setItemType(e.target.value)}>
-            {items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-          </select>
-        </Field>
-        <Field label="Größe">
-          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={size} onChange={e => setSize(e.target.value)}>
-            {['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
-        <Field label="Menge">
-          <input type="number" min="1" className="w-full border border-stone-300 px-3 py-2 text-sm" value={qty} onChange={e => setQty(parseInt(e.target.value) || 1)} />
-        </Field>
+
+      {/* Modus-Wahl */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-5">
+        <label className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+          style={{ border: mode === 'order' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: mode === 'order' ? '#F1ECDF' : 'white' }}>
+          <input type="radio" checked={mode === 'order'} onChange={() => setMode('order')} className="mt-0.5" />
+          <div>
+            <div className="font-medium">Aus Bestellung einbuchen</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Wareneingang einer offenen Bestellung mit Mengenabgleich.</div>
+          </div>
+        </label>
+        <label className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+          style={{ border: mode === 'free' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: mode === 'free' ? '#F1ECDF' : 'white' }}>
+          <input type="radio" checked={mode === 'free'} onChange={() => setMode('free')} className="mt-0.5" />
+          <div>
+            <div className="font-medium">Frei einbuchen</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Lagerzugang ohne Bezug zu einer Bestellung (z.B. Spende, alte Lagerware).</div>
+          </div>
+        </label>
       </div>
-      <div className="flex gap-2 mt-4">
-        <button onClick={() => onSave(itemType, qty, size)} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Einbuchen</button>
+
+      {mode === 'order' && (
+        <>
+          <Field label="Bestellung wählen">
+            <select value={selectedOrderId} onChange={e => setSelectedOrderId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
+              <option value="">– Bestellung wählen –</option>
+              {eligibleOrders.length === 0 && <option disabled>(keine offenen Bestellungen)</option>}
+              {eligibleOrders.map(o => {
+                const totalQty = (o.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
+                return (
+                  <option key={o.id} value={o.id}>
+                    {o.title} ({totalQty} Teile, Status: {o.status || 'offen'})
+                  </option>
+                );
+              })}
+            </select>
+          </Field>
+
+          {selectedOrderId && receiptRows.length > 0 && (
+            <div className="mt-4">
+              <div className="flex justify-between items-center mb-2">
+                <div className="font-sub text-xs" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>WARENEINGANG</div>
+                <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+                  {deliveryTotal} von {openTotal} offenen Teilen werden eingebucht
+                </div>
+              </div>
+
+              <div className="border border-stone-200 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-stone-50 uppercase tracking-wider">
+                    <tr>
+                      <th className="text-left p-2">Art.-Nr.</th>
+                      <th className="text-left p-2">Artikel</th>
+                      <th className="text-left p-2">Größe</th>
+                      <th className="text-left p-2">Nr./Init.</th>
+                      <th className="text-left p-2">Flock-Name</th>
+                      <th className="text-right p-2">Erwartet</th>
+                      <th className="text-right p-2">Schon ein</th>
+                      <th className="text-right p-2">Offen</th>
+                      <th className="text-right p-2 bg-emerald-50">Jetzt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {receiptRows.map(r => {
+                      const isCoach = r.personKind === 'coach';
+                      const fullyReceived = r.openQty === 0;
+                      return (
+                        <tr key={r.lineId} className="border-t border-stone-100" style={fullyReceived ? { opacity: 0.5 } : {}}>
+                          <td className="p-2 font-mono">{r.articleNumber || '–'}</td>
+                          <td className="p-2">{r.itemName}</td>
+                          <td className="p-2">{r.size}</td>
+                          <td className="p-2 font-medium">
+                            {r.number || '–'}
+                            {isCoach && r.number && (
+                              <span className="ml-1 text-[10px] px-1 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>T</span>
+                            )}
+                          </td>
+                          <td className="p-2">{r.name || '–'}</td>
+                          <td className="p-2 text-right">{r.expectedQty}</td>
+                          <td className="p-2 text-right" style={{ color: 'var(--ink-mute)' }}>{r.alreadyReceived}</td>
+                          <td className="p-2 text-right" style={{ color: r.openQty > 0 ? 'var(--warn)' : 'var(--ink-mute)' }}>{r.openQty}</td>
+                          <td className="p-2 bg-emerald-50">
+                            <input type="number" min="0" max={r.openQty}
+                              value={r.deliveredNow}
+                              onChange={e => updateReceiptRow(r.lineId, 'deliveredNow', Math.max(0, Math.min(r.openQty, parseInt(e.target.value) || 0)))}
+                              disabled={fullyReceived}
+                              className="w-14 border border-stone-300 px-1 py-1 text-right text-xs" />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-wrap gap-2 mt-2">
+                <button onClick={() => setReceiptRows(receiptRows.map(r => ({ ...r, deliveredNow: r.openQty })))}
+                  className="text-xs px-3 py-1.5" style={{ background: 'var(--paper-dark)', color: 'var(--ink)' }}>
+                  Alle offenen → einbuchen
+                </button>
+                <button onClick={() => setReceiptRows(receiptRows.map(r => ({ ...r, deliveredNow: 0 })))}
+                  className="text-xs px-3 py-1.5" style={{ background: 'var(--paper-dark)', color: 'var(--ink)' }}>
+                  Alle auf 0
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {mode === 'free' && (
+        <div className="mt-2">
+          <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>POSITIONEN</div>
+          <div className="border border-stone-200 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-stone-50 uppercase tracking-wider">
+                <tr>
+                  <th className="text-left p-2">Artikel</th>
+                  <th className="text-left p-2">Größe</th>
+                  <th className="text-right p-2">Menge</th>
+                  <th className="text-left p-2">Nr./Init. (optional)</th>
+                  <th className="text-left p-2">Flock-Name (optional)</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {freeRows.map(r => (
+                  <tr key={r.id} className="border-t border-stone-100">
+                    <td className="p-1">
+                      <select value={r.itemType} onChange={e => updateFreeRow(r.id, 'itemType', e.target.value)} className="border border-stone-300 px-2 py-1 text-xs w-full">
+                        {items.map(i => (
+                          <option key={i.id} value={i.id}>
+                            {i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="p-1">
+                      <select value={r.size} onChange={e => updateFreeRow(r.id, 'size', e.target.value)} className="border border-stone-300 px-2 py-1 text-xs">
+                        {['XS','S','M','L','XL','XXL','3XL'].map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-1">
+                      <input type="number" min="1" value={r.qty}
+                        onChange={e => updateFreeRow(r.id, 'qty', parseInt(e.target.value) || 1)}
+                        className="w-16 border border-stone-300 px-2 py-1 text-xs text-right" />
+                    </td>
+                    <td className="p-1">
+                      <input type="text" maxLength={3} value={r.number}
+                        onChange={e => updateFreeRow(r.id, 'number', e.target.value.toUpperCase())}
+                        className="w-16 border border-stone-300 px-2 py-1 text-xs" placeholder="–" />
+                    </td>
+                    <td className="p-1">
+                      <input type="text" value={r.name}
+                        onChange={e => updateFreeRow(r.id, 'name', e.target.value.toUpperCase())}
+                        className="w-full border border-stone-300 px-2 py-1 text-xs" placeholder="–" />
+                    </td>
+                    <td><button onClick={() => removeFreeRow(r.id)} className="p-1 text-stone-400 hover:text-red-600"><X size={12} /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button onClick={addFreeRow} className="mt-2 text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1">
+            <Plus size={12} /> Position
+          </button>
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-5">
+        <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Einbuchen</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
+      </div>
+    </div>
+  );
+}
+
+// Druckdialog für die Bestandsliste mit Filter-Optionen.
+// Erzeugt ein PDF mit allen passenden Inventur-Items, gruppiert nach Person bzw. Lager.
+function InventoryPrintDialog({ data, onClose }) {
+  const [filterStatus, setFilterStatus] = useState('alle'); // alle | lager | ausgegeben | markiert
+  const [filterPersonKind, setFilterPersonKind] = useState('alle'); // alle | player | coach | lager
+  const [filterTeam, setFilterTeam] = useState(''); // '' = alle Teams
+  const [filterPersonId, setFilterPersonId] = useState(''); // '' = alle Personen
+  const [groupBy, setGroupBy] = useState('person'); // 'person' | 'item'
+  const [busy, setBusy] = useState(false);
+
+  // Person-Auswahl auf Team einschränken
+  const teamPlayers = (data.players || []).filter(p => !filterTeam || p.team === filterTeam);
+  const teamCoaches = (data.coaches || []).filter(c => !filterTeam || c.team === filterTeam);
+
+  // Vorschau-Filterung
+  const filtered = (data.inventory || []).filter(inv => {
+    if (filterStatus === 'lager' && inv.status !== 'lager') return false;
+    if (filterStatus === 'ausgegeben' && inv.status !== 'ausgegeben') return false;
+    if (filterStatus === 'markiert' && !inv.flagged) return false;
+
+    if (filterPersonKind === 'lager' && inv.status !== 'lager') return false;
+    if (filterPersonKind === 'player' || filterPersonKind === 'coach') {
+      const person = findPerson(data, inv.assignedTo);
+      if (!person) return false;
+      if (filterPersonKind === 'player' && person._kind !== 'player') return false;
+      if (filterPersonKind === 'coach' && person._kind !== 'coach') return false;
+    }
+
+    if (filterTeam) {
+      // Im Lager: passt nicht zu Team-Filter (Lager ist global) — wenn explizit Person angefordert, raus
+      const person = findPerson(data, inv.assignedTo);
+      if (filterPersonKind === 'lager' || (filterPersonKind === 'alle' && inv.status === 'lager')) {
+        // Lagerware bleibt unabhängig vom Team-Filter sichtbar (kein Team zugeordnet)
+      } else if (!person || person.team !== filterTeam) {
+        return false;
+      }
+    }
+
+    if (filterPersonId) {
+      if (inv.assignedTo !== filterPersonId) return false;
+    }
+
+    return true;
+  });
+
+  async function generatePDF() {
+    setBusy(true);
+    try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      if (typeof doc.autoTable !== 'function') {
+        throw new Error('jspdf-autotable ist nicht korrekt geladen.');
+      }
+      const W = doc.internal.pageSize.getWidth();
+      const settings = data.settings || {};
+
+      // Kopfblock
+      doc.setFillColor(11, 45, 92);
+      doc.rect(0, 0, W, 30, 'F');
+      doc.setTextColor(201, 162, 39);
+      doc.setFontSize(8);
+      doc.text('BESTANDSLISTE · TRIKOTVERWALTUNG', 14, 11);
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(18);
+      doc.text(settings.clubName || 'F. C. Frohlinde 1949 e. V.', 14, 21);
+
+      // Filter-Beschreibung
+      let y = 38;
+      const filterLines = [];
+      filterLines.push(`Stichtag: ${new Date().toLocaleDateString('de-DE', { day: '2-digit', month: 'long', year: 'numeric' })}`);
+      const statusText = { alle: 'alle', lager: 'nur Lagerware', ausgegeben: 'nur ausgegebene', markiert: 'nur markierte' }[filterStatus];
+      filterLines.push(`Status: ${statusText}`);
+      const kindText = { alle: 'alle', player: 'nur Spieler', coach: 'nur Trainer', lager: 'nur Lager' }[filterPersonKind];
+      filterLines.push(`Personenkreis: ${kindText}`);
+      if (filterTeam) filterLines.push(`Mannschaft: ${filterTeam}`);
+      if (filterPersonId) {
+        const person = findPerson(data, filterPersonId);
+        if (person) filterLines.push(`Einzelperson: ${person.firstName} ${person.lastName}`);
+      }
+      filterLines.push(`${filtered.length} Teile insgesamt`);
+
+      doc.setTextColor(128, 125, 120);
+      doc.setFontSize(8);
+      filterLines.forEach((line, i) => {
+        doc.text(line, 14, y + i * 4);
+      });
+      y += filterLines.length * 4 + 4;
+
+      // Daten gruppieren
+      if (groupBy === 'person') {
+        // Pro Person eine Sektion
+        const groups = {};
+        filtered.forEach(inv => {
+          let key, label, kind;
+          if (inv.status === 'lager') {
+            key = '__lager__';
+            label = 'IM LAGER';
+            kind = 'lager';
+          } else {
+            const p = findPerson(data, inv.assignedTo);
+            if (!p) {
+              key = '__unbekannt__';
+              label = 'Unbekannte Zuordnung';
+              kind = 'unknown';
+            } else {
+              key = p.id;
+              const isCoach = p._kind === 'coach';
+              const numStr = p.number ? (isCoach ? p.number : `#${p.number}`) : '–';
+              label = `${numStr}  ${p.firstName} ${p.lastName} (${p.team || '–'})${isCoach ? ' · TRAINER' : ''}`;
+              kind = p._kind;
+            }
+          }
+          if (!groups[key]) groups[key] = { label, kind, items: [] };
+          groups[key].items.push(inv);
+        });
+
+        // Sortierung: Lager zuerst, dann Spieler nach Team+Nummer, dann Trainer nach Team+Initialen
+        const sortedKeys = Object.keys(groups).sort((a, b) => {
+          const ga = groups[a], gb = groups[b];
+          if (ga.kind === 'lager') return -1;
+          if (gb.kind === 'lager') return 1;
+          if (ga.kind === 'unknown') return 1;
+          if (gb.kind === 'unknown') return -1;
+          return ga.label.localeCompare(gb.label);
+        });
+
+        sortedKeys.forEach(key => {
+          const g = groups[key];
+          // Section-Header (Vereinsblau)
+          if (y > 250) { doc.addPage(); y = 20; }
+          doc.autoTable({
+            startY: y,
+            head: [[g.label, '', '', '']],
+            body: [],
+            theme: 'plain',
+            headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
+            margin: { left: 14, right: 14 },
+          });
+          doc.autoTable({
+            startY: doc.lastAutoTable.finalY,
+            head: [['Artikel', 'Größe', 'Zustand', 'Status']],
+            body: g.items.map(inv => [
+              inv.itemName,
+              inv.size,
+              getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
+              [
+                inv.status === 'lager' ? 'Lager' : 'Ausgegeben',
+                inv.flagged ? '⚠ markiert' : null,
+              ].filter(Boolean).join(' · '),
+            ]),
+            headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
+            bodyStyles: { fontSize: 9 },
+            alternateRowStyles: { fillColor: [252, 250, 246] },
+            columnStyles: {
+              1: { halign: 'center', cellWidth: 18 },
+              2: { cellWidth: 32 },
+              3: { cellWidth: 50 },
+            },
+            margin: { left: 14, right: 14 },
+          });
+          y = doc.lastAutoTable.finalY + 4;
+        });
+      } else {
+        // Pro Artikel (Übersicht). Eine Tabelle, sortiert nach Artikel + Größe + Person.
+        const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '3XL'];
+        const sizeIdx = (s) => {
+          const i = sizeOrder.indexOf(s);
+          return i === -1 ? 999 : i;
+        };
+        const rows = filtered
+          .map(inv => {
+            const p = findPerson(data, inv.assignedTo);
+            const isCoach = p?._kind === 'coach';
+            const personLabel = inv.status === 'lager'
+              ? '— Lager —'
+              : p
+                ? `${isCoach ? p.number : (p.number ? `#${p.number}` : '–')}  ${p.firstName} ${p.lastName}${isCoach ? ' (T)' : ''}`
+                : '— unbekannt —';
+            return {
+              articleNumber: data.items.find(i => i.id === inv.itemType)?.articleNumber || '',
+              itemName: inv.itemName,
+              size: inv.size,
+              person: personLabel,
+              team: p?.team || '',
+              condition: getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
+              status: [inv.status === 'lager' ? 'Lager' : 'Ausgegeben', inv.flagged ? '⚠' : null].filter(Boolean).join(' · '),
+              _sortKey: `${inv.itemName}__${String(sizeIdx(inv.size)).padStart(3, '0')}__${p?.team || 'zzz'}__${p?.number ?? 'zzz'}`,
+            };
+          })
+          .sort((a, b) => a._sortKey.localeCompare(b._sortKey));
+
+        if (y > 250) { doc.addPage(); y = 20; }
+        doc.autoTable({
+          startY: y,
+          head: [['Art.-Nr.', 'Artikel', 'Gr.', 'Person / Lager', 'Team', 'Zustand', 'Status']],
+          body: rows.map(r => [r.articleNumber || '–', r.itemName, r.size, r.person, r.team, r.condition, r.status]),
+          headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 8, fontStyle: 'bold' },
+          bodyStyles: { fontSize: 8 },
+          alternateRowStyles: { fillColor: [252, 250, 246] },
+          columnStyles: {
+            0: { fontStyle: 'bold', cellWidth: 22 },
+            2: { halign: 'center', cellWidth: 12 },
+            5: { cellWidth: 24 },
+            6: { cellWidth: 28 },
+          },
+          margin: { left: 14, right: 14 },
+        });
+      }
+
+      // Footer
+      const pageCount = doc.internal.getNumberOfPages();
+      for (let p = 1; p <= pageCount; p++) {
+        doc.setPage(p);
+        const pageHeight = doc.internal.pageSize.getHeight();
+        doc.setFontSize(7);
+        doc.setTextColor(128, 125, 120);
+        doc.text(`Seite ${p} von ${pageCount}`, W - 14, pageHeight - 8, { align: 'right' });
+        doc.text(`${settings.clubName || 'F. C. Frohlinde'} · #DeinDorfverein`, 14, pageHeight - 8);
+      }
+
+      const stamp = new Date().toISOString().slice(0, 10);
+      doc.save(`bestandsliste_${stamp}.pdf`);
+      onClose();
+    } catch (e) {
+      console.error('Bestands-PDF fehlgeschlagen:', e);
+      alert(`PDF konnte nicht erstellt werden: ${e.message}`);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
+      <div className="bg-white max-w-2xl w-full max-h-[90vh] flex flex-col" style={{ border: '2px solid var(--vereinsblau)' }}>
+        <div className="p-5 border-b border-stone-200 flex justify-between items-start">
+          <div>
+            <div className="section-label mb-1">BESTANDSLISTE DRUCKEN</div>
+            <h2 className="font-display text-2xl">PDF erzeugen</h2>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-stone-100"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 space-y-4 overflow-y-auto flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Status">
+              <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
+                <option value="alle">Alle Statuswerte</option>
+                <option value="lager">Nur Lagerware</option>
+                <option value="ausgegeben">Nur ausgegebenes Material</option>
+                <option value="markiert">Nur als markiert geflaggt</option>
+              </select>
+            </Field>
+            <Field label="Personenkreis">
+              <select value={filterPersonKind} onChange={e => { setFilterPersonKind(e.target.value); setFilterPersonId(''); }} className="w-full border border-stone-300 px-3 py-2 text-sm">
+                <option value="alle">Spieler + Trainer + Lager</option>
+                <option value="player">Nur Spieler</option>
+                <option value="coach">Nur Trainer</option>
+                <option value="lager">Nur Lager</option>
+              </select>
+            </Field>
+            <Field label="Mannschaft (Filter)">
+              <select value={filterTeam} onChange={e => { setFilterTeam(e.target.value); setFilterPersonId(''); }} className="w-full border border-stone-300 px-3 py-2 text-sm">
+                <option value="">Alle Mannschaften</option>
+                {(data.teams || []).map(t => <option key={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="Einzelperson (optional)">
+              <select value={filterPersonId} onChange={e => setFilterPersonId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
+                <option value="">— alle ausgewählten Personen —</option>
+                {filterPersonKind !== 'coach' && filterPersonKind !== 'lager' && (
+                  <optgroup label="Spieler">
+                    {teamPlayers.sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999)).map(p => (
+                      <option key={p.id} value={p.id}>#{p.number || '–'} {p.firstName} {p.lastName} ({p.team})</option>
+                    ))}
+                  </optgroup>
+                )}
+                {filterPersonKind !== 'player' && filterPersonKind !== 'lager' && (
+                  <optgroup label="Trainer">
+                    {teamCoaches.sort((a, b) => (a.lastName || '').localeCompare(b.lastName || '')).map(c => (
+                      <option key={c.id} value={c.id}>{c.number || '–'} {c.firstName} {c.lastName} ({c.team})</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </Field>
+          </div>
+
+          <div>
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>GLIEDERUNG</div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+                style={{ border: groupBy === 'person' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: groupBy === 'person' ? '#F1ECDF' : 'white' }}>
+                <input type="radio" checked={groupBy === 'person'} onChange={() => setGroupBy('person')} className="mt-0.5" />
+                <div>
+                  <div className="font-medium">Pro Person / Lager</div>
+                  <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Eine Sektion je Person mit allen Materialteilen — gut für Übergaben.</div>
+                </div>
+              </label>
+              <label className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+                style={{ border: groupBy === 'item' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: groupBy === 'item' ? '#F1ECDF' : 'white' }}>
+                <input type="radio" checked={groupBy === 'item'} onChange={() => setGroupBy('item')} className="mt-0.5" />
+                <div>
+                  <div className="font-medium">Lange Liste, sortiert nach Artikel</div>
+                  <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Tabellarisch alle Teile mit Person und Status — gut für die Inventur.</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div className="text-sm p-3" style={{ background: 'var(--paper)', color: 'var(--ink-soft)' }}>
+            Vorschau: <strong>{filtered.length} Teile</strong> entsprechen den gewählten Filtern.
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-stone-200 flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm border border-stone-300">Abbrechen</button>
+          <button onClick={generatePDF} disabled={busy || filtered.length === 0}
+            className="px-5 py-2 text-sm uppercase text-white disabled:opacity-50"
+            style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            {busy ? 'Erzeuge…' : `${filtered.length} Teile als PDF`}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1756,7 +2422,7 @@ function DepositsView({ data, update }) {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
-                <tr><th className="text-left p-3">Spieler</th><th className="text-left p-3 hidden md:table-cell">Eingegangen</th><th className="text-left p-3">Betrag</th><th className="text-left p-3 hidden lg:table-cell">Notiz</th><th className="p-3"></th></tr>
+                <tr><th className="text-left p-3">Person</th><th className="text-left p-3 hidden md:table-cell">Eingegangen</th><th className="text-left p-3">Betrag</th><th className="text-left p-3 hidden lg:table-cell">Notiz</th><th className="p-3"></th></tr>
               </thead>
               <tbody>
                 {active.map(d => {
@@ -1791,7 +2457,7 @@ function DepositsView({ data, update }) {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
-                <tr><th className="text-left p-3">Spieler</th><th className="text-left p-3">Eingenommen</th><th className="text-left p-3">Rückzahlung</th><th className="text-left p-3">Einbehalten</th><th className="text-left p-3 hidden md:table-cell">Datum</th></tr>
+                <tr><th className="text-left p-3">Person</th><th className="text-left p-3">Eingenommen</th><th className="text-left p-3">Rückzahlung</th><th className="text-left p-3">Einbehalten</th><th className="text-left p-3 hidden md:table-cell">Datum</th></tr>
               </thead>
               <tbody>
                 {refunded.map(d => {
@@ -1986,13 +2652,16 @@ function ReturnsView({ data, update }) {
           <div className="bg-white border border-stone-200 mb-4">
             <div className="p-4 border-b border-stone-200 bg-stone-50 flex flex-wrap justify-between items-center gap-2">
               <div>
-                <h2 className="font-display text-xl">{player.firstName} {player.lastName} – {player.team}</h2>
+                <h2 className="font-display text-xl">
+                  {player.firstName} {player.lastName} – {player.team}
+                  {player._kind === 'coach' && <span className="ml-2 text-[10px] px-1.5 py-0.5 align-middle" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>}
+                </h2>
                 <p className="text-xs text-stone-500">{playerItems.length} ausgegebene Teile · Pfand: {deposit ? `${deposit.amount.toFixed(2)} €` : 'kein Pfand hinterlegt'}</p>
               </div>
             </div>
 
             {playerItems.length === 0 ? (
-              <div className="p-6 text-center text-stone-500 text-sm">Kein Material ausgegeben an diesen Spieler.</div>
+              <div className="p-6 text-center text-stone-500 text-sm">Kein Material ausgegeben an diese Person.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -2062,7 +2731,10 @@ function ReturnsView({ data, update }) {
           {deposit && (
             <div className="p-7 mb-4 text-white" style={{ background: 'var(--vereinsblau)' }}>
               <div className="font-sub text-xs mb-2" style={{ color: 'var(--gold)', letterSpacing: '0.18em' }}>PFANDABRECHNUNG</div>
-              <h3 className="font-display text-3xl mb-6">Schlussbilanz für {player.firstName} {player.lastName}</h3>
+              <h3 className="font-display text-3xl mb-6">
+                Schlussbilanz für {player.firstName} {player.lastName}
+                {player._kind === 'coach' && <span className="ml-2 text-xs px-2 py-1 align-middle" style={{ background: 'rgba(255,255,255,0.15)', color: 'var(--gold)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>}
+              </h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 text-sm">
                 <div>
                   <div className="font-sub text-xs mb-1" style={{ color: '#A8B8D0', letterSpacing: '0.18em' }}>PFAND</div>
@@ -3019,13 +3691,13 @@ function OrderDetail({ order, data, onBack, onStatus }) {
   }
 
   function formatFlockEntry(e) {
-    // Anzeige-Format: "#7 MÜLLER" oder "DH HASECKE (Trainer)" oder "x2 #5 SCHMITZ" wenn qty > 1
+    // Anzeige-Format auf reine Nummern/Initialen reduziert (Wunsch des Vorstands).
+    // "x2 #5" wenn Mehrfachstück, "DH" für Trainer mit Initialen, "(T)" markiert Trainer.
     const isCoach = e.personKind === 'coach';
-    const num = e.number ? (isCoach ? e.number : `#${e.number}`) : '';
-    const namePart = e.name || '';
+    const num = e.number ? (isCoach ? e.number : `#${e.number}`) : '–';
     const qtyPrefix = e.qty > 1 ? `${e.qty}× ` : '';
     const coachMark = isCoach ? ' (T)' : '';
-    return `${qtyPrefix}${num}${num && namePart ? ' ' : ''}${namePart}${coachMark}`.trim();
+    return `${qtyPrefix}${num}${coachMark}`.trim();
   }
 
   function exportFlockList() {
@@ -3380,12 +4052,8 @@ function OrderDetail({ order, data, onBack, onStatus }) {
                                 }>
                                 {e.number ? (isCoach ? e.number : `#${e.number}`) : '–'}
                               </span>
-                              <span className="font-display text-base tracking-wider">{e.name || '–'}</span>
                               {isCoach && (
                                 <span className="text-[10px] px-1 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
-                              )}
-                              {e.personName && (
-                                <span className="text-xs ml-1" style={{ color: 'var(--ink-mute)' }}>· {e.personName}</span>
                               )}
                             </div>
                           );
@@ -3637,35 +4305,32 @@ function SettingsView({ data, update }) {
 
         <div className="grid grid-cols-12 gap-2 text-xs uppercase tracking-wider mb-2" style={{ color: 'var(--ink-mute)' }}>
           <div className="col-span-2">Art.-Nr.</div>
-          <div className="col-span-4">Artikel</div>
+          <div className="col-span-3">Artikel</div>
           <div className="col-span-3">Lieferant</div>
-          <div className="col-span-1 text-right">Preis</div>
-          <div className="col-span-1 text-right">Ersatz</div>
+          <div className="col-span-2 text-right">Preis €</div>
+          <div className="col-span-1 text-right">Ersatz €</div>
+          <div className="col-span-1"></div>
         </div>
         <div className="space-y-2">
           {items.map((it, idx) => (
             <div key={it.id} className="grid grid-cols-12 gap-2 items-center">
-              <input className="col-span-2 border border-stone-300 px-2 py-2 text-sm" value={it.articleNumber || ''}
+              <input className="col-span-2 border border-stone-300 px-2 py-2 text-sm font-mono" value={it.articleNumber || ''}
                 placeholder="z.B. T-12345"
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, articleNumber: e.target.value } : i))} />
-              <input className="col-span-4 border border-stone-300 px-3 py-2 text-sm" value={it.name}
+              <input className="col-span-3 border border-stone-300 px-3 py-2 text-sm" value={it.name}
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
               <select className="col-span-3 border border-stone-300 px-2 py-2 text-sm" value={it.supplierId || ''}
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, supplierId: e.target.value || null } : i))}>
                 <option value="">– kein Lieferant –</option>
                 {(data.suppliers || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
-              <div className="col-span-1 flex items-center gap-1">
-                <input type="number" step="0.01" className="flex-1 border border-stone-300 px-2 py-2 text-sm text-right"
-                  value={Number.isFinite(it.price) ? it.price : 0}
-                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, price: parseFloat(e.target.value) || 0 } : i))} />
-              </div>
-              <div className="col-span-1 flex items-center gap-1">
-                <input type="number" step="0.01" className="flex-1 border border-stone-300 px-2 py-2 text-sm text-right"
-                  value={Number.isFinite(it.replacementValue) ? it.replacementValue : ''}
-                  placeholder="–"
-                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, replacementValue: e.target.value === '' ? null : (parseFloat(e.target.value) || 0) } : i))} />
-              </div>
+              <input type="number" step="0.01" className="col-span-2 border border-stone-300 px-2 py-2 text-sm text-right"
+                value={Number.isFinite(it.price) ? it.price : 0}
+                onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, price: parseFloat(e.target.value) || 0 } : i))} />
+              <input type="number" step="0.01" className="col-span-1 border border-stone-300 px-2 py-2 text-sm text-right"
+                value={Number.isFinite(it.replacementValue) ? it.replacementValue : ''}
+                placeholder="–"
+                onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, replacementValue: e.target.value === '' ? null : (parseFloat(e.target.value) || 0) } : i))} />
               <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="col-span-1 text-stone-400 hover:text-red-600 p-1 justify-self-end"><Trash2 size={14} /></button>
             </div>
           ))}
@@ -4721,7 +5386,9 @@ function ReportsView({ data, update }) {
                           )}
                         </div>
                         <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
-                          {player ? `${player.firstName} ${player.lastName}` : '— Person nicht gefunden —'}
+                          {player
+                            ? `${player.firstName} ${player.lastName}`
+                            : (r.identifiedPersonName || '— Person nicht gefunden —')}
                         </div>
                         {r.materialMarked > 0 && (
                           <div className="text-[10px] mt-0.5" style={{ color: 'var(--success)' }}>

@@ -89,10 +89,12 @@ async function loadReportData() {
       };
     }
     const person = findPersonForReport(r.team, r.number);
+    const isCoach = !!person && coaches.some(c => c.id === person.id);
     aggregation[key].count += 1;
     aggregation[key].players.push({
       number: r.number,
-      name: person ? `${person.firstName} ${person.lastName}` : '— unbekannt —',
+      name: person ? `${person.firstName} ${person.lastName}${isCoach ? ' (Trainer)' : ''}` : '— unbekannt —',
+      role: isCoach ? 'coach' : (person ? 'player' : null),
       reasons: r.reasons,
       reportId: r.id,
     });
@@ -134,7 +136,10 @@ function renderEmail(data, settings, isTest = false) {
     <tr>
       <td><strong>${a.itemName}</strong><br><span style="color:#807D78;font-size:12px">${a.team}</span></td>
       <td style="text-align:center;font-family:Georgia,serif;font-size:24px;color:#0B2D5C;">${a.count}</td>
-      <td>${a.players.map(p => `Nr. ${p.number} ${p.name} <span style="color:#807D78">(${p.reasons.map(r => REASON_LABELS[r] || r).join(', ')})</span>`).join('<br>')}</td>
+      <td>${a.players.map(p => {
+        const numLabel = p.role === 'coach' ? p.number : `Nr. ${p.number}`;
+        return `${numLabel} ${p.name} <span style="color:#807D78">(${p.reasons.map(r => REASON_LABELS[r] || r).join(', ')})</span>`;
+      }).join('<br>')}</td>
     </tr>
   `).join('');
 
@@ -154,7 +159,7 @@ function renderEmail(data, settings, isTest = false) {
       ${data.aggregation.length === 0 ? '<p style="color:#807D78;">Keine offenen Bedarfsmeldungen in dieser Woche.</p>' : `
         <h2 style="font-family:Georgia,serif;font-size:18px;margin:0 0 12px 0;">Bestellempfehlung</h2>
         <table>
-          <tr><th>Artikel / Mannschaft</th><th style="text-align:center;">Anz.</th><th>Spieler & Gründe</th></tr>
+          <tr><th>Artikel / Mannschaft</th><th style="text-align:center;">Anz.</th><th>Personen & Gründe</th></tr>
           ${aggregationRows}
         </table>
       `}

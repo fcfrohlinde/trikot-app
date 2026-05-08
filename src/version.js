@@ -1,23 +1,41 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.7.4';
+export const APP_VERSION = '1.7.5';
 
 export const CHANGELOG = [
+  {
+    version: '1.7.5',
+    date: '2026-05-08',
+    changes: [
+      'Apple-Touch-Icon mit weißem Hintergrund neu erzeugt (iOS füllt sonst schwarz)',
+      'Dashboard zeigt pro Mannschaft Spieler-, Trainer- und Material-Anzahl',
+      'Stats-Karte „Spieler & Trainer" ersetzt die reine Spielerzahl',
+      'Artikelkatalog: Spalten-Layout neu balanciert — Preis und Ersatz überlappen nicht mehr',
+      'Material einbuchen komplett überarbeitet: Modus „Aus Bestellung" mit Wareneingang und Mengenabgleich pro Position',
+      'Bestell-Status wird nach Wareneingang automatisch auf „teilweise geliefert" oder „geliefert" gesetzt',
+      'Inventur-Items merken sich, aus welcher Bestellung sie stammen (fromOrderId, fromLineId)',
+      'Modus „Frei einbuchen" für Lagerzugang ohne Bestell-Bezug — beliebig viele Positionen mit Nummer/Initialen',
+      'Eingehende Bedarfsmeldungen haben jetzt immer Status „offen" — der Vorstand muss aktiv durchsehen',
+      'Person wird automatisch identifiziert (Mannschaft + Nummer/Initialen), Name fließt in die Meldung ein',
+      'Foto-Pflicht bei den Gründen „verschlissen", „Flock kaputt", „beschädigt" — wird in Frontend und Backend geprüft',
+      'Reason-Buttons mit 📷*-Marker zeigen Foto-Pflicht; Drop-Zone für Foto wird rot bei Pflichtgrund',
+      'Flock-Liste zeigt nur noch Nummern/Initialen — Klarnamen wurden entfernt (auf Wunsch)',
+      'Material & Bestand: Importfunktion entfernt, neuer PDF-Listendruck mit Filter (Status, Personenkreis, Mannschaft, Einzelperson)',
+      'Druck-PDF wahlweise gruppiert nach Person oder als lange Inventarliste',
+      'Trainer-Kennzeichnung in allen Listen vereinheitlicht (TRAINER-Badge in Pfand-Übersicht, Saison-Rückgabe, Schlussbilanz)',
+      'Wochenbericht-E-Mail kennzeichnet Trainer mit „(Trainer)" und nutzt Initialen statt „Nr. XY"',
+    ],
+  },
   {
     version: '1.7.4',
     date: '2026-05-08',
     changes: [
       'Standard-Sets für Spieler und Trainer in den Einstellungen konfigurierbar (jeder Artikel mit eigener Stückzahl)',
       'Im Bestellformular zwei Buttons: „Spieler-Set" und „Spieler + Trainer-Set" — erzeugt die komplette Erstausstattung in einem Klick',
-      'Standard-Set-Buttons sind jetzt unabhängig vom Bestelltyp verfügbar (auch für Teilbestellungen)',
-      'Trainer-Erstausstattung wird nur erzeugt, wenn ein Trainer-Set definiert ist und Trainer in der Mannschaft sind',
-      'Doppelte Zeilen pro Person×Artikel×Größe werden beim Erzeugen automatisch übersprungen (kein doppelter Eintrag bei mehrfachem Klick)',
       'Bestellliste und Flock-Liste sind jetzt nach Artikel × Größe gruppiert — keine Einzelposten mehr',
       'Pro Gruppe werden alle Beflockungen mit Nummer/Initialen und Flock-Name in einer Spalte aufgelistet',
-      'Lagerware ohne Beflockung wird separat ausgewiesen („+ 3× ohne Beflockung")',
-      'Bestellliste mit Gesamtsumme am Ende (in Vereinsblau hervorgehoben)',
-      'Trainer-Beflockungen werden in Bebas Neue dargestellt (passend zur Initialen-Logik)',
-      'Beflockungs-Sortierung: Spieler nach Nummer, Trainer nach Initialen',
+      'Lagerware ohne Beflockung wird separat ausgewiesen',
+      'Bestellliste mit Gesamtsumme am Ende',
     ],
   },
   {
