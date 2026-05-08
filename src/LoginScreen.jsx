@@ -52,7 +52,7 @@ export default function LoginScreen() {
       <div className="w-full max-w-md" style={{ fontFamily: "'Source Sans 3', sans-serif" }}>
         <div className="text-center mb-8">
           <img
-            src="/fcf-logo.png"
+            src="/fcf-logo.png?v=2"
             alt="FC Frohlinde 1949 e.V."
             width="60"
             height="60"

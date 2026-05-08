@@ -442,7 +442,7 @@ function Header({ view, setView, clubName, user, logout, openReportsCount = 0 })
         <div className="flex items-center justify-between mb-4">
           <button onClick={() => setView('dashboard')} className="text-left flex items-center gap-3">
             <img
-              src="/fcf-logo.png"
+              src="/fcf-logo.png?v=2"
               alt=""
               width="30"
               height="30"
