@@ -1,8 +1,18 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.7.0';
+export const APP_VERSION = '1.7.1';
 
 export const CHANGELOG = [
+  {
+    version: '1.7.1',
+    date: '2026-05-08',
+    changes: [
+      'Vereinslogo auf der Login-Seite (100×100) und in der öffentlichen Bedarfsmeldung (80×80)',
+      'Favicon im Browser-Tab und auf dem Home-Bildschirm (alle gängigen Größen 16/32/48/96/180/192/512 plus .ico)',
+      'Vereinsblau als Theme-Farbe im mobilen Browser-UI',
+      'Tab-Titel zeigt jetzt „FC Frohlinde · Trikotverwaltung"',
+    ],
+  },
   {
     version: '1.7.0',
     date: '2026-05-08',

@@ -51,6 +51,14 @@ export default function LoginScreen() {
       `}</style>
       <div className="w-full max-w-md" style={{ fontFamily: "'Source Sans 3', sans-serif" }}>
         <div className="text-center mb-8">
+          <img
+            src="/fcf-logo.png"
+            alt="FC Frohlinde 1949 e.V."
+            width="100"
+            height="100"
+            className="mx-auto mb-5"
+            style={{ width: 100, height: 100, objectFit: 'contain' }}
+          />
           <div className="font-sub text-xs mb-3" style={{ color: '#0B2D5C' }}>F. C. FROHLINDE 1949 e. V.</div>
           <h1 className="font-editorial text-5xl leading-tight" style={{ color: '#1A1A1A' }}>Trikotverwaltung</h1>
           <div className="flex items-center justify-center gap-3 mt-4">

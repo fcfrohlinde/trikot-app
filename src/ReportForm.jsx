@@ -156,6 +156,14 @@ export default function ReportForm({ onBack }) {
       `}</style>
       <div className="w-full max-w-lg" style={{ fontFamily: "'Source Sans 3', sans-serif" }}>
         <div className="text-center mb-6">
+          <img
+            src="/fcf-logo.png"
+            alt="FC Frohlinde 1949 e.V."
+            width="80"
+            height="80"
+            className="mx-auto mb-4"
+            style={{ width: 80, height: 80, objectFit: 'contain' }}
+          />
           <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 12, letterSpacing: '0.18em', color: '#0B2D5C' }}>
             {info?.clubName || 'F. C. FROHLINDE 1949 e. V.'}
           </div>
