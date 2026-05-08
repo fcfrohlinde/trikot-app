@@ -13,14 +13,14 @@ const DEFAULT_ITEMS = [];
 
 // FCF-Standardausstattung gemäß Pfandordnung (Stand 2025)
 const FCF_DEFAULT_ITEMS = [
-  { id: 'praesentationsjacke', name: 'Präsentationsjacke', price: 40, replacementValue: 25 },
-  { id: 'praesentationshose', name: 'Präsentationshose', price: 29, replacementValue: 20 },
-  { id: 'aufwaermshirt', name: 'Aufwärmshirt', price: 30, replacementValue: 20 },
-  { id: 'trainingsshirt', name: 'Trainingsshirt', price: 18, replacementValue: 10 },
-  { id: 'trainingshose_kurz', name: 'Trainingshose kurz', price: 14, replacementValue: 10 },
-  { id: 'trainingshose_lang', name: 'Trainingshose lang', price: 29, replacementValue: 20 },
-  { id: 'zip_top', name: 'Zip Top', price: 40, replacementValue: 25 },
-  { id: 'pullover_sweat', name: 'Pullover / Sweat', price: 35, replacementValue: 22 },
+  { id: 'praesentationsjacke', articleNumber: '', name: 'Präsentationsjacke', price: 40, replacementValue: 25 },
+  { id: 'praesentationshose', articleNumber: '', name: 'Präsentationshose', price: 29, replacementValue: 20 },
+  { id: 'aufwaermshirt', articleNumber: '', name: 'Aufwärmshirt', price: 30, replacementValue: 20 },
+  { id: 'trainingsshirt', articleNumber: '', name: 'Trainingsshirt', price: 18, replacementValue: 10 },
+  { id: 'trainingshose_kurz', articleNumber: '', name: 'Trainingshose kurz', price: 14, replacementValue: 10 },
+  { id: 'trainingshose_lang', articleNumber: '', name: 'Trainingshose lang', price: 29, replacementValue: 20 },
+  { id: 'zip_top', articleNumber: '', name: 'Zip Top', price: 40, replacementValue: 25 },
+  { id: 'pullover_sweat', articleNumber: '', name: 'Pullover / Sweat', price: 35, replacementValue: 22 },
 ];
 
 const DEFAULT_CONDITION_FACTORS = {
@@ -872,11 +872,253 @@ function parseCSV(text) {
   return rows;
 }
 
+// Hilfsfunktion: aus Artikelname eine ID generieren (kleinbuchstaben, ohne Sonderzeichen)
+function slugify(name) {
+  return String(name).toLowerCase()
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+// ============ KATALOG-IMPORT (ARTIKELLISTE) ============
+function CatalogImport({ existingItems, onImport, onCancel }) {
+  const [step, setStep] = useState('upload'); // upload | preview
+  const [rows, setRows] = useState([]);
+  const [mode, setMode] = useState('add'); // add | replace | update
+  const [error, setError] = useState('');
+
+  function downloadTemplate() {
+    const header = ['Artikelnummer', 'Name', 'Neupreis', 'Ersatzwert'];
+    const example = [
+      ['praesentationsjacke', 'Präsentationsjacke', '40', '25'],
+      ['trainingsshirt', 'Trainingsshirt', '18', '10'],
+      ['neuer_artikel', 'Neuer Artikel', '35', '20'],
+    ];
+    const csv = [header, ...example].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'artikelkatalog_vorlage.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError('');
+    try {
+      const text = await file.text();
+      const parsed = parseCSV(text);
+      if (parsed.length === 0) throw new Error('Datei ist leer.');
+      const header = parsed[0].map(h => h.trim().toLowerCase());
+      const col = (...names) => {
+        for (const n of names) {
+          const idx = header.findIndex(h => h === n);
+          if (idx >= 0) return idx;
+        }
+        return -1;
+      };
+      const iId = col('artikelnummer', 'id', 'nummer', 'sku');
+      const iName = col('name', 'artikel', 'bezeichnung');
+      const iPrice = col('neupreis', 'preis', 'price');
+      const iReplacement = col('ersatzwert', 'replacementvalue', 'replacement');
+
+      if (iName < 0) {
+        throw new Error('Spalte "Name" ist Pflicht. Bitte die Vorlage verwenden.');
+      }
+
+      const dataRows = parsed.slice(1).filter(r => r.some(c => c && c.trim()));
+      const items = dataRows.map((r, idx) => {
+        const name = (r[iName] || '').trim();
+        const id = iId >= 0 && (r[iId] || '').trim()
+          ? (r[iId] || '').trim().toLowerCase()
+          : slugify(name);
+        return {
+          _idx: idx,
+          id,
+          name,
+          price: iPrice >= 0 ? parseFloat((r[iPrice] || '0').replace(',', '.')) || 0 : 0,
+          replacementValue: iReplacement >= 0 && (r[iReplacement] || '').trim()
+            ? parseFloat((r[iReplacement] || '0').replace(',', '.')) || 0
+            : null,
+        };
+      });
+
+      setRows(items);
+      setStep('preview');
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function updateRow(idx, key, value) {
+    setRows(rows.map(r => r._idx === idx ? { ...r, [key]: value } : r));
+  }
+  function removeRow(idx) {
+    setRows(rows.filter(r => r._idx !== idx));
+  }
+
+  // Was passiert mit jeder Zeile, je nach Modus?
+  const existingMap = new Map(existingItems.map(i => [i.id, i]));
+  function fateOf(row) {
+    if (!row.name) return { type: 'skip', label: 'übersprungen', color: 'var(--ink-mute)' };
+    const exists = existingMap.has(row.id);
+    if (mode === 'replace') return { type: 'replace', label: 'ersetzt', color: 'var(--warn)' };
+    if (mode === 'add') {
+      return exists
+        ? { type: 'skip-dup', label: 'Duplikat – ignoriert', color: 'var(--warn)' }
+        : { type: 'add', label: 'hinzugefügt', color: 'var(--success)' };
+    }
+    if (mode === 'update') {
+      return exists
+        ? { type: 'update', label: 'aktualisiert', color: 'var(--vereinsblau)' }
+        : { type: 'add', label: 'neu angelegt', color: 'var(--success)' };
+    }
+  }
+
+  const valid = rows.filter(r => r.name).map(r => ({
+    id: r.id,
+    name: r.name,
+    price: r.price,
+    replacementValue: r.replacementValue,
+  }));
+
+  function doImport() {
+    if (mode === 'replace' && existingItems.length > 0) {
+      if (!confirm(`Achtung: Im Modus "Komplett ersetzen" werden alle ${existingItems.length} bestehenden Artikel gelöscht und durch ${valid.length} neue ersetzt. Fortfahren?`)) return;
+    }
+    if (valid.length === 0) { alert('Keine gültigen Zeilen zum Import.'); return; }
+    onImport(valid, mode);
+  }
+
+  return (
+    <div className="bg-white p-7 mb-4" style={{ border: '2px solid var(--vereinsblau)' }}>
+      <div className="flex items-start justify-between mb-5">
+        <div>
+          <div className="section-label mb-2">ARTIKELKATALOG-IMPORT</div>
+          <h2 className="font-display text-3xl" style={{ color: 'var(--ink)' }}>
+            {step === 'upload' ? 'CSV-Datei hochladen' : 'Vorschau & Import-Modus'}
+          </h2>
+        </div>
+        <button onClick={onCancel} className="p-2 hover:bg-stone-100" title="Schließen">
+          <X size={18} />
+        </button>
+      </div>
+
+      {step === 'upload' && (
+        <div>
+          <div className="mb-6 text-sm" style={{ color: 'var(--ink-soft)' }}>
+            <p className="mb-3">So funktioniert's:</p>
+            <ol className="list-decimal pl-5 space-y-1.5">
+              <li>Vorlage herunterladen oder eigene Liste vorbereiten.</li>
+              <li>Spalten: <strong>Artikelnummer</strong>, <strong>Name</strong>, <strong>Neupreis</strong>, <strong>Ersatzwert</strong>. Pflicht ist nur „Name".</li>
+              <li>CSV-Datei hochladen, Modus wählen, importieren.</li>
+            </ol>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            <button onClick={downloadTemplate} className="px-5 py-3 text-xs uppercase flex items-center justify-center gap-2"
+              style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              <Download size={14} /> Vorlage herunterladen
+            </button>
+            <label className="px-5 py-3 text-xs uppercase flex items-center justify-center gap-2 cursor-pointer text-white"
+              style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              <Download size={14} style={{ transform: 'rotate(180deg)' }} /> CSV-Datei wählen
+              <input type="file" accept=".csv,text/csv" onChange={handleFile} className="hidden" />
+            </label>
+          </div>
+
+          <div className="text-xs p-4" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
+            <strong style={{ color: 'var(--vereinsblau)' }}>Tipp:</strong> Wird keine Artikelnummer angegeben, wird sie automatisch aus dem Namen erzeugt (z. B. "Trainingsshirt" → "trainingsshirt"). Für saubere Updates später lieber feste Artikelnummern vergeben.
+          </div>
+
+          {error && (
+            <div className="mt-4 p-3 text-sm" style={{ background: '#F5E6E6', color: 'var(--danger)', borderLeft: '3px solid var(--danger)' }}>{error}</div>
+          )}
+        </div>
+      )}
+
+      {step === 'preview' && (
+        <div>
+          <div className="mb-5">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>IMPORT-MODUS</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              {[
+                { id: 'add', label: 'Hinzufügen', desc: 'Nur neue Artikel anlegen. Bestehende mit gleicher Nummer werden ignoriert.' },
+                { id: 'update', label: 'Aktualisieren', desc: 'Bestehende Artikel (per Artikelnummer) werden überschrieben, neue zusätzlich angelegt.' },
+                { id: 'replace', label: 'Komplett ersetzen', desc: 'ALLE bestehenden Artikel werden gelöscht und durch die importierten ersetzt.' },
+              ].map(m => (
+                <label key={m.id} className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+                  style={{ border: mode === m.id ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: mode === m.id ? '#F1ECDF' : 'white' }}>
+                  <input type="radio" name="importMode" value={m.id} checked={mode === m.id} onChange={() => setMode(m.id)} className="mt-1" />
+                  <div>
+                    <div className="font-medium" style={{ color: 'var(--ink)' }}>{m.label}</div>
+                    <div className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>{m.desc}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto mb-4" style={{ border: '1px solid var(--rule)' }}>
+            <table className="w-full text-xs min-w-[700px]">
+              <thead className="bg-stone-50">
+                <tr>
+                  <th className="text-left p-2">Artikelnummer</th>
+                  <th className="text-left p-2">Name</th>
+                  <th className="text-right p-2">Neupreis</th>
+                  <th className="text-right p-2">Ersatzwert</th>
+                  <th className="text-left p-2">Aktion</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const f = fateOf(r);
+                  return (
+                    <tr key={r._idx} style={{ borderTop: '1px solid var(--rule)' }}>
+                      <td className="p-1"><input className="w-full px-2 py-1 text-xs font-mono" value={r.id} onChange={e => updateRow(r._idx, 'id', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                      <td className="p-1"><input className="w-full px-2 py-1 text-xs" value={r.name} onChange={e => updateRow(r._idx, 'name', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                      <td className="p-1"><input type="number" step="0.01" className="w-20 px-2 py-1 text-xs text-right" value={r.price} onChange={e => updateRow(r._idx, 'price', parseFloat(e.target.value) || 0)} style={{ border: '1px solid var(--rule)' }} /></td>
+                      <td className="p-1"><input type="number" step="0.01" className="w-20 px-2 py-1 text-xs text-right" value={r.replacementValue ?? ''} placeholder="–" onChange={e => updateRow(r._idx, 'replacementValue', e.target.value === '' ? null : (parseFloat(e.target.value) || 0))} style={{ border: '1px solid var(--rule)' }} /></td>
+                      <td className="p-2 text-xs" style={{ color: f.color }}>{f.label}</td>
+                      <td className="p-1"><button onClick={() => removeRow(r._idx)} className="p-1" style={{ color: 'var(--ink-mute)' }}><Trash2 size={12} /></button></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button onClick={doImport} disabled={valid.length === 0}
+              className="px-6 py-3 text-xs uppercase text-white disabled:opacity-50"
+              style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              {valid.length} Artikel importieren ({mode})
+            </button>
+            <button onClick={() => { setStep('upload'); setRows([]); }}
+              className="px-6 py-3 text-xs uppercase"
+              style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              Andere Datei
+            </button>
+            <button onClick={onCancel}
+              className="px-6 py-3 text-xs uppercase"
+              style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              Abbrechen
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============ MATERIAL / INVENTORY ============
 function InventoryView({ data, update }) {
   const [filter, setFilter] = useState('alle');
   const [showForm, setShowForm] = useState(false);
   const [showAssign, setShowAssign] = useState(null);
+  const [showCatalogImport, setShowCatalogImport] = useState(false);
 
   const filtered = data.inventory.filter(i => {
     if (filter === 'alle') return true;
@@ -885,6 +1127,31 @@ function InventoryView({ data, update }) {
     if (filter === 'markiert') return i.flagged;
     return i.itemType === filter;
   });
+
+  function applyCatalogImport(newItems, mode) {
+    let merged;
+    if (mode === 'replace') {
+      merged = newItems;
+    } else if (mode === 'add') {
+      // Doppelte IDs vermeiden
+      const existingIds = new Set(data.items.map(i => i.id));
+      const filtered = newItems.filter(n => !existingIds.has(n.id));
+      merged = [...data.items, ...filtered];
+    } else if (mode === 'update') {
+      // Per ID matchen, fehlende neu anhängen
+      const byId = new Map(data.items.map(i => [i.id, i]));
+      newItems.forEach(n => {
+        if (byId.has(n.id)) {
+          byId.set(n.id, { ...byId.get(n.id), ...n });
+        } else {
+          byId.set(n.id, n);
+        }
+      });
+      merged = Array.from(byId.values());
+    }
+    update('items', merged);
+    setShowCatalogImport(false);
+  }
 
   function addBulk(itemType, qty, size) {
     const item = data.items.find(i => i.id === itemType);
@@ -926,11 +1193,17 @@ function InventoryView({ data, update }) {
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
-        <PageHeader number="05" label="AUSSTATTUNG" title="Material & Bestand" subtitle={`${data.inventory.length} Teile gesamt · ${data.inventory.filter(i => i.status === 'lager').length} im Lager`} />
-        <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
-          style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-          <Plus size={14} /> Material einbuchen
-        </button>
+        <PageHeader number="05" label="AUSSTATTUNG" title="Material & Bestand" subtitle={`${data.inventory.length} Teile gesamt · ${data.inventory.filter(i => i.status === 'lager').length} im Lager · ${data.items.length} Katalog-Artikel`} />
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowCatalogImport(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+            style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <Download size={14} style={{ transform: 'rotate(180deg)' }} /> Artikelkatalog importieren
+          </button>
+          <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+            style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <Plus size={14} /> Material einbuchen
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-2 mb-4 overflow-x-auto -mx-4 px-4 pb-1">
@@ -949,6 +1222,7 @@ function InventoryView({ data, update }) {
 
       {showForm && <InventoryAddForm items={data.items} onSave={addBulk} onCancel={() => setShowForm(false)} />}
       {showAssign && <AssignForm inv={showAssign} persons={allPersons(data)} inventory={data.inventory} onAssign={assign} onCancel={() => setShowAssign(null)} />}
+      {showCatalogImport && <CatalogImport existingItems={data.items} onImport={applyCatalogImport} onCancel={() => setShowCatalogImport(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
@@ -1490,10 +1764,22 @@ function ReturnsView({ data, update }) {
 function OrdersView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
   const [viewing, setViewing] = useState(null);
+  const [selected, setSelected] = useState([]);
+  const [mergeMode, setMergeMode] = useState(false);
 
   function saveOrder(order) {
     const newOrder = { ...order, id: `ord_${Date.now()}`, createdAt: new Date().toISOString(), status: 'angelegt' };
     update('orders', [...data.orders, newOrder]);
+
+    // Wenn die Bestellung aus Bedarfsmeldungen erzeugt wurde, diese sperren
+    if (newOrder.fromReports && newOrder.fromReports.length > 0) {
+      const updatedReports = (data.reports || []).map(r =>
+        newOrder.fromReports.includes(r.id)
+          ? { ...r, status: 'bestellt', orderId: newOrder.id, handledAt: new Date().toISOString() }
+          : r
+      );
+      update('reports', updatedReports);
+    }
     setShowForm(false);
   }
 
@@ -1502,8 +1788,67 @@ function OrdersView({ data, update }) {
   }
 
   function remove(id) {
-    if (!confirm('Bestellung löschen?')) return;
+    if (!confirm('Bestellung löschen? Eventuell verknüpfte Bedarfsmeldungen werden wieder freigegeben.')) return;
+    // Verknüpfte Bedarfsmeldungen wieder auf "gesehen" zurücksetzen, damit sie neu bestellt werden können
+    const order = data.orders.find(o => o.id === id);
+    if (order?.fromReports?.length) {
+      const updatedReports = (data.reports || []).map(r =>
+        order.fromReports.includes(r.id)
+          ? { ...r, status: 'gesehen', orderId: null }
+          : r
+      );
+      update('reports', updatedReports);
+    }
     update('orders', data.orders.filter(o => o.id !== id));
+  }
+
+  function toggleSelect(id) {
+    setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function mergeSelected() {
+    if (selected.length < 2) { alert('Bitte mindestens 2 Bestellungen auswählen.'); return; }
+    const ordersToMerge = data.orders.filter(o => selected.includes(o.id));
+    const title = prompt('Titel der zusammengeführten Bestellung:', `Sammelbestellung ${new Date().toLocaleDateString('de-DE')}`);
+    if (!title) return;
+
+    // Lines, fromReports, sponsors und Lieferanten zusammenführen
+    const allLines = ordersToMerge.flatMap(o => o.lines || []);
+    const allReports = [...new Set(ordersToMerge.flatMap(o => o.fromReports || []))];
+    const teams = [...new Set(ordersToMerge.map(o => o.team).filter(Boolean))];
+    const articleSuppliers = [...new Set(ordersToMerge.map(o => o.articleSupplierId).filter(Boolean))];
+    const flockSuppliers = [...new Set(ordersToMerge.map(o => o.flockSupplierId).filter(Boolean))];
+
+    const merged = {
+      id: `ord_${Date.now()}`,
+      title,
+      type: 'sammel',
+      team: teams.length === 1 ? teams[0] : 'mehrere',
+      articleSupplierId: articleSuppliers.length === 1 ? articleSuppliers[0] : null,
+      flockSupplierId: flockSuppliers.length === 1 ? flockSuppliers[0] : null,
+      flockBy: ordersToMerge[0]?.flockBy || 'haus',
+      notes: `Zusammengeführt aus: ${ordersToMerge.map(o => o.title).join(', ')}`,
+      lines: allLines.map((l, idx) => ({ ...l, id: l.id || `l_${Date.now()}_${idx}` })),
+      sponsors: ordersToMerge[0]?.sponsors || { brust: '', ruecken: '', aermel: '' },
+      fromReports: allReports,
+      mergedFrom: ordersToMerge.map(o => o.id),
+      createdAt: new Date().toISOString(),
+      status: 'angelegt',
+    };
+
+    // Quellen löschen, neue Bestellung anlegen, Bedarfsmeldungen auf neue Order-ID umhängen
+    const remaining = data.orders.filter(o => !selected.includes(o.id));
+    update('orders', [...remaining, merged]);
+
+    if (allReports.length > 0) {
+      const updatedReports = (data.reports || []).map(r =>
+        allReports.includes(r.id) ? { ...r, orderId: merged.id } : r
+      );
+      update('reports', updatedReports);
+    }
+
+    setSelected([]);
+    setMergeMode(false);
   }
 
   if (viewing) return <OrderDetail order={viewing} data={data} onBack={() => setViewing(null)} onStatus={setStatus} />;
@@ -1512,11 +1857,42 @@ function OrdersView({ data, update }) {
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
         <PageHeader number="08" label="BESCHAFFUNG" title="Bestellungen" subtitle={`${data.orders.length} Bestellungen · Flock-Liste integriert`} />
-        <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
-          style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-          <Plus size={14} /> Neue Bestellung
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          {!mergeMode && (
+            <>
+              <button onClick={() => setMergeMode(true)} disabled={data.orders.length < 2}
+                className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase disabled:opacity-50"
+                style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                Zusammenführen
+              </button>
+              <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+                style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                <Plus size={14} /> Neue Bestellung
+              </button>
+            </>
+          )}
+          {mergeMode && (
+            <>
+              <button onClick={mergeSelected} disabled={selected.length < 2}
+                className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase text-white disabled:opacity-50"
+                style={{ background: 'var(--success)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                {selected.length} Bestellungen zusammenführen
+              </button>
+              <button onClick={() => { setMergeMode(false); setSelected([]); }}
+                className="px-5 py-2.5 text-xs font-medium uppercase"
+                style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+                Abbrechen
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
+      {mergeMode && (
+        <div className="mb-4 p-3 text-xs" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
+          Wähle 2 oder mehr Bestellungen zum Zusammenführen aus. Die ausgewählten Bestellungen werden gelöscht und durch eine neue Sammelbestellung ersetzt.
+        </div>
+      )}
 
       {showForm && <OrderForm data={data} onSave={saveOrder} onCancel={() => setShowForm(false)} />}
 
@@ -1528,30 +1904,50 @@ function OrdersView({ data, update }) {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
+                  {mergeMode && <th className="p-3 w-8"></th>}
                   <th className="text-left p-3">Bestellung</th>
                   <th className="text-left p-3 hidden sm:table-cell">Mannschaft</th>
+                  <th className="text-left p-3 hidden md:table-cell">Lieferant</th>
                   <th className="text-left p-3 hidden md:table-cell">Teile</th>
                   <th className="text-left p-3">Status</th>
                   <th className="p-3"></th>
                 </tr>
               </thead>
               <tbody>
-                {[...data.orders].reverse().map(o => (
-                  <tr key={o.id} className="border-t border-stone-100">
-                    <td className="p-3"><div className="font-medium">{o.title}</div><div className="text-xs text-stone-500">{new Date(o.createdAt).toLocaleDateString('de-DE')}</div></td>
-                    <td className="p-3 hidden sm:table-cell">{o.team || 'div.'}</td>
-                    <td className="p-3 hidden md:table-cell">{o.lines.reduce((s, l) => s + l.qty, 0)}</td>
-                    <td className="p-3">
-                      <select value={o.status} onChange={e => setStatus(o.id, e.target.value)} className="border border-stone-300 px-2 py-1 text-xs">
-                        {['angelegt', 'bestellt', 'in_produktion', 'geliefert', 'storniert'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                    </td>
-                    <td className="p-3 text-right whitespace-nowrap">
-                      <button onClick={() => setViewing(o)} className="text-xs bg-stone-900 text-white px-2 py-1">Details</button>
-                      <button onClick={() => remove(o.id)} className="text-stone-400 hover:text-red-600 p-1 ml-1"><Trash2 size={14} /></button>
-                    </td>
-                  </tr>
-                ))}
+                {[...data.orders].reverse().map(o => {
+                  const articleSupplier = (data.suppliers || []).find(s => s.id === o.articleSupplierId);
+                  return (
+                    <tr key={o.id} className="border-t border-stone-100">
+                      {mergeMode && (
+                        <td className="p-3">
+                          <input type="checkbox" checked={selected.includes(o.id)} onChange={() => toggleSelect(o.id)} />
+                        </td>
+                      )}
+                      <td className="p-3">
+                        <div className="font-medium">{o.title}</div>
+                        <div className="text-xs text-stone-500">
+                          {new Date(o.createdAt).toLocaleDateString('de-DE')}
+                          {o.mergedFrom && <span className="ml-1" style={{ color: 'var(--vereinsblau)' }}>· Sammelbestellung</span>}
+                          {o.fromReports?.length > 0 && <span className="ml-1" style={{ color: 'var(--ink-mute)' }}>· aus {o.fromReports.length} Bedarfsmeldung(en)</span>}
+                        </div>
+                      </td>
+                      <td className="p-3 hidden sm:table-cell">{o.team || 'div.'}</td>
+                      <td className="p-3 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>
+                        {articleSupplier?.name || '–'}
+                      </td>
+                      <td className="p-3 hidden md:table-cell">{o.lines.reduce((s, l) => s + l.qty, 0)}</td>
+                      <td className="p-3">
+                        <select value={o.status} onChange={e => setStatus(o.id, e.target.value)} className="border border-stone-300 px-2 py-1 text-xs">
+                          {['angelegt', 'bestellt', 'in_produktion', 'geliefert', 'storniert'].map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </td>
+                      <td className="p-3 text-right whitespace-nowrap">
+                        <button onClick={() => setViewing(o)} className="text-xs bg-stone-900 text-white px-2 py-1">Details</button>
+                        <button onClick={() => remove(o.id)} className="text-stone-400 hover:text-red-600 p-1 ml-1"><Trash2 size={14} /></button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1565,10 +1961,16 @@ function OrderForm({ data, onSave, onCancel }) {
   const [type, setType] = useState('komplett');
   const [team, setTeam] = useState(data.teams[0] || '');
   const [title, setTitle] = useState('');
-  const [supplier, setSupplier] = useState('');
+  const [articleSupplierId, setArticleSupplierId] = useState('');
+  const [flockSupplierId, setFlockSupplierId] = useState('');
+  const [flockBy, setFlockBy] = useState('haus'); // 'haus' | 'lieferant' | 'extern'
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([]);
   const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '' });
+
+  const suppliers = data.suppliers || [];
+  const articleSuppliers = suppliers.filter(s => s.type === 'artikel' || s.type === 'beides');
+  const flockSuppliers = suppliers.filter(s => s.type === 'flock' || s.type === 'beides');
 
   const teamPlayers = data.players.filter(p => p.team === team);
 
@@ -1612,7 +2014,13 @@ function OrderForm({ data, onSave, onCancel }) {
   function submit() {
     if (!title) return alert('Titel fehlt');
     if (lines.length === 0) return alert('Keine Positionen');
-    onSave({ title, type, team: type === 'komplett' || type === 'teilweise' ? team : null, supplier, notes, lines, sponsors });
+    onSave({
+      title, type,
+      team: type === 'komplett' || type === 'teilweise' ? team : null,
+      articleSupplierId, flockSupplierId, flockBy,
+      notes, lines, sponsors,
+      fromReports: [],
+    });
   }
 
   return (
@@ -1637,14 +2045,59 @@ function OrderForm({ data, onSave, onCancel }) {
             </select>
           </Field>
         )}
-        <Field label="Ausrüster / Lieferant">
-          <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="z.B. Teamsport Müller" />
+        <Field label="Artikel-Lieferant (Ausrüster)">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={articleSupplierId} onChange={e => setArticleSupplierId(e.target.value)}>
+            <option value="">– kein Lieferant ausgewählt –</option>
+            {articleSuppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          {articleSuppliers.length === 0 && (
+            <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>Noch keine Lieferanten angelegt — in den Einstellungen unter „Lieferanten" hinzufügen.</p>
+          )}
         </Field>
         <div className="sm:col-span-2">
           <Field label="Notizen">
             <textarea className="w-full border border-stone-300 px-3 py-2 text-sm" rows="2" value={notes} onChange={e => setNotes(e.target.value)} />
           </Field>
         </div>
+      </div>
+
+      <div className="p-4 mb-4" style={{ background: 'var(--paper-dark)', border: '1px solid var(--rule)' }}>
+        <div className="font-sub text-xs mb-3" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>BEFLOCKUNG</div>
+        <p className="text-xs mb-3" style={{ color: 'var(--ink-mute)' }}>Wer übernimmt die Beflockung mit Spielernamen und Nummern?</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+          <label className="flex items-start gap-2 p-3 cursor-pointer text-sm" style={{ border: flockBy === 'haus' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: flockBy === 'haus' ? 'white' : 'transparent' }}>
+            <input type="radio" name="flockBy" value="haus" checked={flockBy === 'haus'} onChange={() => setFlockBy('haus')} className="mt-1" />
+            <div>
+              <div className="font-medium" style={{ color: 'var(--ink)' }}>Im Haus</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Verein beflockt selbst</div>
+            </div>
+          </label>
+          <label className="flex items-start gap-2 p-3 cursor-pointer text-sm" style={{ border: flockBy === 'lieferant' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: flockBy === 'lieferant' ? 'white' : 'transparent' }}>
+            <input type="radio" name="flockBy" value="lieferant" checked={flockBy === 'lieferant'} onChange={() => setFlockBy('lieferant')} className="mt-1" />
+            <div>
+              <div className="font-medium" style={{ color: 'var(--ink)' }}>Lieferant macht Flock</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Artikel-Lieferant beflockt mit</div>
+            </div>
+          </label>
+          <label className="flex items-start gap-2 p-3 cursor-pointer text-sm" style={{ border: flockBy === 'extern' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: flockBy === 'extern' ? 'white' : 'transparent' }}>
+            <input type="radio" name="flockBy" value="extern" checked={flockBy === 'extern'} onChange={() => setFlockBy('extern')} className="mt-1" />
+            <div>
+              <div className="font-medium" style={{ color: 'var(--ink)' }}>Externer Beflocker</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Eigener Flock-Lieferant</div>
+            </div>
+          </label>
+        </div>
+        {flockBy === 'extern' && (
+          <Field label="Flock-Lieferant">
+            <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={flockSupplierId} onChange={e => setFlockSupplierId(e.target.value)}>
+              <option value="">– wählen –</option>
+              {flockSuppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            {flockSuppliers.length === 0 && (
+              <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>Noch keine Flock-Lieferanten angelegt.</p>
+            )}
+          </Field>
+        )}
       </div>
 
       <div className="bg-stone-50 p-4 mb-4" style={{ border: '1px solid var(--rule)' }}>
@@ -1805,14 +2258,22 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 
       // Metadaten-Block
       let y = 40;
+      const articleSupplier = (data.suppliers || []).find(s => s.id === order.articleSupplierId);
+      const flockSupplier = (data.suppliers || []).find(s => s.id === order.flockSupplierId);
+      const flockByLabel = order.flockBy === 'haus' ? 'Im Haus'
+        : order.flockBy === 'lieferant' ? `Lieferant: ${articleSupplier?.name || '-'}`
+        : order.flockBy === 'extern' ? `Extern: ${flockSupplier?.name || '-'}`
+        : '-';
+
       doc.setTextColor(26, 26, 26);
       doc.setFontSize(9);
       doc.text(`Erstellt: ${new Date(order.createdAt).toLocaleDateString('de-DE')}`, 14, y);
       doc.text(`Status: ${order.status}`, 14, y + 5);
       if (order.team) doc.text(`Mannschaft: ${order.team}`, 14, y + 10);
-      if (order.supplier) doc.text(`Lieferant: ${order.supplier}`, W - 14, y, { align: 'right' });
-      doc.text(`${order.lines.reduce((s, l) => s + l.qty, 0)} Teile gesamt`, W - 14, y + 5, { align: 'right' });
-      y += 18;
+      if (articleSupplier) doc.text(`Artikel-Lieferant: ${articleSupplier.name}`, W - 14, y, { align: 'right' });
+      doc.text(`Beflockung: ${flockByLabel}`, W - 14, y + 5, { align: 'right' });
+      doc.text(`${order.lines.reduce((s, l) => s + l.qty, 0)} Teile gesamt`, W - 14, y + 10, { align: 'right' });
+      y += 22;
 
       if (order.notes) {
         doc.setFontSize(9);
@@ -1946,7 +2407,21 @@ function OrderDetail({ order, data, onBack, onStatus }) {
                 {order.team || 'mehrere Mannschaften'} · {totalQty} Teile · Status: <span className="font-medium" style={{ color: 'var(--ink)' }}>{order.status}</span>
               </p>
             </div>
-            {order.supplier && <p className="text-xs mt-2" style={{ color: 'var(--ink-mute)' }}>Lieferant: {order.supplier}</p>}
+            {(() => {
+              const articleSupplier = (data.suppliers || []).find(s => s.id === order.articleSupplierId);
+              const flockSupplier = (data.suppliers || []).find(s => s.id === order.flockSupplierId);
+              const flockLabel = order.flockBy === 'haus' ? 'Im Haus'
+                : order.flockBy === 'lieferant' ? `durch ${articleSupplier?.name || 'Artikel-Lieferanten'}`
+                : order.flockBy === 'extern' ? (flockSupplier?.name || 'externer Beflocker')
+                : null;
+              return (
+                <div className="text-xs mt-2 flex flex-wrap gap-x-4 gap-y-1" style={{ color: 'var(--ink-mute)' }}>
+                  {articleSupplier && <span>Artikel-Lieferant: <strong style={{ color: 'var(--ink-soft)' }}>{articleSupplier.name}</strong></span>}
+                  {flockLabel && <span>Beflockung: <strong style={{ color: 'var(--ink-soft)' }}>{flockLabel}</strong></span>}
+                  {order.fromReports?.length > 0 && <span style={{ color: 'var(--vereinsblau)' }}>· aus {order.fromReports.length} Bedarfsmeldung(en)</span>}
+                </div>
+              );
+            })()}
             {order.notes && <p className="text-sm mt-3 italic" style={{ color: 'var(--ink-soft)' }}>{order.notes}</p>}
           </div>
           <div className="flex gap-2 flex-wrap">
@@ -2047,6 +2522,7 @@ function SettingsView({ data, update }) {
   const [newTeam, setNewTeam] = useState('');
   const [renamingTeam, setRenamingTeam] = useState(null);
   const [renameValue, setRenameValue] = useState('');
+  const [showItemImport, setShowItemImport] = useState(false);
 
   function saveSettings() {
     update('settings', settings);
@@ -2214,36 +2690,66 @@ function SettingsView({ data, update }) {
         )}
       </div>
 
+      <SuppliersBlock data={data} update={update} />
+
       <div className="bg-white border border-stone-200 p-6 mb-4">
         <div className="flex justify-between items-center mb-4">
           <h2 className="font-display text-2xl">ARTIKELKATALOG</h2>
-          <button onClick={addItem} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1"><Plus size={12} /> Artikel</button>
+          <div className="flex gap-2">
+            <button onClick={() => setShowItemImport(true)} className="text-xs px-3 py-1.5 flex items-center gap-1"
+              style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>
+              <Download size={12} style={{ transform: 'rotate(180deg)' }} /> CSV importieren
+            </button>
+            <button onClick={addItem} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1"><Plus size={12} /> Artikel</button>
+          </div>
         </div>
         <p className="text-xs text-stone-500 mb-3">
-          Neupreis wird im Saison-Modell zur Zeitwertberechnung genutzt. Ersatzwert ist der Festbetrag, der im Pauschal-Modus (FCF-Pfandordnung) bei beschädigten oder verlorenen Teilen vom Pfand abgezogen wird.
+          Neupreis wird im Saison-Modell zur Zeitwertberechnung genutzt. Ersatzwert ist der Festbetrag, der im Pauschal-Modus (FCF-Pfandordnung) bei beschädigten oder verlorenen Teilen vom Pfand abgezogen wird. Artikelnummer dient zur Identifikation beim Re-Import.
         </p>
+
+        {showItemImport && (
+          <ItemImport
+            items={items}
+            suppliers={data.suppliers || []}
+            onImport={(newItems, mode) => {
+              const merged = mergeItems(items, newItems, mode);
+              setItems(merged);
+              setShowItemImport(false);
+            }}
+            onCancel={() => setShowItemImport(false)}
+          />
+        )}
+
         <div className="grid grid-cols-12 gap-2 text-xs uppercase tracking-wider mb-2" style={{ color: 'var(--ink-mute)' }}>
-          <div className="col-span-6">Artikel</div>
-          <div className="col-span-3 text-right">Neupreis</div>
-          <div className="col-span-2 text-right">Ersatzwert</div>
+          <div className="col-span-2">Art.-Nr.</div>
+          <div className="col-span-4">Artikel</div>
+          <div className="col-span-3">Lieferant</div>
+          <div className="col-span-1 text-right">Preis</div>
+          <div className="col-span-1 text-right">Ersatz</div>
         </div>
         <div className="space-y-2">
           {items.map((it, idx) => (
             <div key={it.id} className="grid grid-cols-12 gap-2 items-center">
-              <input className="col-span-6 border border-stone-300 px-3 py-2 text-sm" value={it.name}
+              <input className="col-span-2 border border-stone-300 px-2 py-2 text-sm" value={it.articleNumber || ''}
+                placeholder="z.B. T-12345"
+                onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, articleNumber: e.target.value } : i))} />
+              <input className="col-span-4 border border-stone-300 px-3 py-2 text-sm" value={it.name}
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
-              <div className="col-span-3 flex items-center gap-1">
+              <select className="col-span-3 border border-stone-300 px-2 py-2 text-sm" value={it.supplierId || ''}
+                onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, supplierId: e.target.value || null } : i))}>
+                <option value="">– kein Lieferant –</option>
+                {(data.suppliers || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <div className="col-span-1 flex items-center gap-1">
                 <input type="number" step="0.01" className="flex-1 border border-stone-300 px-2 py-2 text-sm text-right"
                   value={Number.isFinite(it.price) ? it.price : 0}
                   onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, price: parseFloat(e.target.value) || 0 } : i))} />
-                <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>€</span>
               </div>
-              <div className="col-span-2 flex items-center gap-1">
+              <div className="col-span-1 flex items-center gap-1">
                 <input type="number" step="0.01" className="flex-1 border border-stone-300 px-2 py-2 text-sm text-right"
                   value={Number.isFinite(it.replacementValue) ? it.replacementValue : ''}
                   placeholder="–"
                   onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, replacementValue: e.target.value === '' ? null : (parseFloat(e.target.value) || 0) } : i))} />
-                <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>€</span>
               </div>
               <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="col-span-1 text-stone-400 hover:text-red-600 p-1 justify-self-end"><Trash2 size={14} /></button>
             </div>
@@ -2362,6 +2868,8 @@ function SettingsView({ data, update }) {
         </ol>
       </div>
 
+      <SuppliersBlock data={data} update={update} />
+
       <div className="bg-white border border-stone-200 p-6 mb-4">
         <h2 className="font-display text-2xl mb-2">WOCHENBERICHT-VERSAND (SMTP)</h2>
         <p className="text-xs text-stone-500 mb-4">
@@ -2447,6 +2955,113 @@ function SettingsView({ data, update }) {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Lieferanten-Verwaltung (Artikel + Flock getrennt)
+function SuppliersBlock({ data, update }) {
+  const suppliers = data.suppliers || [];
+  const [editing, setEditing] = useState(null); // { id?, name, type, contact, notes } | null
+
+  function save(s) {
+    if (!s.name?.trim()) { alert('Name fehlt'); return; }
+    if (s.id) {
+      update('suppliers', suppliers.map(x => x.id === s.id ? s : x));
+    } else {
+      update('suppliers', [...suppliers, { ...s, id: `sup_${Date.now()}` }]);
+    }
+    setEditing(null);
+  }
+  function remove(id) {
+    if (!confirm('Lieferant löschen? Bestehende Bestellungen behalten den Namen, verlieren aber die Verknüpfung.')) return;
+    update('suppliers', suppliers.filter(x => x.id !== id));
+  }
+
+  const TYPE_LABELS = { artikel: 'Artikel', flock: 'Flock', beides: 'Artikel & Flock' };
+
+  return (
+    <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="flex justify-between items-center mb-4">
+        <div>
+          <h2 className="font-display text-2xl">LIEFERANTEN</h2>
+          <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>
+            Lieferanten für Artikel und/oder Beflockung. In Bestellungen kann jeweils einer ausgewählt werden.
+          </p>
+        </div>
+        <button onClick={() => setEditing({ name: '', type: 'artikel', contact: '', notes: '' })}
+          className="px-4 py-2 text-xs uppercase flex items-center gap-2"
+          style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+          <Plus size={12} /> Lieferant
+        </button>
+      </div>
+
+      {editing && (
+        <div className="p-4 mb-4" style={{ background: 'var(--paper-dark)', border: '1px solid var(--vereinsblau)' }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <Field label="Name">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={editing.name}
+                onChange={e => setEditing({ ...editing, name: e.target.value })} placeholder="z. B. Teamsport Müller" />
+            </Field>
+            <Field label="Typ">
+              <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={editing.type}
+                onChange={e => setEditing({ ...editing, type: e.target.value })}>
+                <option value="artikel">Artikel</option>
+                <option value="flock">Flock</option>
+                <option value="beides">Artikel & Flock</option>
+              </select>
+            </Field>
+            <Field label="Kontakt (E-Mail / Telefon)">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={editing.contact}
+                onChange={e => setEditing({ ...editing, contact: e.target.value })} placeholder="z. B. info@example.de" />
+            </Field>
+            <Field label="Notiz">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={editing.notes}
+                onChange={e => setEditing({ ...editing, notes: e.target.value })} placeholder="z. B. Kundennummer 12345" />
+            </Field>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => save(editing)} className="px-4 py-2 text-xs uppercase text-white"
+              style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>Speichern</button>
+            <button onClick={() => setEditing(null)} className="px-4 py-2 text-xs uppercase"
+              style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>Abbrechen</button>
+          </div>
+        </div>
+      )}
+
+      {suppliers.length === 0 && !editing && (
+        <p className="text-sm py-4" style={{ color: 'var(--ink-mute)' }}>Noch keine Lieferanten angelegt.</p>
+      )}
+
+      {suppliers.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-xs uppercase tracking-wider" style={{ color: 'var(--ink-mute)' }}>
+              <tr style={{ borderBottom: '1px solid var(--rule)' }}>
+                <th className="text-left p-2">Name</th>
+                <th className="text-left p-2">Typ</th>
+                <th className="text-left p-2 hidden md:table-cell">Kontakt</th>
+                <th className="text-left p-2 hidden lg:table-cell">Notiz</th>
+                <th className="p-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {suppliers.map(s => (
+                <tr key={s.id} style={{ borderBottom: '1px solid var(--rule-soft, #EFEAE0)' }}>
+                  <td className="p-2 font-medium">{s.name}</td>
+                  <td className="p-2 text-xs">{TYPE_LABELS[s.type] || s.type}</td>
+                  <td className="p-2 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>{s.contact || '–'}</td>
+                  <td className="p-2 hidden lg:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>{s.notes || '–'}</td>
+                  <td className="p-2 text-right whitespace-nowrap">
+                    <button onClick={() => setEditing(s)} className="p-1" style={{ color: 'var(--ink-mute)' }}><Edit2 size={14} /></button>
+                    <button onClick={() => remove(s.id)} className="p-1" style={{ color: 'var(--ink-mute)' }}><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -2679,8 +3294,74 @@ function ReportsView({ data, update }) {
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState(null);
   const [lastSent, setLastSent] = useState(null);
-  const [photoModal, setPhotoModal] = useState(null); // { id, url } | null
+  const [photoModal, setPhotoModal] = useState(null);
   const [photoCache, setPhotoCache] = useState({});
+  const [selectedReports, setSelectedReports] = useState([]);
+
+  function toggleReport(id) {
+    setSelectedReports(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }
+
+  function createOrderFromReports() {
+    if (selectedReports.length === 0) { alert('Keine Meldungen ausgewählt.'); return; }
+    const selected = reports.filter(r => selectedReports.includes(r.id));
+
+    // Lock-Check: schon bestellt?
+    const alreadyOrdered = selected.filter(r => r.status === 'bestellt' || r.orderId);
+    if (alreadyOrdered.length > 0) {
+      alert(`${alreadyOrdered.length} der ausgewählten Meldungen wurden bereits bestellt. Bitte erst freigeben (Status zurücksetzen) oder entfernen.`);
+      return;
+    }
+
+    const title = prompt('Titel der neuen Bestellung:', `Bedarf ${new Date().toLocaleDateString('de-DE')}`);
+    if (!title) return;
+
+    // Lines aus den Reports erzeugen — eine Zeile pro Person/Artikel
+    const lines = selected.map((r, idx) => {
+      const person = getPlayer(r.team, r.number);
+      const item = getItem(r.item);
+      return {
+        id: `l_${Date.now()}_${idx}`,
+        itemType: r.item,
+        size: person?.size || 'L',
+        qty: 1,
+        playerId: person?.id || '',
+        number: r.number || '',
+        name: person?.lastName?.toUpperCase() || '',
+        reportRef: r.id,
+        reasons: r.reasons || [],
+      };
+    });
+
+    const teams = [...new Set(selected.map(r => r.team).filter(Boolean))];
+    const newOrder = {
+      id: `ord_${Date.now()}`,
+      title,
+      type: 'aus_bedarf',
+      team: teams.length === 1 ? teams[0] : 'mehrere',
+      articleSupplierId: null,
+      flockSupplierId: null,
+      flockBy: 'haus',
+      notes: `Aus ${selected.length} Bedarfsmeldung(en) erzeugt.`,
+      lines,
+      sponsors: { brust: '', ruecken: '', aermel: '' },
+      fromReports: selected.map(r => r.id),
+      createdAt: new Date().toISOString(),
+      status: 'angelegt',
+    };
+    update('orders', [...(data.orders || []), newOrder]);
+
+    // Reports sperren
+    const updated = reports.map(r =>
+      selectedReports.includes(r.id)
+        ? { ...r, status: 'bestellt', orderId: newOrder.id, handledAt: new Date().toISOString() }
+        : r
+    );
+    setReports(updated);
+    update('reports', updated);
+    setSelectedReports([]);
+    alert(`Bestellung „${title}" mit ${lines.length} Position(en) angelegt. Du findest sie unter Bestellungen — dort kannst du Lieferant, Größen, Beflockung und Sponsoren noch anpassen.`);
+  }
 
   async function showPhoto(reportId) {
     if (photoCache[reportId]) {
@@ -2706,8 +3387,6 @@ function ReportsView({ data, update }) {
   }
 
   // Reports werden serverseitig direkt vom öffentlichen Endpunkt geschrieben.
-  // Damit eingegangene Meldungen sichtbar werden, hier ein Refresh aus useData via update wäre umständlich.
-  // Wir lesen sie über die normale data.reports-Loading-Logik mit (siehe useData.js).
   useEffect(() => { setReports(data.reports || []); }, [data.reports]);
 
   // Filter
@@ -2929,26 +3608,35 @@ function ReportsView({ data, update }) {
       )}
 
       {/* Filter */}
-      <div className="flex gap-2 mb-4 overflow-x-auto -mx-4 px-4 pb-1">
-        {[
-          { id: 'offen', label: `Offen (${reports.filter(r => r.status === 'offen').length})` },
-          { id: 'gesehen', label: `In Bearbeitung (${reports.filter(r => r.status === 'gesehen').length})` },
-          { id: 'bestellt', label: `Bestellt (${reports.filter(r => r.status === 'bestellt').length})` },
-          { id: 'erledigt', label: `Erledigt (${reports.filter(r => r.status === 'erledigt').length})` },
-          { id: 'alle', label: `Alle (${reports.length})` },
-        ].map(f => (
-          <button key={f.id} onClick={() => setFilter(f.id)}
-            className="px-3 py-1.5 text-xs uppercase whitespace-nowrap"
-            style={{
-              background: filter === f.id ? 'var(--vereinsblau)' : 'white',
-              color: filter === f.id ? 'white' : 'var(--ink-soft)',
-              fontFamily: "'Bebas Neue', sans-serif",
-              letterSpacing: '0.12em',
-              border: '1px solid var(--rule)',
-            }}>
-            {f.label}
+      <div className="flex flex-wrap gap-2 items-center justify-between mb-4">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[
+            { id: 'offen', label: `Offen (${reports.filter(r => r.status === 'offen').length})` },
+            { id: 'gesehen', label: `In Bearbeitung (${reports.filter(r => r.status === 'gesehen').length})` },
+            { id: 'bestellt', label: `Bestellt (${reports.filter(r => r.status === 'bestellt').length})` },
+            { id: 'erledigt', label: `Erledigt (${reports.filter(r => r.status === 'erledigt').length})` },
+            { id: 'alle', label: `Alle (${reports.length})` },
+          ].map(f => (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              className="px-3 py-1.5 text-xs uppercase whitespace-nowrap"
+              style={{
+                background: filter === f.id ? 'var(--vereinsblau)' : 'white',
+                color: filter === f.id ? 'white' : 'var(--ink-soft)',
+                fontFamily: "'Bebas Neue', sans-serif",
+                letterSpacing: '0.12em',
+                border: '1px solid var(--rule)',
+              }}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {selectedReports.length > 0 && (
+          <button onClick={createOrderFromReports}
+            className="px-4 py-2 text-xs uppercase flex items-center gap-2 text-white"
+            style={{ background: 'var(--success)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <ShoppingCart size={14} /> {selectedReports.length} Meldung(en) → Bestellung
           </button>
-        ))}
+        )}
       </div>
 
       {/* Liste */}
@@ -2962,6 +3650,7 @@ function ReportsView({ data, update }) {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider">
                 <tr>
+                  <th className="p-3 w-8"></th>
                   <th className="text-left p-3">Eingegangen</th>
                   <th className="text-left p-3">Mannschaft / Nr.</th>
                   <th className="text-left p-3">Artikel</th>
@@ -2975,8 +3664,16 @@ function ReportsView({ data, update }) {
                 {[...filtered].reverse().map(r => {
                   const player = getPlayer(r.team, r.number);
                   const item = getItem(r.item);
+                  const isLocked = r.status === 'bestellt' || r.orderId;
                   return (
-                    <tr key={r.id} className="border-t border-stone-100">
+                    <tr key={r.id} className="border-t border-stone-100" style={{ opacity: isLocked ? 0.6 : 1 }}>
+                      <td className="p-3">
+                        {!isLocked ? (
+                          <input type="checkbox" checked={selectedReports.includes(r.id)} onChange={() => toggleReport(r.id)} />
+                        ) : (
+                          <span title="Bereits bestellt" style={{ color: 'var(--ink-mute)' }}>🔒</span>
+                        )}
+                      </td>
                       <td className="p-3 text-xs" style={{ color: 'var(--ink-mute)' }}>
                         {new Date(r.createdAt).toLocaleDateString('de-DE')}<br />
                         {new Date(r.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
@@ -2994,6 +3691,11 @@ function ReportsView({ data, update }) {
                         {r.materialMarked > 0 && (
                           <div className="text-[10px] mt-0.5" style={{ color: 'var(--success)' }}>
                             ✓ {r.materialMarked} Materialteil{r.materialMarked > 1 ? 'e' : ''} markiert
+                          </div>
+                        )}
+                        {isLocked && (
+                          <div className="text-[10px] mt-0.5" style={{ color: 'var(--vereinsblau)' }}>
+                            Bestellung erstellt
                           </div>
                         )}
                       </td>
@@ -3068,6 +3770,414 @@ function ReportsView({ data, update }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ====== Lieferanten-Verwaltung ======
+
+function SuppliersBlock({ data, update }) {
+  const suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
+  const [editing, setEditing] = useState(null); // null | 'new' | <supplierId>
+  const [form, setForm] = useState({ name: '', type: 'beides', contact: '', notes: '' });
+
+  function startNew() {
+    setForm({ name: '', type: 'beides', contact: '', notes: '' });
+    setEditing('new');
+  }
+
+  function startEdit(s) {
+    setForm({
+      name: s.name || '',
+      type: s.type || 'beides',
+      contact: s.contact || '',
+      notes: s.notes || '',
+    });
+    setEditing(s.id);
+  }
+
+  function save() {
+    if (!form.name.trim()) {
+      alert('Bitte Lieferantenname angeben.');
+      return;
+    }
+    if (editing === 'new') {
+      const newSupplier = {
+        id: 'sup_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+        ...form,
+        name: form.name.trim(),
+      };
+      update('suppliers', [...suppliers, newSupplier]);
+    } else {
+      update('suppliers', suppliers.map(s => s.id === editing ? { ...s, ...form, name: form.name.trim() } : s));
+    }
+    setEditing(null);
+  }
+
+  function remove(id) {
+    if (!confirm('Lieferant wirklich löschen? Bestehende Zuordnungen werden dabei auf "kein Lieferant" gesetzt.')) return;
+    update('suppliers', suppliers.filter(s => s.id !== id));
+  }
+
+  function typeLabel(type) {
+    if (type === 'artikel') return 'Artikel';
+    if (type === 'flock') return 'Flock';
+    return 'Artikel + Flock';
+  }
+
+  return (
+    <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="font-display text-2xl">LIEFERANTEN</h2>
+        {!editing && (
+          <button onClick={startNew} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1">
+            <Plus size={12} /> Lieferant
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-stone-500 mb-3">
+        Lieferanten stehen in Bestellungen für die Auswahl von Artikel-Lieferant und Beflocker zur Verfügung. Typ steuert, in welchem Dropdown sie erscheinen.
+      </p>
+
+      {editing && (
+        <div className="border border-stone-300 p-4 mb-4" style={{ background: 'var(--paper)' }}>
+          <div className="font-sub text-xs mb-3" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>
+            {editing === 'new' ? 'NEUER LIEFERANT' : 'LIEFERANT BEARBEITEN'}
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Field label="NAME *">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.name}
+                onChange={e => setForm({ ...form, name: e.target.value })} placeholder="z.B. Sport-Müller GmbH" />
+            </Field>
+            <Field label="TYP">
+              <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.type}
+                onChange={e => setForm({ ...form, type: e.target.value })}>
+                <option value="beides">Artikel + Flock (beides)</option>
+                <option value="artikel">Nur Artikel-Lieferant</option>
+                <option value="flock">Nur Flock / Beflocker</option>
+              </select>
+            </Field>
+            <Field label="KONTAKT">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.contact}
+                onChange={e => setForm({ ...form, contact: e.target.value })} placeholder="Mail, Telefon, Ansprechpartner" />
+            </Field>
+            <Field label="NOTIZ">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.notes}
+                onChange={e => setForm({ ...form, notes: e.target.value })} placeholder="Konditionen, Lieferzeit, Mindestabnahme..." />
+            </Field>
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button onClick={save} className="px-4 py-2 text-xs uppercase"
+              style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              Speichern
+            </button>
+            <button onClick={() => setEditing(null)} className="px-4 py-2 text-xs bg-stone-100">
+              Abbrechen
+            </button>
+          </div>
+        </div>
+      )}
+
+      {suppliers.length === 0 && !editing && (
+        <p className="text-sm py-4" style={{ color: 'var(--ink-mute)' }}>
+          Noch keine Lieferanten angelegt. Lege jetzt deinen ersten an, um ihn in Bestellungen auswählen zu können.
+        </p>
+      )}
+
+      {suppliers.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-stone-200 text-xs uppercase tracking-wider" style={{ color: 'var(--ink-mute)' }}>
+                <th className="text-left py-2 pr-2">Name</th>
+                <th className="text-left py-2 pr-2">Typ</th>
+                <th className="text-left py-2 pr-2">Kontakt</th>
+                <th className="text-left py-2 pr-2">Notiz</th>
+                <th className="py-2 w-24"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {suppliers.map(s => (
+                <tr key={s.id} className="border-b border-stone-100">
+                  <td className="py-2 pr-2 font-medium">{s.name}</td>
+                  <td className="py-2 pr-2 text-xs">
+                    <span className="px-2 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>
+                      {typeLabel(s.type)}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-2 text-xs" style={{ color: 'var(--ink-mute)' }}>{s.contact || '–'}</td>
+                  <td className="py-2 pr-2 text-xs" style={{ color: 'var(--ink-mute)' }}>{s.notes || '–'}</td>
+                  <td className="py-2 text-right">
+                    <button onClick={() => startEdit(s)} className="text-xs underline mr-2" style={{ color: 'var(--vereinsblau)' }}>Bearbeiten</button>
+                    <button onClick={() => remove(s.id)} className="text-stone-400 hover:text-red-600"><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ====== Material-CSV-Import ======
+
+function mergeItems(existing, newItems, mode) {
+  if (mode === 'replace') {
+    // Komplett ersetzen
+    return newItems.map(it => ({
+      id: it.id || ('item_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)),
+      articleNumber: it.articleNumber || '',
+      name: it.name,
+      price: Number(it.price) || 0,
+      replacementValue: it.replacementValue == null || it.replacementValue === '' ? null : Number(it.replacementValue),
+      supplierId: it.supplierId || null,
+    }));
+  }
+  if (mode === 'add') {
+    // Nur neue hinzufügen, alle bisherigen behalten
+    const additions = newItems.map((it, idx) => ({
+      id: 'item_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).slice(2, 6),
+      articleNumber: it.articleNumber || '',
+      name: it.name,
+      price: Number(it.price) || 0,
+      replacementValue: it.replacementValue == null || it.replacementValue === '' ? null : Number(it.replacementValue),
+      supplierId: it.supplierId || null,
+    }));
+    return [...existing, ...additions];
+  }
+  // mode === 'update': Match per Artikelnummer; gefundene werden überschrieben, neue hinzugefügt
+  const result = [...existing];
+  newItems.forEach((it, idx) => {
+    if (!it.articleNumber) {
+      // Ohne Artikelnummer kann nicht zugeordnet werden → als neuer Eintrag anhängen
+      result.push({
+        id: 'item_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).slice(2, 6),
+        articleNumber: '',
+        name: it.name,
+        price: Number(it.price) || 0,
+        replacementValue: it.replacementValue == null || it.replacementValue === '' ? null : Number(it.replacementValue),
+        supplierId: it.supplierId || null,
+      });
+      return;
+    }
+    const existingIdx = result.findIndex(e => (e.articleNumber || '').trim() && (e.articleNumber || '').trim().toLowerCase() === it.articleNumber.trim().toLowerCase());
+    if (existingIdx >= 0) {
+      result[existingIdx] = {
+        ...result[existingIdx],
+        articleNumber: it.articleNumber,
+        name: it.name,
+        price: Number(it.price) || 0,
+        replacementValue: it.replacementValue == null || it.replacementValue === '' ? null : Number(it.replacementValue),
+        supplierId: it.supplierId !== undefined ? (it.supplierId || null) : result[existingIdx].supplierId,
+      };
+    } else {
+      result.push({
+        id: 'item_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).slice(2, 6),
+        articleNumber: it.articleNumber,
+        name: it.name,
+        price: Number(it.price) || 0,
+        replacementValue: it.replacementValue == null || it.replacementValue === '' ? null : Number(it.replacementValue),
+        supplierId: it.supplierId || null,
+      });
+    }
+  });
+  return result;
+}
+
+function ItemImport({ items, suppliers, onImport, onCancel }) {
+  const [mode, setMode] = useState('update');
+  const [parsed, setParsed] = useState(null);
+  const [error, setError] = useState('');
+  const [defaultSupplierId, setDefaultSupplierId] = useState('');
+
+  function handleFile(e) {
+    setError('');
+    setParsed(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const text = String(ev.target.result || '');
+        const rows = parseCSV(text);
+        if (!rows.length) { setError('CSV ist leer.'); return; }
+        const headers = rows[0].map(h => String(h || '').trim().toLowerCase());
+
+        // Spaltenerkennung
+        const colArtNr = headers.findIndex(h => /(artikel.*nr|art.*nr|artnr|artikelnummer|sku)/.test(h));
+        const colName = headers.findIndex(h => /(name|bezeichnung|artikel)$/.test(h) && !/nr/.test(h));
+        const colNameAlt = headers.findIndex(h => /^(name|bezeichnung|artikel)$/.test(h));
+        const nameIdx = colName >= 0 ? colName : colNameAlt;
+        const colPrice = headers.findIndex(h => /(preis|neupreis|price|netto)/.test(h));
+        const colReplace = headers.findIndex(h => /(ersatz|replacement|wert)/.test(h));
+        const colSupplier = headers.findIndex(h => /(lieferant|supplier)/.test(h));
+
+        if (nameIdx < 0) {
+          setError('Spalte "Name" oder "Bezeichnung" nicht gefunden. Erste Zeile muss Spaltenüberschriften enthalten.');
+          return;
+        }
+
+        const dataRows = rows.slice(1).filter(r => r.some(c => String(c || '').trim() !== ''));
+        const items = dataRows.map(row => {
+          const supplierName = colSupplier >= 0 ? String(row[colSupplier] || '').trim() : '';
+          let supplierId = null;
+          if (supplierName) {
+            const s = suppliers.find(sp => sp.name.toLowerCase() === supplierName.toLowerCase());
+            if (s) supplierId = s.id;
+          }
+          return {
+            articleNumber: colArtNr >= 0 ? String(row[colArtNr] || '').trim() : '',
+            name: String(row[nameIdx] || '').trim(),
+            price: colPrice >= 0 ? parseFloat(String(row[colPrice] || '0').replace(',', '.')) || 0 : 0,
+            replacementValue: colReplace >= 0 && String(row[colReplace] || '').trim() !== '' ? parseFloat(String(row[colReplace]).replace(',', '.')) || null : null,
+            supplierId,
+            supplierName, // nur zur Anzeige
+          };
+        }).filter(it => it.name);
+
+        if (!items.length) { setError('Keine gültigen Artikel-Zeilen gefunden.'); return; }
+        setParsed({ items, headers });
+      } catch (err) {
+        setError('Fehler beim Lesen der CSV: ' + (err.message || err));
+      }
+    };
+    reader.onerror = () => setError('Datei konnte nicht gelesen werden.');
+    reader.readAsText(file, 'utf-8');
+  }
+
+  function applyDefaultSupplier() {
+    if (!parsed || !defaultSupplierId) return;
+    setParsed({
+      ...parsed,
+      items: parsed.items.map(it => it.supplierId ? it : { ...it, supplierId: defaultSupplierId }),
+    });
+  }
+
+  function doImport() {
+    if (!parsed) return;
+    onImport(parsed.items, mode);
+  }
+
+  // Vorschau-Statistik
+  let stats = null;
+  if (parsed) {
+    if (mode === 'update') {
+      const updated = parsed.items.filter(it => it.articleNumber && items.find(e => (e.articleNumber || '').toLowerCase() === it.articleNumber.toLowerCase())).length;
+      const added = parsed.items.length - updated;
+      stats = `${updated} werden aktualisiert, ${added} neu hinzugefügt.`;
+    } else if (mode === 'replace') {
+      stats = `Alle bisherigen ${items.length} Artikel werden gelöscht und durch ${parsed.items.length} neue ersetzt.`;
+    } else {
+      stats = `${parsed.items.length} Artikel werden hinzugefügt (bestehende ${items.length} bleiben unverändert).`;
+    }
+  }
+
+  return (
+    <div className="border border-stone-300 p-4 mb-4" style={{ background: 'var(--paper)' }}>
+      <div className="font-sub text-xs mb-3" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>
+        ARTIKELLISTE IMPORTIEREN
+      </div>
+
+      <p className="text-xs mb-3" style={{ color: 'var(--ink-mute)' }}>
+        CSV-Datei mit Spalten <strong>Artikelnummer</strong>, <strong>Name/Bezeichnung</strong>, <strong>Preis</strong>, <strong>Ersatzwert</strong>, <strong>Lieferant</strong> (optional). Trennzeichen wird automatisch erkannt (Komma oder Semikolon). Erste Zeile muss Spaltenüberschriften enthalten.
+      </p>
+
+      <div className="space-y-2 mb-4">
+        <label className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+          style={{ border: mode === 'update' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: mode === 'update' ? '#F1ECDF' : 'white' }}>
+          <input type="radio" checked={mode === 'update'} onChange={() => setMode('update')} className="mt-0.5" />
+          <div>
+            <div className="font-medium">Aktualisieren über Artikelnummer</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Bestehende Artikel mit gleicher Artikelnummer werden überschrieben. Neue Artikel werden hinzugefügt.</div>
+          </div>
+        </label>
+        <label className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+          style={{ border: mode === 'add' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: mode === 'add' ? '#F1ECDF' : 'white' }}>
+          <input type="radio" checked={mode === 'add'} onChange={() => setMode('add')} className="mt-0.5" />
+          <div>
+            <div className="font-medium">Hinzufügen</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Alle CSV-Zeilen werden als neue Artikel angelegt. Bestehende bleiben unverändert.</div>
+          </div>
+        </label>
+        <label className="flex items-start gap-2 p-3 cursor-pointer text-sm"
+          style={{ border: mode === 'replace' ? '2px solid #B91C1C' : '1px solid var(--rule)', background: mode === 'replace' ? '#FEF2F2' : 'white' }}>
+          <input type="radio" checked={mode === 'replace'} onChange={() => setMode('replace')} className="mt-0.5" />
+          <div>
+            <div className="font-medium" style={{ color: mode === 'replace' ? '#B91C1C' : undefined }}>Komplett ersetzen ⚠</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Alle bisherigen Artikel werden gelöscht und durch die CSV-Inhalte ersetzt. Vorsicht: Bereits vorhandene Pfand- und Inventur-Daten bleiben zwar erhalten, verweisen aber auf andere Artikel-IDs.</div>
+          </div>
+        </label>
+      </div>
+
+      <input type="file" accept=".csv,text/csv" onChange={handleFile} className="text-sm mb-2" />
+
+      {error && (
+        <div className="text-sm py-2 px-3 mb-2" style={{ background: '#FEF2F2', color: '#B91C1C' }}>{error}</div>
+      )}
+
+      {parsed && (
+        <div className="mt-4">
+          <div className="text-sm mb-2 font-medium">Vorschau ({parsed.items.length} Zeilen):</div>
+          {stats && <div className="text-xs mb-2 px-3 py-2" style={{ background: 'var(--paper-dark)', color: 'var(--ink)' }}>{stats}</div>}
+
+          {suppliers.length > 0 && parsed.items.some(it => !it.supplierId) && (
+            <div className="flex items-center gap-2 mb-3 text-xs">
+              <span>Standard-Lieferant für Zeilen ohne Zuordnung:</span>
+              <select className="border border-stone-300 px-2 py-1 text-xs" value={defaultSupplierId} onChange={e => setDefaultSupplierId(e.target.value)}>
+                <option value="">– keiner –</option>
+                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <button onClick={applyDefaultSupplier} disabled={!defaultSupplierId} className="text-xs underline disabled:opacity-40" style={{ color: 'var(--vereinsblau)' }}>Anwenden</button>
+            </div>
+          )}
+
+          <div className="overflow-x-auto max-h-64 overflow-y-auto border border-stone-200">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0" style={{ background: 'var(--paper-dark)' }}>
+                <tr>
+                  <th className="text-left p-2">Art.-Nr.</th>
+                  <th className="text-left p-2">Name</th>
+                  <th className="text-right p-2">Preis</th>
+                  <th className="text-right p-2">Ersatz</th>
+                  <th className="text-left p-2">Lieferant</th>
+                  <th className="text-left p-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {parsed.items.map((it, i) => {
+                  const match = it.articleNumber && items.find(e => (e.articleNumber || '').toLowerCase() === it.articleNumber.toLowerCase());
+                  const supplier = it.supplierId ? suppliers.find(s => s.id === it.supplierId) : null;
+                  return (
+                    <tr key={i} className="border-b border-stone-100">
+                      <td className="p-2">{it.articleNumber || '–'}</td>
+                      <td className="p-2">{it.name}</td>
+                      <td className="p-2 text-right">{(it.price || 0).toFixed(2)} €</td>
+                      <td className="p-2 text-right">{it.replacementValue == null ? '–' : `${it.replacementValue.toFixed(2)} €`}</td>
+                      <td className="p-2">{supplier ? supplier.name : (it.supplierName ? <span style={{ color: '#B91C1C' }}>{it.supplierName} (?)</span> : '–')}</td>
+                      <td className="p-2">
+                        {mode === 'update' && match && <span style={{ color: 'var(--success)' }}>Update</span>}
+                        {mode === 'update' && !match && <span style={{ color: 'var(--vereinsblau)' }}>Neu</span>}
+                        {mode === 'add' && <span style={{ color: 'var(--vereinsblau)' }}>Neu</span>}
+                        {mode === 'replace' && <span>—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 mt-4">
+        <button onClick={doImport} disabled={!parsed} className="px-4 py-2 text-xs uppercase disabled:opacity-40"
+          style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+          Import durchführen
+        </button>
+        <button onClick={onCancel} className="px-4 py-2 text-xs bg-stone-100">Abbrechen</button>
+      </div>
     </div>
   );
 }

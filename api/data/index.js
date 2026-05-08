@@ -1,6 +1,6 @@
 import { kv, requireAuth } from '../_lib/auth.js';
 
-const DATA_KEYS = ['players', 'coaches', 'inventory', 'items', 'teams', 'deposits', 'orders', 'transactions', 'reports', 'settings'];
+const DATA_KEYS = ['players', 'coaches', 'inventory', 'items', 'teams', 'deposits', 'orders', 'transactions', 'reports', 'suppliers', 'settings'];
 
 export default async function handler(req, res) {
   const user = await requireAuth(req, res);

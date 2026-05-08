@@ -1,8 +1,26 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.6.0';
+export const APP_VERSION = '1.7.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.7.0',
+    date: '2026-05-08',
+    changes: [
+      'Lieferanten-Verwaltung in den Einstellungen (Name, Typ, Kontakt, Notizen)',
+      'In Bestellungen wählbar: Artikel-Lieferant und Beflockungs-Quelle (Im Haus / Lieferant / extern)',
+      'Bei externer Beflockung separater Flock-Lieferant aus der Liste',
+      'Material-CSV-Import mit drei Modi: Aktualisieren über Artikelnummer / Hinzufügen / Komplett ersetzen',
+      'CSV-Import erkennt Spalten Artikelnummer, Name, Preis, Ersatzwert, Lieferant automatisch',
+      'Vorschau vor dem Import zeigt, welche Artikel aktualisiert / neu hinzugefügt werden',
+      'Standard-Lieferant für CSV-Zeilen ohne Zuordnung kann beim Import gesetzt werden',
+      'Artikelkatalog mit zusätzlichen Spalten: Artikelnummer und Lieferant',
+      'Bedarfsmeldungen werden gesperrt, sobald sie in eine Bestellung übernommen wurden (kein doppelter Bestelleingang)',
+      'Bestellungen können zusammengeführt werden (Sammelbestellung) — Lines, Bedarfsmeldungen und Sponsoren werden verschmolzen',
+      'Beim Löschen einer Bestellung werden gesperrte Bedarfsmeldungen automatisch wieder freigegeben',
+      'Sammelbestellungen werden in Übersicht und PDF gekennzeichnet',
+    ],
+  },
   {
     version: '1.6.0',
     date: '2026-05-07',

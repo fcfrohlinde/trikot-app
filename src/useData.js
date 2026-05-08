@@ -5,14 +5,14 @@ const DEFAULT_TEAMS = ['1. Mannschaft', '2. Mannschaft', '3. Mannschaft'];
 
 // FCF-Standardausstattung gemäß Pfandordnung (Stand 2025)
 const DEFAULT_ITEMS = [
-  { id: 'praesentationsjacke', name: 'Präsentationsjacke', price: 40, replacementValue: 25 },
-  { id: 'praesentationshose', name: 'Präsentationshose', price: 29, replacementValue: 20 },
-  { id: 'aufwaermshirt', name: 'Aufwärmshirt', price: 30, replacementValue: 20 },
-  { id: 'trainingsshirt', name: 'Trainingsshirt', price: 18, replacementValue: 10 },
-  { id: 'trainingshose_kurz', name: 'Trainingshose kurz', price: 14, replacementValue: 10 },
-  { id: 'trainingshose_lang', name: 'Trainingshose lang', price: 29, replacementValue: 20 },
-  { id: 'zip_top', name: 'Zip Top', price: 40, replacementValue: 25 },
-  { id: 'pullover_sweat', name: 'Pullover / Sweat', price: 35, replacementValue: 22 },
+  { id: 'praesentationsjacke', articleNumber: '', name: 'Präsentationsjacke', price: 40, replacementValue: 25 },
+  { id: 'praesentationshose', articleNumber: '', name: 'Präsentationshose', price: 29, replacementValue: 20 },
+  { id: 'aufwaermshirt', articleNumber: '', name: 'Aufwärmshirt', price: 30, replacementValue: 20 },
+  { id: 'trainingsshirt', articleNumber: '', name: 'Trainingsshirt', price: 18, replacementValue: 10 },
+  { id: 'trainingshose_kurz', articleNumber: '', name: 'Trainingshose kurz', price: 14, replacementValue: 10 },
+  { id: 'trainingshose_lang', articleNumber: '', name: 'Trainingshose lang', price: 29, replacementValue: 20 },
+  { id: 'zip_top', articleNumber: '', name: 'Zip Top', price: 40, replacementValue: 25 },
+  { id: 'pullover_sweat', articleNumber: '', name: 'Pullover / Sweat', price: 35, replacementValue: 22 },
 ];
 
 const DEFAULTS = {
@@ -25,6 +25,7 @@ const DEFAULTS = {
   orders: [],
   transactions: [],
   reports: [],
+  suppliers: [],
   settings: {
     defaultDeposit: 70,
     clubName: 'FC Frohlinde 1949 e.V.',
