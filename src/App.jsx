@@ -87,13 +87,12 @@ function AppContent() {
   const { data: rawData, loading, update, saveError } = useData();
   const { user, logout } = useAuth();
 
-  if (loading) return <FullScreenLoader />;
-
   // Daten-Sicht: Admins sehen alles. User sehen nur ihre zugeordneten Mannschaften.
   // Lagerware (status === 'lager', kein team) bleibt für alle sichtbar — das ist der gemeinsame Bestand.
   // Die Update-Funktion bleibt absichtlich ungefiltert: User können ihre Daten ändern,
   // dürfen aber Items aus fremden Teams nicht mutieren (visuell nicht erreichbar).
   const data = useMemo(() => {
+    if (!rawData) return rawData;
     if (!user || user.role === 'admin') return rawData;
     const allowedTeams = Array.isArray(user.teams) ? user.teams : [];
     if (allowedTeams.length === 0) {
@@ -142,8 +141,6 @@ function AppContent() {
     }
   }, [user?.role, view]);
 
-  const openReportsCount = (data.reports || []).filter(r => r.status === 'offen' || r.status === 'gesehen').length;
-
   // Wenn Daten gefiltert sind, müssen Updates die ungefilterten Datensätze rekonstruieren —
   // sonst würden User-Edits Daten anderer Mannschaften überschreiben/löschen.
   // Wir merge'en die User-Updates in den Roh-Datensatz pro Eintrag-ID.
@@ -156,7 +153,7 @@ function AppContent() {
       if (passThroughKeys.includes(key)) return update(key, newValue);
 
       const allowedTeams = new Set(Array.isArray(user.teams) ? user.teams : []);
-      const rawList = rawData[key] || [];
+      const rawList = (rawData && rawData[key]) || [];
 
       if (key === 'teams') {
         // User dürfen die globale Team-Liste nicht ändern
@@ -166,8 +163,8 @@ function AppContent() {
       if (key === 'inventory') {
         // Inventory: Wir behalten alle nicht sichtbaren Items unverändert,
         // ersetzen nur die sichtbaren durch newValue.
-        const allowedPlayerIds = new Set((rawData.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
-        const allowedCoachIds = new Set((rawData.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
+        const allowedPlayerIds = new Set((rawData?.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
+        const allowedCoachIds = new Set((rawData?.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
         const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
         const isVisible = (i) => i.status === 'lager' || (i.assignedTo && allowedPersonIds.has(i.assignedTo));
 
@@ -183,16 +180,16 @@ function AppContent() {
       }
 
       if (key === 'deposits') {
-        const allowedPlayerIds = new Set((rawData.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
-        const allowedCoachIds = new Set((rawData.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
+        const allowedPlayerIds = new Set((rawData?.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
+        const allowedCoachIds = new Set((rawData?.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
         const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
         const invisibleOriginals = rawList.filter(d => !allowedPersonIds.has(d.playerId));
         return update(key, [...invisibleOriginals, ...newValue]);
       }
 
       if (key === 'orders') {
-        const allowedPlayerIds = new Set((rawData.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
-        const allowedCoachIds = new Set((rawData.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
+        const allowedPlayerIds = new Set((rawData?.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
+        const allowedCoachIds = new Set((rawData?.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
         const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
         const isVisibleOrder = (o) => {
           if (o.team && allowedTeams.has(o.team)) return true;
@@ -212,6 +209,11 @@ function AppContent() {
       return update(key, newValue);
     };
   }, [user, rawData, update]);
+
+  // Erst NACH allen Hooks den frühen Return — sonst verstößt React gegen die Hook-Reihenfolge.
+  if (loading) return <FullScreenLoader />;
+
+  const openReportsCount = (data.reports || []).filter(r => r.status === 'offen' || r.status === 'gesehen').length;
 
   return (
     <div className="min-h-screen bg-stone-50">

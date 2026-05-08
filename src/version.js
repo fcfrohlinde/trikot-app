@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.8.0';
+export const APP_VERSION = '1.8.1';
 
 export const CHANGELOG = [
+  {
+    version: '1.8.1',
+    date: '2026-05-08',
+    changes: [
+      'Hotfix: Weiße Seite nach 1.8.0-Update behoben — Hooks waren nach einem bedingten Return platziert, was React mit „Rendered fewer hooks than expected" abbrach',
+      'Filter-Logik und safeUpdate-Wrapper ziehen jetzt vor den frühen Loader-Return',
+    ],
+  },
   {
     version: '1.8.0',
     date: '2026-05-08',
@@ -15,10 +23,8 @@ export const CHANGELOG = [
       'Team-Zuordnung über Multi-Select-Buttons (Mehrfachauswahl, sofort sichtbar)',
       'Header zeigt für Nutzer die zugeordneten Mannschaften, für Admins das ADMIN-Badge',
       'Settings und Nutzerverwaltung nur für Admins zugänglich',
-      'Auto-Refresh des eigenen User-Stands beim App-Start — nachträgliche Team- oder Rollen-Änderungen wirken sofort beim nächsten Reload',
-      'Schutzregel: Mindestens ein Admin muss erhalten bleiben (kein versehentliches Aussperren)',
-      'Schutzregel: Rolle „Admin" leert die Team-Zuordnung automatisch (Admins haben Vollzugriff)',
-      'Updates auf gefilterte Daten überschreiben nicht versehentlich Daten anderer Mannschaften (sichere Merge-Logik)',
+      'Auto-Refresh des eigenen User-Stands beim App-Start',
+      'Schutzregel: Mindestens ein Admin muss erhalten bleiben',
     ],
   },
   {
