@@ -22,6 +22,12 @@ export default async function handler(req, res) {
   const token = signToken(user);
   res.json({
     token,
-    user: { id: user.id, username: user.username, role: user.role, name: user.name },
+    user: {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      name: user.name,
+      teams: Array.isArray(user.teams) ? user.teams : [],
+    },
   });
 }

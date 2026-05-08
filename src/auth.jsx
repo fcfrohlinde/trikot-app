@@ -21,15 +21,52 @@ export function AuthProvider({ children }) {
     } catch (e) {
       console.error(e);
     }
-    // Wenn Token da, User laden
+    // Wenn Token da, User laden — zuerst aus localStorage für sofortige Anzeige,
+    // dann frischen Stand aus dem Backend nachziehen.
     const t = localStorage.getItem('token');
     if (t) {
       const stored = localStorage.getItem('user');
       if (stored) {
         try { setUser(JSON.parse(stored)); } catch {}
       }
+      try {
+        const r = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${t}` },
+        });
+        if (r.ok) {
+          const d = await r.json();
+          setUser(d.user);
+          localStorage.setItem('user', JSON.stringify(d.user));
+        } else if (r.status === 401) {
+          // Token ungültig oder Account gelöscht
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setToken(null);
+          setUser(null);
+        }
+      } catch (e) {
+        // Netzwerkfehler — wir behalten den lokalen Cache
+        console.warn('User-Refresh fehlgeschlagen:', e);
+      }
     }
     setLoading(false);
+  }
+
+  async function refreshUser() {
+    const t = localStorage.getItem('token');
+    if (!t) return;
+    try {
+      const r = await fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setUser(d.user);
+        localStorage.setItem('user', JSON.stringify(d.user));
+      }
+    } catch (e) {
+      console.warn('User-Refresh fehlgeschlagen:', e);
+    }
   }
 
   async function login(username, password) {
@@ -86,7 +123,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, setupRequired, loading, login, logout, setup, authFetch }}>
+    <AuthContext.Provider value={{ user, token, setupRequired, loading, login, logout, setup, authFetch, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

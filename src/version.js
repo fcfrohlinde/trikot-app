@@ -1,8 +1,26 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.7.5';
+export const APP_VERSION = '1.8.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.8.0',
+    date: '2026-05-08',
+    changes: [
+      'Nutzer können auf eine oder mehrere Mannschaften zugeordnet werden (Rolle „Nutzer")',
+      'Admins haben weiterhin Vollzugriff und sehen alle Mannschaften',
+      'Nutzer sehen nur Spieler, Trainer, Pfänder, Bestellungen und Bedarfsmeldungen ihrer zugeordneten Mannschaften',
+      'Lagerware bleibt für alle sichtbar — der gemeinsame Bestand des Vereins',
+      'Inline-Bearbeiten in der Nutzerverwaltung: Name, Rolle, Passwort und Team-Zuordnung nachträglich änderbar',
+      'Team-Zuordnung über Multi-Select-Buttons (Mehrfachauswahl, sofort sichtbar)',
+      'Header zeigt für Nutzer die zugeordneten Mannschaften, für Admins das ADMIN-Badge',
+      'Settings und Nutzerverwaltung nur für Admins zugänglich',
+      'Auto-Refresh des eigenen User-Stands beim App-Start — nachträgliche Team- oder Rollen-Änderungen wirken sofort beim nächsten Reload',
+      'Schutzregel: Mindestens ein Admin muss erhalten bleiben (kein versehentliches Aussperren)',
+      'Schutzregel: Rolle „Admin" leert die Team-Zuordnung automatisch (Admins haben Vollzugriff)',
+      'Updates auf gefilterte Daten überschreiben nicht versehentlich Daten anderer Mannschaften (sichere Merge-Logik)',
+    ],
+  },
   {
     version: '1.7.5',
     date: '2026-05-08',
@@ -10,20 +28,14 @@ export const CHANGELOG = [
       'Apple-Touch-Icon mit weißem Hintergrund neu erzeugt (iOS füllt sonst schwarz)',
       'Dashboard zeigt pro Mannschaft Spieler-, Trainer- und Material-Anzahl',
       'Stats-Karte „Spieler & Trainer" ersetzt die reine Spielerzahl',
-      'Artikelkatalog: Spalten-Layout neu balanciert — Preis und Ersatz überlappen nicht mehr',
-      'Material einbuchen komplett überarbeitet: Modus „Aus Bestellung" mit Wareneingang und Mengenabgleich pro Position',
+      'Artikelkatalog: Spalten-Layout neu balanciert',
+      'Material einbuchen komplett überarbeitet: Modus „Aus Bestellung" mit Wareneingang und Mengenabgleich',
       'Bestell-Status wird nach Wareneingang automatisch auf „teilweise geliefert" oder „geliefert" gesetzt',
-      'Inventur-Items merken sich, aus welcher Bestellung sie stammen (fromOrderId, fromLineId)',
-      'Modus „Frei einbuchen" für Lagerzugang ohne Bestell-Bezug — beliebig viele Positionen mit Nummer/Initialen',
-      'Eingehende Bedarfsmeldungen haben jetzt immer Status „offen" — der Vorstand muss aktiv durchsehen',
-      'Person wird automatisch identifiziert (Mannschaft + Nummer/Initialen), Name fließt in die Meldung ein',
-      'Foto-Pflicht bei den Gründen „verschlissen", „Flock kaputt", „beschädigt" — wird in Frontend und Backend geprüft',
-      'Reason-Buttons mit 📷*-Marker zeigen Foto-Pflicht; Drop-Zone für Foto wird rot bei Pflichtgrund',
-      'Flock-Liste zeigt nur noch Nummern/Initialen — Klarnamen wurden entfernt (auf Wunsch)',
-      'Material & Bestand: Importfunktion entfernt, neuer PDF-Listendruck mit Filter (Status, Personenkreis, Mannschaft, Einzelperson)',
-      'Druck-PDF wahlweise gruppiert nach Person oder als lange Inventarliste',
-      'Trainer-Kennzeichnung in allen Listen vereinheitlicht (TRAINER-Badge in Pfand-Übersicht, Saison-Rückgabe, Schlussbilanz)',
-      'Wochenbericht-E-Mail kennzeichnet Trainer mit „(Trainer)" und nutzt Initialen statt „Nr. XY"',
+      'Eingehende Bedarfsmeldungen haben jetzt immer Status „offen"',
+      'Foto-Pflicht bei den Gründen „verschlissen", „Flock kaputt", „beschädigt"',
+      'Flock-Liste zeigt nur noch Nummern/Initialen',
+      'Material & Bestand: PDF-Listendruck mit Filter (Status, Personenkreis, Mannschaft, Einzelperson)',
+      'Trainer-Kennzeichnung in allen Listen vereinheitlicht',
     ],
   },
   {

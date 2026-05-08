@@ -5,7 +5,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
 
 export function signToken(user) {
   return jwt.sign(
-    { id: user.id, username: user.username, role: user.role },
+    {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      name: user.name || user.username,
+      teams: Array.isArray(user.teams) ? user.teams : [],
+    },
     JWT_SECRET,
     { expiresIn: '30d' }
   );
@@ -23,12 +29,25 @@ export function verifyToken(req) {
 }
 
 export async function requireAuth(req, res) {
-  const user = verifyToken(req);
-  if (!user) {
+  const tokenUser = verifyToken(req);
+  if (!tokenUser) {
     res.status(401).json({ error: 'Nicht angemeldet' });
     return null;
   }
-  return user;
+  // Aktuellen Stand aus KV laden — damit nachträgliche Team- oder Rollen-Änderungen
+  // sofort wirken, statt erst nach Token-Ablauf nach 30 Tagen.
+  const fresh = await kv.get(`user:${tokenUser.username}`);
+  if (!fresh) {
+    res.status(401).json({ error: 'Account existiert nicht mehr' });
+    return null;
+  }
+  return {
+    id: fresh.id,
+    username: fresh.username,
+    name: fresh.name,
+    role: fresh.role,
+    teams: Array.isArray(fresh.teams) ? fresh.teams : [],
+  };
 }
 
 export async function requireAdmin(req, res) {

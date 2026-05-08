@@ -84,12 +84,134 @@ function FullScreenLoader() {
 
 function AppContent() {
   const [view, setView] = useState('dashboard');
-  const { data, loading, update, saveError } = useData();
+  const { data: rawData, loading, update, saveError } = useData();
   const { user, logout } = useAuth();
 
   if (loading) return <FullScreenLoader />;
 
+  // Daten-Sicht: Admins sehen alles. User sehen nur ihre zugeordneten Mannschaften.
+  // Lagerware (status === 'lager', kein team) bleibt für alle sichtbar — das ist der gemeinsame Bestand.
+  // Die Update-Funktion bleibt absichtlich ungefiltert: User können ihre Daten ändern,
+  // dürfen aber Items aus fremden Teams nicht mutieren (visuell nicht erreichbar).
+  const data = useMemo(() => {
+    if (!user || user.role === 'admin') return rawData;
+    const allowedTeams = Array.isArray(user.teams) ? user.teams : [];
+    if (allowedTeams.length === 0) {
+      // User ohne Team-Zuordnung sieht nur globale Daten (Lager, Items)
+      return {
+        ...rawData,
+        players: [],
+        coaches: [],
+        teams: [],
+        deposits: [],
+        orders: [],
+        reports: [],
+      };
+    }
+    const teamSet = new Set(allowedTeams);
+    const allowedPlayerIds = new Set((rawData.players || []).filter(p => teamSet.has(p.team)).map(p => p.id));
+    const allowedCoachIds = new Set((rawData.coaches || []).filter(c => teamSet.has(c.team)).map(c => c.id));
+    const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
+
+    return {
+      ...rawData,
+      teams: (rawData.teams || []).filter(t => teamSet.has(t)),
+      players: (rawData.players || []).filter(p => teamSet.has(p.team)),
+      coaches: (rawData.coaches || []).filter(c => teamSet.has(c.team)),
+      deposits: (rawData.deposits || []).filter(d => allowedPersonIds.has(d.playerId)),
+      orders: (rawData.orders || []).filter(o => {
+        // Bestellungen: gehört dem Team oder hat zugewiesene Personen aus dem Team
+        if (o.team && teamSet.has(o.team)) return true;
+        if (Array.isArray(o.lines) && o.lines.some(l => l.playerId && allowedPersonIds.has(l.playerId))) return true;
+        return false;
+      }),
+      reports: (rawData.reports || []).filter(r => teamSet.has(r.team)),
+      // Inventur: Lagerware bleibt für alle sichtbar, ausgegebene Teile nur wenn an Person aus erlaubtem Team
+      inventory: (rawData.inventory || []).filter(i => {
+        if (i.status === 'lager') return true;
+        return i.assignedTo && allowedPersonIds.has(i.assignedTo);
+      }),
+    };
+  }, [rawData, user]);
+
+  // Wenn der User auf einer View ist, die er nicht mehr darf (z.B. Settings nach Rollen-Downgrade),
+  // schicken wir ihn zurück aufs Dashboard.
+  useEffect(() => {
+    if (user?.role !== 'admin' && (view === 'settings' || view === 'users')) {
+      setView('dashboard');
+    }
+  }, [user?.role, view]);
+
   const openReportsCount = (data.reports || []).filter(r => r.status === 'offen' || r.status === 'gesehen').length;
+
+  // Wenn Daten gefiltert sind, müssen Updates die ungefilterten Datensätze rekonstruieren —
+  // sonst würden User-Edits Daten anderer Mannschaften überschreiben/löschen.
+  // Wir merge'en die User-Updates in den Roh-Datensatz pro Eintrag-ID.
+  const safeUpdate = useMemo(() => {
+    if (!user || user.role === 'admin') return update;
+
+    return (key, newValue) => {
+      // Settings, items, suppliers, teams, transactions sind nicht team-gebunden — direkt durchreichen.
+      const passThroughKeys = ['settings', 'items', 'suppliers', 'transactions'];
+      if (passThroughKeys.includes(key)) return update(key, newValue);
+
+      const allowedTeams = new Set(Array.isArray(user.teams) ? user.teams : []);
+      const rawList = rawData[key] || [];
+
+      if (key === 'teams') {
+        // User dürfen die globale Team-Liste nicht ändern
+        return;
+      }
+
+      if (key === 'inventory') {
+        // Inventory: Wir behalten alle nicht sichtbaren Items unverändert,
+        // ersetzen nur die sichtbaren durch newValue.
+        const allowedPlayerIds = new Set((rawData.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
+        const allowedCoachIds = new Set((rawData.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
+        const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
+        const isVisible = (i) => i.status === 'lager' || (i.assignedTo && allowedPersonIds.has(i.assignedTo));
+
+        const invisibleOriginals = rawList.filter(i => !isVisible(i));
+        return update(key, [...invisibleOriginals, ...newValue]);
+      }
+
+      if (key === 'players' || key === 'coaches') {
+        const invisibleOriginals = rawList.filter(p => !allowedTeams.has(p.team));
+        // Stelle sicher: User darf keinen Eintrag in fremde Teams umhängen
+        const cleanedNew = newValue.map(p => allowedTeams.has(p.team) ? p : { ...p, team: [...allowedTeams][0] || p.team });
+        return update(key, [...invisibleOriginals, ...cleanedNew]);
+      }
+
+      if (key === 'deposits') {
+        const allowedPlayerIds = new Set((rawData.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
+        const allowedCoachIds = new Set((rawData.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
+        const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
+        const invisibleOriginals = rawList.filter(d => !allowedPersonIds.has(d.playerId));
+        return update(key, [...invisibleOriginals, ...newValue]);
+      }
+
+      if (key === 'orders') {
+        const allowedPlayerIds = new Set((rawData.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
+        const allowedCoachIds = new Set((rawData.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
+        const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
+        const isVisibleOrder = (o) => {
+          if (o.team && allowedTeams.has(o.team)) return true;
+          if (Array.isArray(o.lines) && o.lines.some(l => l.playerId && allowedPersonIds.has(l.playerId))) return true;
+          return false;
+        };
+        const invisibleOriginals = rawList.filter(o => !isVisibleOrder(o));
+        return update(key, [...invisibleOriginals, ...newValue]);
+      }
+
+      if (key === 'reports') {
+        const invisibleOriginals = rawList.filter(r => !allowedTeams.has(r.team));
+        return update(key, [...invisibleOriginals, ...newValue]);
+      }
+
+      // Fallback: direkt durchreichen
+      return update(key, newValue);
+    };
+  }, [user, rawData, update]);
 
   return (
     <div className="min-h-screen bg-stone-50">
@@ -204,15 +326,15 @@ function AppContent() {
         <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
           <ErrorBoundary key={view} onReset={() => setView('dashboard')}>
             {view === 'dashboard' && <Dashboard data={data} setView={setView} />}
-            {view === 'reports' && <ReportsView data={data} update={update} />}
-            {view === 'players' && <PlayersView data={data} update={update} />}
-            {view === 'coaches' && <CoachesView data={data} update={update} />}
-            {view === 'inventory' && <InventoryView data={data} update={update} />}
-            {view === 'deposits' && <DepositsView data={data} update={update} />}
-            {view === 'orders' && <OrdersView data={data} update={update} />}
-            {view === 'returns' && <ReturnsView data={data} update={update} />}
-            {view === 'settings' && <SettingsView data={data} update={update} />}
-            {view === 'users' && user.role === 'admin' && <UsersView />}
+            {view === 'reports' && <ReportsView data={data} update={safeUpdate} />}
+            {view === 'players' && <PlayersView data={data} update={safeUpdate} />}
+            {view === 'coaches' && <CoachesView data={data} update={safeUpdate} />}
+            {view === 'inventory' && <InventoryView data={data} update={safeUpdate} />}
+            {view === 'deposits' && <DepositsView data={data} update={safeUpdate} />}
+            {view === 'orders' && <OrdersView data={data} update={safeUpdate} />}
+            {view === 'returns' && <ReturnsView data={data} update={safeUpdate} />}
+            {view === 'settings' && user.role === 'admin' && <SettingsView data={data} update={safeUpdate} />}
+            {view === 'users' && user.role === 'admin' && <UsersView data={data} />}
           </ErrorBoundary>
         </main>
         <footer className="max-w-7xl mx-auto px-4 sm:px-6 py-6 text-xs" style={{ color: 'var(--ink-mute)' }}>
@@ -236,9 +358,11 @@ function Header({ view, setView, clubName, user, logout, openReportsCount = 0 })
     { id: 'deposits', label: 'Pfand' },
     { id: 'returns', label: 'Rückgabe' },
     { id: 'orders', label: 'Bestellungen' },
-    { id: 'settings', label: 'Einstellungen' },
   ];
-  if (user?.role === 'admin') nav.push({ id: 'users', label: 'Nutzer' });
+  if (user?.role === 'admin') {
+    nav.push({ id: 'settings', label: 'Einstellungen' });
+    nav.push({ id: 'users', label: 'Nutzer' });
+  }
   return (
     <header className="bg-white sticky top-0 z-10" style={{ borderBottom: '1px solid var(--rule)' }}>
       <div className="h-1" style={{ background: 'var(--vereinsblau)' }} />
@@ -250,7 +374,18 @@ function Header({ view, setView, clubName, user, logout, openReportsCount = 0 })
             <div className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>{clubName}</div>
           </button>
           <div className="flex items-center gap-3">
-            <span className="text-xs hidden sm:inline" style={{ color: 'var(--ink-mute)' }}>{user?.name}</span>
+            <div className="text-right hidden sm:block">
+              <div className="text-xs" style={{ color: 'var(--ink-soft)' }}>{user?.name}</div>
+              {user?.role === 'admin' ? (
+                <div className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>Admin</div>
+              ) : (
+                <div className="text-[10px]" style={{ color: 'var(--ink-mute)' }}>
+                  {Array.isArray(user?.teams) && user.teams.length > 0
+                    ? user.teams.join(' · ')
+                    : '— keine Mannschaft zugeordnet —'}
+                </div>
+              )}
+            </div>
             <button onClick={logout} className="hover:text-stone-900 p-2" style={{ color: 'var(--ink-mute)' }} title="Abmelden">
               <LogOut size={16} />
             </button>
@@ -4821,19 +4956,23 @@ function SmtpStatus() {
 }
 
 // ============ NUTZERVERWALTUNG ============
-function UsersView() {
-  const { authFetch, user: currentUser } = useAuth();
+function UsersView({ data }) {
+  const { authFetch, user: currentUser, refreshUser } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ username: '', password: '', name: '', role: 'user' });
-  const [editPwd, setEditPwd] = useState({});
+  const [form, setForm] = useState({ username: '', password: '', name: '', role: 'user', teams: [] });
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null); // { name, role, teams, password }
   const [error, setError] = useState('');
+
+  const allTeams = (data?.teams) || [];
 
   useEffect(() => { load(); }, []);
 
   async function load() {
     setLoading(true);
+    setError('');
     try {
       const r = await authFetch('/api/auth/users');
       const d = await r.json();
@@ -4844,11 +4983,15 @@ function UsersView() {
 
   async function add() {
     setError('');
+    if (!form.username || form.password.length < 8) {
+      setError('Benutzername und Passwort (mind. 8 Zeichen) sind Pflicht.');
+      return;
+    }
     try {
       const r = await authFetch('/api/auth/users', { method: 'POST', body: JSON.stringify(form) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error);
-      setForm({ username: '', password: '', name: '', role: 'user' });
+      setForm({ username: '', password: '', name: '', role: 'user', teams: [] });
       setShowForm(false);
       load();
     } catch (e) { setError(e.message); }
@@ -4856,6 +4999,7 @@ function UsersView() {
 
   async function remove(username) {
     if (!confirm(`Nutzer "${username}" wirklich löschen?`)) return;
+    setError('');
     try {
       const r = await authFetch('/api/auth/users', { method: 'DELETE', body: JSON.stringify({ username }) });
       if (!r.ok) { const d = await r.json(); throw new Error(d.error); }
@@ -4863,21 +5007,70 @@ function UsersView() {
     } catch (e) { setError(e.message); }
   }
 
-  async function changeRole(username, role) {
+  function startEdit(u) {
+    setEditingId(u.id);
+    setEditForm({
+      username: u.username,
+      name: u.name || '',
+      role: u.role,
+      teams: Array.isArray(u.teams) ? [...u.teams] : [],
+      password: '',
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditForm(null);
+  }
+
+  async function saveEdit() {
+    setError('');
+    if (!editForm) return;
+    if (editForm.password && editForm.password.length < 8) {
+      setError('Passwort muss mindestens 8 Zeichen haben.');
+      return;
+    }
     try {
-      await authFetch('/api/auth/users', { method: 'PUT', body: JSON.stringify({ username, role }) });
+      const payload = {
+        username: editForm.username,
+        name: editForm.name,
+        role: editForm.role,
+        teams: editForm.role === 'admin' ? [] : editForm.teams,
+      };
+      if (editForm.password) payload.password = editForm.password;
+      const r = await authFetch('/api/auth/users', { method: 'PUT', body: JSON.stringify(payload) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+
+      // Wenn der eingeloggte Nutzer sich selbst bearbeitet hat,
+      // muss der lokale Auth-State neu geladen werden.
+      if (editForm.username === currentUser?.username && refreshUser) {
+        await refreshUser();
+      }
+
+      cancelEdit();
       load();
     } catch (e) { setError(e.message); }
   }
 
-  async function changePassword(username) {
-    const pwd = editPwd[username];
-    if (!pwd || pwd.length < 8) { alert('Passwort mind. 8 Zeichen'); return; }
-    try {
-      await authFetch('/api/auth/users', { method: 'PUT', body: JSON.stringify({ username, password: pwd }) });
-      setEditPwd({ ...editPwd, [username]: '' });
-      alert('Passwort geändert.');
-    } catch (e) { setError(e.message); }
+  function toggleFormTeam(team) {
+    setForm(f => ({
+      ...f,
+      teams: f.teams.includes(team) ? f.teams.filter(t => t !== team) : [...f.teams, team],
+    }));
+  }
+  function toggleEditTeam(team) {
+    setEditForm(f => ({
+      ...f,
+      teams: f.teams.includes(team) ? f.teams.filter(t => t !== team) : [...f.teams, team],
+    }));
+  }
+
+  function teamSummary(u) {
+    if (u.role === 'admin') return 'alle (Admin)';
+    if (!u.teams || u.teams.length === 0) return '— keine zugeordnet —';
+    if (u.teams.length === allTeams.length && allTeams.length > 0) return 'alle Mannschaften';
+    return u.teams.join(' · ');
   }
 
   return (
@@ -4890,25 +5083,64 @@ function UsersView() {
         </button>
       </div>
 
-      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-2 mb-4">{error}</div>}
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 mb-4">{error}</div>}
 
       {showForm && (
         <div className="bg-white border-2 border-stone-900 p-6 mb-4">
           <h2 className="font-display text-2xl mb-4">NEUER NUTZER</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Anzeigename"><input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
-            <Field label="Benutzername"><input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.username} onChange={e => setForm({ ...form, username: e.target.value })} /></Field>
-            <Field label="Passwort (mind. 8 Zeichen)"><input type="password" className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            <Field label="Anzeigename">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="z. B. Sandra Heldt" />
+            </Field>
+            <Field label="Benutzername">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.username} onChange={e => setForm({ ...form, username: e.target.value.toLowerCase() })} placeholder="z. B. s.heldt" />
+            </Field>
+            <Field label="Passwort (mind. 8 Zeichen)">
+              <input type="password" className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} />
+            </Field>
             <Field label="Rolle">
               <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
-                <option value="user">Nutzer (Vollzugriff App)</option>
-                <option value="admin">Admin (zusätzl. Nutzerverwaltung)</option>
+                <option value="user">Nutzer (eingeschränkt auf Mannschaften)</option>
+                <option value="admin">Admin (Vollzugriff inkl. Nutzerverwaltung)</option>
               </select>
             </Field>
           </div>
+
+          {form.role === 'user' && (
+            <div className="mb-3">
+              <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>
+                ZUGEORDNETE MANNSCHAFTEN ({form.teams.length})
+              </div>
+              {allTeams.length === 0 ? (
+                <p className="text-sm text-stone-500">Noch keine Mannschaften angelegt — in den Einstellungen anlegen.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {allTeams.map(t => {
+                    const active = form.teams.includes(t);
+                    return (
+                      <button key={t} type="button" onClick={() => toggleFormTeam(t)}
+                        className="text-xs px-3 py-1.5"
+                        style={{
+                          border: active ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)',
+                          background: active ? '#F1ECDF' : 'white',
+                          color: active ? 'var(--vereinsblau)' : 'var(--ink-soft)',
+                          fontWeight: active ? 600 : 400,
+                        }}>
+                        {active ? '✓ ' : ''}{t}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs mt-2" style={{ color: 'var(--ink-mute)' }}>
+                Ohne Zuordnung sieht der Nutzer keine Mannschaft. Mehrfachauswahl möglich.
+              </p>
+            </div>
+          )}
+
           <div className="flex gap-2 mt-4">
             <button onClick={add} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Anlegen</button>
-            <button onClick={() => setShowForm(false)} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
+            <button onClick={() => { setShowForm(false); setError(''); }} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
           </div>
         </div>
       )}
@@ -4916,46 +5148,116 @@ function UsersView() {
       <div className="bg-white border border-stone-200 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-stone-500 text-sm">Lade...</div>
+        ) : users.length === 0 ? (
+          <div className="p-8 text-center text-stone-500 text-sm">Keine Nutzer angelegt.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
-                  <th className="text-left p-3">Name</th>
-                  <th className="text-left p-3 hidden sm:table-cell">Benutzer</th>
+                  <th className="text-left p-3">Name / Benutzer</th>
                   <th className="text-left p-3">Rolle</th>
-                  <th className="text-left p-3 hidden lg:table-cell">Passwort ändern</th>
-                  <th className="p-3"></th>
+                  <th className="text-left p-3">Mannschaften</th>
+                  <th className="p-3 w-32"></th>
                 </tr>
               </thead>
               <tbody>
-                {users.map(u => (
-                  <tr key={u.id} className="border-t border-stone-100">
-                    <td className="p-3 font-medium">{u.name}<div className="text-xs text-stone-500 sm:hidden">{u.username}</div></td>
-                    <td className="p-3 hidden sm:table-cell text-stone-600">{u.username}</td>
-                    <td className="p-3">
-                      {u.username === currentUser.username ? (
-                        <span className="text-xs px-2 py-0.5 bg-stone-100">{u.role} (Sie)</span>
-                      ) : (
-                        <select value={u.role} onChange={e => changeRole(u.username, e.target.value)} className="border border-stone-300 px-2 py-1 text-xs">
-                          <option value="user">user</option>
-                          <option value="admin">admin</option>
-                        </select>
-                      )}
-                    </td>
-                    <td className="p-3 hidden lg:table-cell">
-                      <div className="flex gap-1">
-                        <input type="password" placeholder="neues Passwort" className="border border-stone-300 px-2 py-1 text-xs w-32" value={editPwd[u.username] || ''} onChange={e => setEditPwd({ ...editPwd, [u.username]: e.target.value })} />
-                        <button onClick={() => changePassword(u.username)} className="text-xs bg-stone-100 px-2 py-1">Setzen</button>
-                      </div>
-                    </td>
-                    <td className="p-3 text-right">
-                      {u.username !== currentUser.username && (
-                        <button onClick={() => remove(u.username)} className="text-stone-400 hover:text-red-600 p-1"><Trash2 size={14} /></button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {users.map(u => {
+                  const isMe = u.username === currentUser?.username;
+                  const isEditing = editingId === u.id;
+                  if (isEditing) {
+                    return (
+                      <tr key={u.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
+                        <td className="p-3" colSpan={4}>
+                          <div className="font-sub text-xs mb-3" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>
+                            BEARBEITE: {u.username}
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                            <Field label="Anzeigename">
+                              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={editForm.name} onChange={e => setEditForm({ ...editForm, name: e.target.value })} />
+                            </Field>
+                            <Field label="Rolle">
+                              <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={editForm.role}
+                                onChange={e => setEditForm({ ...editForm, role: e.target.value })}
+                                disabled={isMe && editForm.role === 'admin'}>
+                                <option value="user">Nutzer (eingeschränkt)</option>
+                                <option value="admin">Admin (Vollzugriff)</option>
+                              </select>
+                              {isMe && editForm.role === 'admin' && (
+                                <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>Eigene Admin-Rolle kann nicht entzogen werden.</p>
+                              )}
+                            </Field>
+                            <Field label="Neues Passwort (optional, leer lassen für unverändert)">
+                              <input type="password" className="w-full border border-stone-300 px-3 py-2 text-sm" value={editForm.password} onChange={e => setEditForm({ ...editForm, password: e.target.value })} placeholder="mind. 8 Zeichen" />
+                            </Field>
+                          </div>
+
+                          {editForm.role === 'user' && (
+                            <div className="mb-3">
+                              <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>
+                                MANNSCHAFTEN ({editForm.teams.length})
+                              </div>
+                              {allTeams.length === 0 ? (
+                                <p className="text-sm text-stone-500">Keine Mannschaften vorhanden.</p>
+                              ) : (
+                                <div className="flex flex-wrap gap-2">
+                                  {allTeams.map(t => {
+                                    const active = editForm.teams.includes(t);
+                                    return (
+                                      <button key={t} type="button" onClick={() => toggleEditTeam(t)}
+                                        className="text-xs px-3 py-1.5"
+                                        style={{
+                                          border: active ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)',
+                                          background: active ? '#F1ECDF' : 'white',
+                                          color: active ? 'var(--vereinsblau)' : 'var(--ink-soft)',
+                                          fontWeight: active ? 600 : 400,
+                                        }}>
+                                        {active ? '✓ ' : ''}{t}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="flex gap-2">
+                            <button onClick={saveEdit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Speichern</button>
+                            <button onClick={cancelEdit} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+                  return (
+                    <tr key={u.id} className="border-t border-stone-100">
+                      <td className="p-3">
+                        <div className="font-medium">{u.name || u.username} {isMe && <span className="text-xs ml-1" style={{ color: 'var(--ink-mute)' }}>(Sie)</span>}</div>
+                        <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>{u.username}</div>
+                      </td>
+                      <td className="p-3">
+                        <span className="text-xs px-2 py-0.5"
+                          style={u.role === 'admin'
+                            ? { background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }
+                            : { background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }
+                          }>
+                          {u.role === 'admin' ? 'ADMIN' : 'NUTZER'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-xs" style={{ color: 'var(--ink-soft)' }}>
+                        {teamSummary(u)}
+                      </td>
+                      <td className="p-3 text-right whitespace-nowrap">
+                        <button onClick={() => startEdit(u)} className="text-xs underline mr-2" style={{ color: 'var(--vereinsblau)' }}>Bearbeiten</button>
+                        {!isMe && (
+                          <button onClick={() => remove(u.username)} className="text-stone-400 hover:text-red-600 p-1" title="Nutzer löschen">
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

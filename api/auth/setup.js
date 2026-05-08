@@ -23,7 +23,9 @@ export default async function handler(req, res) {
     name: name || username,
     passwordHash,
     role: 'admin',
+    teams: [], // Admin sieht alle Mannschaften — Feld bleibt leer und wird ignoriert
     createdAt: new Date().toISOString(),
+    updatedAt: null,
   };
 
   await kv.set(`user:${user.username}`, user);
@@ -33,6 +35,6 @@ export default async function handler(req, res) {
   const token = signToken(user);
   res.json({
     token,
-    user: { id: user.id, username: user.username, role: user.role, name: user.name },
+    user: { id: user.id, username: user.username, role: user.role, name: user.name, teams: [] },
   });
 }
