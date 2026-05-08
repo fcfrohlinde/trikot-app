@@ -24,8 +24,8 @@ export default async function handler(req, res) {
       if (typeof photo !== 'string' || !photo.startsWith('data:image/')) {
         return res.status(400).json({ error: 'Ungültiges Bildformat.' });
       }
-      // Max. 1.5 MB Base64 (≈ 1.1 MB Binär)
-      if (photo.length > 1_500_000) {
+      // Max. 800 KB Base64 — bleibt sicher unter dem 1 MB Vercel-KV-Limit pro Eintrag
+      if (photo.length > 800_000) {
         return res.status(400).json({ error: 'Bild zu groß. Bitte erneut auswählen oder kleineres Bild nutzen.' });
       }
       photoData = photo;
@@ -47,6 +47,45 @@ export default async function handler(req, res) {
       await kv.set(`photo:${reportId}`, photoData, { ex: 60 * 60 * 24 * 90 });
     }
 
+    // Person identifizieren (Spieler ODER Trainer) und Material markieren
+    let identifiedRole = null;
+    let identifiedPersonId = null;
+    let materialMarked = 0;
+
+    const players = (await kv.get('data:players')) || [];
+    const coaches = (await kv.get('data:coaches')) || [];
+    const player = players.find(p => p.team === team && String(p.number) === String(parseInt(number)));
+    const coach = coaches.find(c => c.team === team && String(c.number) === String(parseInt(number)));
+
+    if (player) {
+      identifiedRole = 'player';
+      identifiedPersonId = player.id;
+    } else if (coach) {
+      identifiedRole = 'coach';
+      identifiedPersonId = coach.id;
+    }
+
+    if (identifiedPersonId) {
+      const inventory = (await kv.get('data:inventory')) || [];
+      const updatedInventory = inventory.map(i => {
+        if (i.assignedTo === identifiedPersonId && i.itemType === item && i.status === 'ausgegeben') {
+          materialMarked += 1;
+          return {
+            ...i,
+            flagged: true,
+            flagReasons: validReasons,
+            flagComment: comment || '',
+            flagReportId: reportId,
+            flagAt: new Date().toISOString(),
+          };
+        }
+        return i;
+      });
+      if (materialMarked > 0) {
+        await kv.set('data:inventory', updatedInventory);
+      }
+    }
+
     const report = {
       id: reportId,
       team,
@@ -56,8 +95,11 @@ export default async function handler(req, res) {
       comment: comment || '',
       reporterName: name || '',
       hasPhoto: !!photoData,
+      identifiedRole,
+      identifiedPersonId,
+      materialMarked,
       createdAt: new Date().toISOString(),
-      status: 'offen',
+      status: identifiedPersonId ? 'gesehen' : 'offen',
       handledBy: null,
       handledAt: null,
       orderId: null,
@@ -67,7 +109,7 @@ export default async function handler(req, res) {
     all.push(report);
     await kv.set('data:reports', all);
 
-    return res.json({ ok: true, id: report.id });
+    return res.json({ ok: true, id: report.id, identified: !!identifiedPersonId, materialMarked });
   }
 
   res.status(405).end();

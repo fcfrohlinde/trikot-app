@@ -1,8 +1,21 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.5.2';
+export const APP_VERSION = '1.6.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.6.0',
+    date: '2026-05-07',
+    changes: [
+      'Trainer-Bereich mit eigenem Tab und kompletter Logik analog zu Spielern',
+      'Automatische Personen-Identifikation bei Bedarfsmeldung (Mannschaft + Nummer)',
+      'Automatische Material-Markierung beim Eingang einer Meldung (kein manuelles Klicken mehr)',
+      'Foto-Button in der Bedarfs-Übersicht jetzt immer sichtbar (in der Artikel-Spalte)',
+      'Fotos werden aggressiver komprimiert (max. 500 KB) für stabile Speicherung',
+      'Trainer werden überall mit TRAINER-Badge gekennzeichnet (Material, Pfand, Bestellungen)',
+      'Material-Markierungen sind jetzt in der Spieler-/Trainer-Liste als ⚠ Badge sichtbar',
+    ],
+  },
   {
     version: '1.5.2',
     date: '2026-05-07',

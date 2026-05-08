@@ -49,6 +49,16 @@ function getDepositMode(settings) {
   return settings?.depositMode || DEFAULT_DEPOSIT_MODE;
 }
 
+// Spieler + Trainer als gemeinsame Liste — für Material-Ausgabe, Pfand, Rückgabe, Bestellungen
+function allPersons(data) {
+  const players = (data.players || []).map(p => ({ ...p, _kind: 'player' }));
+  const coaches = (data.coaches || []).map(c => ({ ...c, _kind: 'coach' }));
+  return [...players, ...coaches];
+}
+function findPerson(data, id) {
+  return allPersons(data).find(p => p.id === id);
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -196,6 +206,7 @@ function AppContent() {
             {view === 'dashboard' && <Dashboard data={data} setView={setView} />}
             {view === 'reports' && <ReportsView data={data} update={update} />}
             {view === 'players' && <PlayersView data={data} update={update} />}
+            {view === 'coaches' && <CoachesView data={data} update={update} />}
             {view === 'inventory' && <InventoryView data={data} update={update} />}
             {view === 'deposits' && <DepositsView data={data} update={update} />}
             {view === 'orders' && <OrdersView data={data} update={update} />}
@@ -220,6 +231,7 @@ function Header({ view, setView, clubName, user, logout, openReportsCount = 0 })
     { id: 'dashboard', label: 'Übersicht' },
     { id: 'reports', label: 'Bedarf', badge: openReportsCount },
     { id: 'players', label: 'Spieler' },
+    { id: 'coaches', label: 'Trainer' },
     { id: 'inventory', label: 'Material' },
     { id: 'deposits', label: 'Pfand' },
     { id: 'returns', label: 'Rückgabe' },
@@ -363,42 +375,51 @@ function Dashboard({ data, setView }) {
 }
 
 // ============ SPIELER ============
-function PlayersView({ data, update }) {
+// Generische Personen-Verwaltung: nutzt 'players' oder 'coaches' aus data
+function PersonsView({ data, update, kind }) {
+  const isPlayer = kind === 'player';
+  const dataKey = isPlayer ? 'players' : 'coaches';
+  const idPrefix = isPlayer ? 'p' : 'c';
+  const labels = isPlayer
+    ? { title: 'Spieler & Nummern', sectionLabel: 'KADER', sectionNumber: '04', singular: 'Spieler', plural: 'Spieler', addNew: 'Spieler anlegen', editNew: 'Spieler bearbeiten' }
+    : { title: 'Trainer & Nummern', sectionLabel: 'TRAINERSTAB', sectionNumber: '04T', singular: 'Trainer', plural: 'Trainer', addNew: 'Trainer anlegen', editNew: 'Trainer bearbeiten' };
+
+  const persons = data[dataKey] || [];
   const [filter, setFilter] = useState('alle');
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
 
-  const filtered = filter === 'alle' ? data.players : data.players.filter(p => p.team === filter);
+  const filtered = filter === 'alle' ? persons : persons.filter(p => p.team === filter);
 
-  function save(player) {
+  function save(person) {
     if (editing) {
-      update('players', data.players.map(p => p.id === editing.id ? { ...player, id: editing.id } : p));
+      update(dataKey, persons.map(p => p.id === editing.id ? { ...person, id: editing.id } : p));
     } else {
-      update('players', [...data.players, { ...player, id: `p_${Date.now()}` }]);
+      update(dataKey, [...persons, { ...person, id: `${idPrefix}_${Date.now()}` }]);
     }
     setShowForm(false); setEditing(null);
   }
 
-  function bulkAdd(newPlayers) {
-    const withIds = newPlayers.map((p, i) => ({
+  function bulkAdd(newPersons) {
+    const withIds = newPersons.map((p, i) => ({
       ...p,
-      id: `p_${Date.now()}_${i}`,
+      id: `${idPrefix}_${Date.now()}_${i}`,
       number: p.number ? parseInt(p.number) : null,
     }));
-    update('players', [...data.players, ...withIds]);
+    update(dataKey, [...persons, ...withIds]);
     setShowImport(false);
   }
 
   function remove(id) {
-    if (!confirm('Spieler wirklich löschen?')) return;
-    update('players', data.players.filter(p => p.id !== id));
+    if (!confirm(`${labels.singular} wirklich löschen?`)) return;
+    update(dataKey, persons.filter(p => p.id !== id));
   }
 
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
-        <PageHeader number="04" label="KADER" title="Spieler & Nummern" subtitle={`${data.players.length} registriert`} />
+        <PageHeader number={labels.sectionNumber} label={labels.sectionLabel} title={labels.title} subtitle={`${persons.length} registriert`} />
         <div className="flex gap-2">
           <button onClick={() => setShowImport(true)}
             className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
@@ -408,7 +429,7 @@ function PlayersView({ data, update }) {
           <button onClick={() => { setEditing(null); setShowForm(true); }}
             className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
             style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-            <Plus size={14} /> Spieler anlegen
+            <Plus size={14} /> {labels.addNew}
           </button>
         </div>
       </div>
@@ -416,22 +437,22 @@ function PlayersView({ data, update }) {
       <div className="flex gap-2 mb-4 overflow-x-auto -mx-4 px-4 pb-1">
         <button onClick={() => setFilter('alle')}
           className={`px-3 py-1.5 text-xs font-medium whitespace-nowrap ${filter === 'alle' ? 'bg-stone-900 text-white' : 'bg-white border border-stone-200'}`}>
-          Alle ({data.players.length})
+          Alle ({persons.length})
         </button>
         {data.teams.map(t => (
           <button key={t} onClick={() => setFilter(t)}
             className={`px-3 py-1.5 text-xs font-medium whitespace-nowrap ${filter === t ? 'bg-stone-900 text-white' : 'bg-white border border-stone-200'}`}>
-            {t} ({data.players.filter(p => p.team === t).length})
+            {t} ({persons.filter(p => p.team === t).length})
           </button>
         ))}
       </div>
 
-      {showForm && <PlayerForm player={editing} players={data.players} teams={data.teams} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
-      {showImport && <PlayerImport teams={data.teams} existingPlayers={data.players} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
+      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
+      {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
-          <div className="p-12 text-center text-stone-500 text-sm">Noch keine Spieler in dieser Auswahl.</div>
+          <div className="p-12 text-center text-stone-500 text-sm">Noch keine {labels.plural} in dieser Auswahl.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -449,6 +470,7 @@ function PlayersView({ data, update }) {
               <tbody>
                 {filtered.sort((a, b) => (a.number || 999) - (b.number || 999)).map(p => {
                   const itemCount = data.inventory.filter(i => i.assignedTo === p.id && i.status === 'ausgegeben').length;
+                  const flaggedCount = data.inventory.filter(i => i.assignedTo === p.id && i.flagged).length;
                   const deposit = data.deposits.find(d => d.playerId === p.id && !d.refunded);
                   return (
                     <tr key={p.id} className="border-t border-stone-100">
@@ -463,6 +485,12 @@ function PlayersView({ data, update }) {
                         <span className={`inline-block px-2 py-0.5 text-xs ${itemCount > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>
                           {itemCount} Teile
                         </span>
+                        {flaggedCount > 0 && (
+                          <span className="inline-block px-2 py-0.5 text-xs ml-1" style={{ background: '#F5EBDD', color: 'var(--warn)' }}
+                            title="Aus Bedarfsmeldung markiert">
+                            ⚠ {flaggedCount}
+                          </span>
+                        )}
                       </td>
                       <td className="p-3 hidden md:table-cell">
                         {deposit ? <span className="text-emerald-700 font-medium">{deposit.amount} €</span> : <span className="text-stone-400">–</span>}
@@ -487,7 +515,17 @@ function PlayersView({ data, update }) {
   );
 }
 
-function PlayerForm({ player, players, teams, onSave, onCancel }) {
+// Wrapper für Spieler und Trainer
+function PlayersView({ data, update }) {
+  return <PersonsView data={data} update={update} kind="player" />;
+}
+
+function CoachesView({ data, update }) {
+  return <PersonsView data={data} update={update} kind="coach" />;
+}
+
+function PlayerForm({ player, players, teams, labels, onSave, onCancel }) {
+  const L = labels || { addNew: 'Spieler anlegen', editNew: 'Spieler bearbeiten', singular: 'Spieler' };
   const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '' });
   const numberConflict = form.number && players.some(p => p.id !== player?.id && p.team === form.team && String(p.number) === String(form.number));
 
@@ -500,7 +538,7 @@ function PlayerForm({ player, players, teams, onSave, onCancel }) {
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
-      <h2 className="font-display text-2xl mb-4">{player ? 'SPIELER BEARBEITEN' : 'NEUER SPIELER'}</h2>
+      <h2 className="font-display text-2xl mb-4">{(player ? L.editNew : L.addNew).toUpperCase()}</h2>
       {teams.length === 0 && (
         <div className="bg-orange-50 border border-orange-200 p-3 mb-4 text-sm text-orange-800">
           Es gibt noch keine Mannschaften. Bitte zuerst in den Einstellungen anlegen.
@@ -910,7 +948,7 @@ function InventoryView({ data, update }) {
       </div>
 
       {showForm && <InventoryAddForm items={data.items} onSave={addBulk} onCancel={() => setShowForm(false)} />}
-      {showAssign && <AssignForm inv={showAssign} players={data.players} inventory={data.inventory} onAssign={assign} onCancel={() => setShowAssign(null)} />}
+      {showAssign && <AssignForm inv={showAssign} persons={allPersons(data)} inventory={data.inventory} onAssign={assign} onCancel={() => setShowAssign(null)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
@@ -930,7 +968,7 @@ function InventoryView({ data, update }) {
               </thead>
               <tbody>
                 {filtered.map(i => {
-                  const player = data.players.find(p => p.id === i.assignedTo);
+                  const person = findPerson(data, i.assignedTo);
                   return (
                     <tr key={i.id} className="border-t border-stone-100">
                       <td className="p-3 font-medium">{i.itemName}</td>
@@ -947,10 +985,15 @@ function InventoryView({ data, update }) {
                         )}
                       </td>
                       <td className="p-3">
-                        {player ? (
+                        {person ? (
                           <div>
-                            <div>#{i.assignedNumber || player.number} {player.firstName} {player.lastName}</div>
-                            <div className="text-xs text-stone-500">{player.team}</div>
+                            <div>
+                              #{i.assignedNumber || person.number} {person.firstName} {person.lastName}
+                              {person._kind === 'coach' && (
+                                <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-stone-500">{person.team}</div>
                           </div>
                         ) : <span className="text-stone-400">–</span>}
                       </td>
@@ -1008,24 +1051,29 @@ function InventoryAddForm({ items, onSave, onCancel }) {
   );
 }
 
-function AssignForm({ inv, players, inventory, onAssign, onCancel }) {
-  const [playerId, setPlayerId] = useState('');
+function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
+  const [personId, setPersonId] = useState('');
   const [number, setNumber] = useState('');
-  const player = players.find(p => p.id === playerId);
+  const person = persons.find(p => p.id === personId);
 
   useEffect(() => {
-    if (player) setNumber(player.number || '');
-  }, [playerId]);
+    if (person) setNumber(person.number || '');
+  }, [personId]);
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
       <h2 className="font-display text-2xl mb-4">MATERIAL AUSGEBEN</h2>
       <p className="text-sm text-stone-600 mb-4">{inv.itemName} · Größe {inv.size}</p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <Field label="Spieler">
-          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={playerId} onChange={e => setPlayerId(e.target.value)}>
+        <Field label="Person (Spieler oder Trainer)">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={personId} onChange={e => setPersonId(e.target.value)}>
             <option value="">– wählen –</option>
-            {players.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            <optgroup label="Spieler">
+              {persons.filter(p => p._kind === 'player').map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
+            <optgroup label="Trainer">
+              {persons.filter(p => p._kind === 'coach').map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
           </select>
         </Field>
         <Field label="Rückennummer (auf diesem Teil)">
@@ -1033,8 +1081,8 @@ function AssignForm({ inv, players, inventory, onAssign, onCancel }) {
         </Field>
       </div>
       <div className="flex gap-2 mt-4">
-        <button onClick={() => playerId && onAssign(inv.id, playerId, number ? parseInt(number) : null)}
-          disabled={!playerId} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">Ausgeben</button>
+        <button onClick={() => personId && onAssign(inv.id, personId, number ? parseInt(number) : null)}
+          disabled={!personId} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">Ausgeben</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
       </div>
     </div>
@@ -1080,7 +1128,7 @@ function DepositsView({ data, update }) {
         </button>
       </div>
 
-      {showForm && <DepositForm players={data.players} deposits={data.deposits} defaultAmount={data.settings.defaultDeposit} onSave={addDeposit} onCancel={() => setShowForm(false)} />}
+      {showForm && <DepositForm persons={allPersons(data)} deposits={data.deposits} defaultAmount={data.settings.defaultDeposit} onSave={addDeposit} onCancel={() => setShowForm(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden mb-6">
         <div className="p-4 border-b border-stone-200 bg-stone-50">
@@ -1096,10 +1144,14 @@ function DepositsView({ data, update }) {
               </thead>
               <tbody>
                 {active.map(d => {
-                  const p = data.players.find(pl => pl.id === d.playerId);
+                  const p = findPerson(data, d.playerId);
                   return (
                     <tr key={d.id} className="border-t border-stone-100">
-                      <td className="p-3 font-medium">{p ? `${p.firstName} ${p.lastName}` : '–'}<div className="text-xs text-stone-500">{p?.team}</div></td>
+                      <td className="p-3 font-medium">
+                        {p ? `${p.firstName} ${p.lastName}` : '–'}
+                        {p?._kind === 'coach' && <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>}
+                        <div className="text-xs text-stone-500">{p?.team}</div>
+                      </td>
                       <td className="p-3 hidden md:table-cell text-stone-600">{new Date(d.paidAt).toLocaleDateString('de-DE')}</td>
                       <td className="p-3 font-display text-lg text-emerald-700">{d.amount.toFixed(2)} €</td>
                       <td className="p-3 hidden lg:table-cell text-stone-600 text-xs">{d.note || '–'}</td>
@@ -1127,10 +1179,13 @@ function DepositsView({ data, update }) {
               </thead>
               <tbody>
                 {refunded.map(d => {
-                  const p = data.players.find(pl => pl.id === d.playerId);
+                  const p = findPerson(data, d.playerId);
                   return (
                     <tr key={d.id} className="border-t border-stone-100">
-                      <td className="p-3 font-medium">{p ? `${p.firstName} ${p.lastName}` : '–'}</td>
+                      <td className="p-3 font-medium">
+                        {p ? `${p.firstName} ${p.lastName}` : '–'}
+                        {p?._kind === 'coach' && <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>}
+                      </td>
                       <td className="p-3">{d.amount.toFixed(2)} €</td>
                       <td className="p-3 text-emerald-700">{(d.refundAmount || 0).toFixed(2)} €</td>
                       <td className="p-3 text-orange-700">{(d.amount - (d.refundAmount || 0)).toFixed(2)} €</td>
@@ -1147,7 +1202,7 @@ function DepositsView({ data, update }) {
   );
 }
 
-function DepositForm({ players, deposits, defaultAmount, onSave, onCancel }) {
+function DepositForm({ persons, deposits, defaultAmount, onSave, onCancel }) {
   const [playerId, setPlayerId] = useState('');
   const [amount, setAmount] = useState(defaultAmount);
   const [note, setNote] = useState('');
@@ -1157,11 +1212,16 @@ function DepositForm({ players, deposits, defaultAmount, onSave, onCancel }) {
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
       <h2 className="font-display text-2xl mb-4">PFAND EINNEHMEN</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <Field label={`Spieler ${existing ? '⚠ hat bereits Pfand hinterlegt' : ''}`}>
+        <Field label={`Person ${existing ? '⚠ hat bereits Pfand hinterlegt' : ''}`}>
           <select className={`w-full border px-3 py-2 text-sm ${existing ? 'border-orange-500' : 'border-stone-300'}`}
             value={playerId} onChange={e => setPlayerId(e.target.value)}>
             <option value="">– wählen –</option>
-            {players.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            <optgroup label="Spieler">
+              {persons.filter(p => p._kind === 'player').map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
+            <optgroup label="Trainer">
+              {persons.filter(p => p._kind === 'coach').map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
           </select>
         </Field>
         <Field label="Betrag (€)">
@@ -1189,7 +1249,7 @@ function ReturnsView({ data, update }) {
   const [totalForfeit, setTotalForfeit] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
-  const player = data.players.find(p => p.id === selectedPlayer);
+  const player = findPerson(data, selectedPlayer);
   const playerItems = data.inventory.filter(i => i.assignedTo === selectedPlayer && i.status === 'ausgegeben');
   const deposit = data.deposits.find(d => d.playerId === selectedPlayer && !d.refunded);
 
@@ -1286,12 +1346,21 @@ function ReturnsView({ data, update }) {
       </div>
 
       <div className="bg-white border border-stone-200 p-6 mb-4">
-        <Field label="Spieler auswählen">
+        <Field label="Person auswählen (Spieler oder Trainer)">
           <select className="w-full border border-stone-300 px-3 py-2 text-sm max-w-md" value={selectedPlayer} onChange={e => { setSelectedPlayer(e.target.value); setConditions({}); setConfirming(false); }}>
             <option value="">– wählen –</option>
-            {data.players.filter(p => data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben') ||
-              data.deposits.some(d => d.playerId === p.id && !d.refunded))
-              .map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            <optgroup label="Spieler">
+              {data.players.filter(p =>
+                data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben') ||
+                data.deposits.some(d => d.playerId === p.id && !d.refunded)
+              ).map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
+            <optgroup label="Trainer">
+              {(data.coaches || []).filter(p =>
+                data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben') ||
+                data.deposits.some(d => d.playerId === p.id && !d.refunded)
+              ).map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
           </select>
         </Field>
       </div>
@@ -1511,9 +1580,9 @@ function OrderForm({ data, onSave, onCancel }) {
     setLines(lines.map(l => {
       if (l.id !== id) return l;
       const nl = { ...l, [key]: val };
-      // Wenn Spieler gewählt → automatisch Nummer und Name vorbelegen
+      // Wenn Spieler/Trainer gewählt → automatisch Nummer und Name vorbelegen
       if (key === 'playerId' && val) {
-        const p = data.players.find(pl => pl.id === val);
+        const p = findPerson(data, val);
         if (p) {
           nl.number = p.number || '';
           nl.name = p.lastName.toUpperCase();
@@ -1637,7 +1706,12 @@ function OrderForm({ data, onSave, onCancel }) {
                   <td className="p-1">
                     <select value={l.playerId} onChange={e => updateLine(l.id, 'playerId', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs w-full">
                       <option value="">– Lager –</option>
-                      {data.players.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+                      <optgroup label="Spieler">
+                        {data.players.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+                      </optgroup>
+                      <optgroup label="Trainer">
+                        {(data.coaches || []).map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+                      </optgroup>
                     </select>
                   </td>
                   <td className="p-1"><input type="number" value={l.number} onChange={e => updateLine(l.id, 'number', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs w-12" /></td>
@@ -1672,7 +1746,7 @@ function OrderDetail({ order, data, onBack, onStatus }) {
     const sponsors = order.sponsors || {};
     const rows = [['Artikel', 'Größe', 'Menge', 'Mannschaft', 'Spieler', 'Rückennummer', 'Flock-Name', 'Sponsor Brust', 'Sponsor Rücken', 'Sponsor Ärmel']];
     order.lines.forEach(l => {
-      const player = data.players.find(p => p.id === l.playerId);
+      const player = findPerson(data, l.playerId);
       rows.push([
         data.items.find(i => i.id === l.itemType)?.name || l.itemType,
         l.size, l.qty,
@@ -1818,7 +1892,7 @@ function OrderDetail({ order, data, onBack, onStatus }) {
         startY: doc.lastAutoTable.finalY,
         head: [['Artikel', 'Gr.', 'Mge', 'Mannschaft / Spieler', 'Nr.', 'Flock-Name']],
         body: order.lines.map(l => {
-          const player = data.players.find(p => p.id === l.playerId);
+          const player = findPerson(data, l.playerId);
           const item = data.items.find(i => i.id === l.itemType);
           return [
             item?.name || l.itemType,
@@ -1927,7 +2001,7 @@ function OrderDetail({ order, data, onBack, onStatus }) {
             </thead>
             <tbody>
               {order.lines.map(l => {
-                const player = data.players.find(p => p.id === l.playerId);
+                const player = findPerson(data, l.playerId);
                 const item = data.items.find(i => i.id === l.itemType);
                 return (
                   <tr key={l.id} className="border-t border-stone-100">
@@ -2617,6 +2691,7 @@ function ReportsView({ data, update }) {
     try {
       const r = await authFetch(`/api/reports/photo?id=${encodeURIComponent(reportId)}`);
       const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
       if (d.photo) {
         setPhotoCache(prev => ({ ...prev, [reportId]: d.photo }));
         setPhotoModal({ id: reportId, url: d.photo });
@@ -2626,7 +2701,7 @@ function ReportsView({ data, update }) {
       }
     } catch (e) {
       setPhotoModal(null);
-      alert('Foto konnte nicht geladen werden.');
+      alert(`Foto konnte nicht geladen werden: ${e.message}`);
     }
   }
 
@@ -2639,7 +2714,9 @@ function ReportsView({ data, update }) {
   const filtered = filter === 'alle' ? reports : reports.filter(r => r.status === filter);
 
   function getPlayer(team, number) {
-    return data.players.find(p => p.team === team && String(p.number) === String(number));
+    // Sucht zuerst unter Spielern, dann unter Trainern (Trainer haben oft hohe Nummern wie 99)
+    return data.players.find(p => p.team === team && String(p.number) === String(number))
+      || (data.coaches || []).find(c => c.team === team && String(c.number) === String(number));
   }
   function getItem(itemId) {
     return data.items.find(i => i.id === itemId);
@@ -2905,12 +2982,30 @@ function ReportsView({ data, update }) {
                         {new Date(r.createdAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
                       </td>
                       <td className="p-3">
-                        <div className="font-medium">{r.team} · #{r.number}</div>
-                        <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
-                          {player ? `${player.firstName} ${player.lastName}` : '— Spieler nicht gefunden —'}
+                        <div className="font-medium">
+                          {r.team} · #{r.number}
+                          {r.identifiedRole === 'coach' && (
+                            <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
+                          )}
                         </div>
+                        <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+                          {player ? `${player.firstName} ${player.lastName}` : '— Person nicht gefunden —'}
+                        </div>
+                        {r.materialMarked > 0 && (
+                          <div className="text-[10px] mt-0.5" style={{ color: 'var(--success)' }}>
+                            ✓ {r.materialMarked} Materialteil{r.materialMarked > 1 ? 'e' : ''} markiert
+                          </div>
+                        )}
                       </td>
-                      <td className="p-3 font-medium">{item?.name || r.item}</td>
+                      <td className="p-3 font-medium">
+                        {item?.name || r.item}
+                        {r.hasPhoto && (
+                          <button onClick={() => showPhoto(r.id)} className="block mt-1 inline-flex items-center gap-1 text-xs hover:underline"
+                            style={{ color: 'var(--vereinsblau)' }}>
+                            📷 Foto ansehen
+                          </button>
+                        )}
+                      </td>
                       <td className="p-3">
                         <div className="flex flex-wrap gap-1">
                           {r.reasons.map(x => (
@@ -2924,12 +3019,6 @@ function ReportsView({ data, update }) {
                       <td className="p-3 hidden lg:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>
                         {r.comment || '–'}
                         {r.reporterName && <div style={{ color: 'var(--ink-mute)' }}>– {r.reporterName}</div>}
-                        {r.hasPhoto && (
-                          <button onClick={() => showPhoto(r.id)} className="mt-1 inline-flex items-center gap-1 text-xs hover:underline"
-                            style={{ color: 'var(--vereinsblau)' }}>
-                            📷 Foto ansehen
-                          </button>
-                        )}
                       </td>
                       <td className="p-3">
                         <select value={r.status} onChange={e => setStatus(r.id, e.target.value)} className="text-xs border border-stone-300 px-2 py-1">

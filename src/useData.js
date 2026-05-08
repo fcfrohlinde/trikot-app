@@ -17,6 +17,7 @@ const DEFAULT_ITEMS = [
 
 const DEFAULTS = {
   players: [],
+  coaches: [],
   inventory: [],
   items: DEFAULT_ITEMS,
   teams: DEFAULT_TEAMS,

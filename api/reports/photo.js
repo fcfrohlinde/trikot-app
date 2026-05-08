@@ -9,13 +9,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'id fehlt' });
   }
 
-  const photo = await kv.get(`photo:${id}`);
-  if (!photo) {
-    return res.status(404).json({ error: 'Kein Foto vorhanden' });
+  try {
+    const photo = await kv.get(`photo:${id}`);
+    if (!photo) {
+      return res.status(404).json({ error: 'Kein Foto vorhanden (wurde evtl. nach 90 Tagen gelöscht)' });
+    }
+    return res.json({ photo });
+  } catch (e) {
+    console.error('Foto-Abruf fehlgeschlagen', e);
+    return res.status(500).json({ error: `Datenbankfehler: ${e.message}` });
   }
-
-  // photo ist ein Data-URL string ("data:image/jpeg;base64,...")
-  // Wir liefern es als JSON, weil Browser bereits Bearer-Token-Header beim normalen <img> nicht senden.
-  // Frontend wandelt das selbst in einen Object-URL um oder hängt direkt das Data-URL ein.
-  res.json({ photo });
 }
+

@@ -83,18 +83,25 @@ export default function ReportForm({ onBack }) {
     }
     setPhotoBusy(true);
     try {
-      const compressed = await compressImage(file);
-      // Größe abschätzen: Base64-Länge × 0,75 ergibt ungefähre Byte-Größe
-      const sizeKb = Math.round((compressed.length * 0.75) / 1024);
-      if (sizeKb > 800) {
-        // Zweiter Versuch mit niedrigerer Qualität
-        const compressed2 = await compressImage(file, 1024, 0.5);
-        setPhoto(compressed2);
-        setPhotoSize(Math.round((compressed2.length * 0.75) / 1024));
-      } else {
-        setPhoto(compressed);
-        setPhotoSize(sizeKb);
+      // Mehrstufige Komprimierung — Ziel max ~500 KB Base64, damit es sicher in Vercel KV passt
+      let compressed = await compressImage(file, 1280, 0.7);
+      let sizeKb = Math.round((compressed.length * 0.75) / 1024);
+
+      if (sizeKb > 500) {
+        compressed = await compressImage(file, 1024, 0.6);
+        sizeKb = Math.round((compressed.length * 0.75) / 1024);
       }
+      if (sizeKb > 500) {
+        compressed = await compressImage(file, 800, 0.5);
+        sizeKb = Math.round((compressed.length * 0.75) / 1024);
+      }
+      if (sizeKb > 500) {
+        compressed = await compressImage(file, 640, 0.45);
+        sizeKb = Math.round((compressed.length * 0.75) / 1024);
+      }
+
+      setPhoto(compressed);
+      setPhotoSize(sizeKb);
     } catch (e) {
       setError('Bild konnte nicht verarbeitet werden.');
     }
