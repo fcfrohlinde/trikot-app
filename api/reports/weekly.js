@@ -58,8 +58,18 @@ export default async function handler(req, res) {
 async function loadReportData() {
   const reports = (await kv.get('data:reports')) || [];
   const players = (await kv.get('data:players')) || [];
+  const coaches = (await kv.get('data:coaches')) || [];
   const items = (await kv.get('data:items')) || [];
   const orders = (await kv.get('data:orders')) || [];
+
+  // Personen-Suche: erst numerisch (Spieler), dann alphabetisch (Trainer-Initialen)
+  function findPersonForReport(team, number) {
+    const numStr = String(number);
+    const player = players.find(p => p.team === team && String(p.number) === numStr);
+    if (player) return player;
+    const initials = numStr.trim().toUpperCase();
+    return coaches.find(c => c.team === team && String(c.number || '').trim().toUpperCase() === initials);
+  }
 
   const openReports = reports.filter(r => r.status === 'offen' || r.status === 'gesehen');
   const lastSent = await kv.get('meta:weeklyReportLastSent');
@@ -78,11 +88,11 @@ async function loadReportData() {
         players: [],
       };
     }
-    const player = players.find(p => p.team === r.team && String(p.number) === String(r.number));
+    const person = findPersonForReport(r.team, r.number);
     aggregation[key].count += 1;
     aggregation[key].players.push({
       number: r.number,
-      name: player ? `${player.firstName} ${player.lastName}` : '— unbekannt —',
+      name: person ? `${person.firstName} ${person.lastName}` : '— unbekannt —',
       reasons: r.reasons,
       reportId: r.id,
     });

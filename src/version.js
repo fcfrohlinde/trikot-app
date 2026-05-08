@@ -1,8 +1,38 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.7.1';
+export const APP_VERSION = '1.7.3';
 
 export const CHANGELOG = [
+  {
+    version: '1.7.3',
+    date: '2026-05-08',
+    changes: [
+      'Trainer haben jetzt Initialen statt Rückennummer (1–3 Buchstaben, automatisch Großbuchstaben)',
+      'Konflikt-Check pro Mannschaft funktioniert für Initialen wie für Spielernummern',
+      'Trainer-CSV-Import mit eigener Vorlage (Spalte „Initialen", Beispieldaten)',
+      'ReportForm akzeptiert sowohl Nummern als auch Initialen — automatische Erkennung im Backend',
+      'Bestellungs-Import-Bug behoben: Artikelnummern aus CSV werden jetzt korrekt im Katalog angezeigt',
+      'Artikelkatalog-Import unterstützt zusätzlich die Spalte „Lieferant" (Auflösung über Name, Warnung bei unbekannten Lieferanten)',
+      'Neuer Button „Personen auswählen" im Bestellformular: Multi-Select für Spieler + Trainer mit Filtern (Mannschaft, Suche)',
+      'Bei Sammelpositionen mit Menge > 1 erscheint ein „verteilen"-Button — die Menge wird auf ausgewählte Personen aufgesplittet',
+      'Bestellpositionen zeigen Artikelnummer im Dropdown ([T-001] Trainingsshirt)',
+      'Artikelnummer wird im PDF-Export, in beiden CSV-Listen und in der Bestelldetail-Ansicht ausgewiesen',
+      'Trainer in Bestelltabellen mit TRAINER-Badge gekennzeichnet, Initialen werden in Bebas Neue dargestellt',
+      'Mannschaft im Bestellformular dient jetzt als optionaler Filter — auch Einzelteil-Bestellungen profitieren',
+    ],
+  },
+  {
+    version: '1.7.2',
+    date: '2026-05-08',
+    changes: [
+      'Material-Übersicht standardmäßig gruppiert: pro Artikel × Größe Summen für Lager / Ausgegeben / Markiert / Gesamt',
+      'Klick auf eine Gruppenzeile öffnet die Einzelteile mit Status, Zuordnung und Zustand',
+      'Buttons „Alle auf" / „Alle zu" zum schnellen Auf-/Zuklappen aller Gruppen',
+      'Toggle „Gruppiert" / „Einzeln" — die alte ungruppierte Liste bleibt zugänglich',
+      'Summenzeile am Tabellenende zeigt Gesamtbestand auf einen Blick',
+      'Größen werden in natürlicher Reihenfolge sortiert (XS, S, M, L, XL, XXL, dann Jugend-Größen)',
+    ],
+  },
   {
     version: '1.7.1',
     date: '2026-05-08',

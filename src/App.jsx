@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Users, Shirt, Wallet, ShoppingCart, Plus, Trash2, Edit2, Download, ArrowLeft, Check, X, AlertCircle, Package, Euro, FileText, Settings, LogOut, UserCog, Mail, Bell, FileWarning } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -405,7 +405,9 @@ function PersonsView({ data, update, kind }) {
     const withIds = newPersons.map((p, i) => ({
       ...p,
       id: `${idPrefix}_${Date.now()}_${i}`,
-      number: p.number ? parseInt(p.number) : null,
+      number: isPlayer
+        ? (p.number ? parseInt(p.number) : null)
+        : (p.number ? String(p.number).trim().toUpperCase().slice(0, 3) : null),
     }));
     update(dataKey, [...persons, ...withIds]);
     setShowImport(false);
@@ -447,8 +449,8 @@ function PersonsView({ data, update, kind }) {
         ))}
       </div>
 
-      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
-      {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
+      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
+      {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} kind={kind} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
@@ -458,7 +460,7 @@ function PersonsView({ data, update, kind }) {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
-                  <th className="text-left p-3 font-medium">Nr.</th>
+                  <th className="text-left p-3 font-medium">{isPlayer ? 'Nr.' : 'Init.'}</th>
                   <th className="text-left p-3 font-medium">Name</th>
                   <th className="text-left p-3 font-medium hidden md:table-cell">Mannschaft</th>
                   <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
@@ -468,13 +470,29 @@ function PersonsView({ data, update, kind }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.sort((a, b) => (a.number || 999) - (b.number || 999)).map(p => {
+                {[...filtered].sort((a, b) => {
+                  if (isPlayer) {
+                    return (Number(a.number) || 999) - (Number(b.number) || 999);
+                  }
+                  // Trainer: alphabetisch nach Nachname
+                  return (a.lastName || '').localeCompare(b.lastName || '');
+                }).map(p => {
                   const itemCount = data.inventory.filter(i => i.assignedTo === p.id && i.status === 'ausgegeben').length;
                   const flaggedCount = data.inventory.filter(i => i.assignedTo === p.id && i.flagged).length;
                   const deposit = data.deposits.find(d => d.playerId === p.id && !d.refunded);
                   return (
                     <tr key={p.id} className="border-t border-stone-100">
-                      <td className="p-3 font-display text-xl">{p.number || '–'}</td>
+                      <td className="p-3">
+                        {isPlayer ? (
+                          <span className="font-display text-xl">{p.number || '–'}</span>
+                        ) : (
+                          p.number ? (
+                            <span className="inline-block px-2 py-1 text-xs font-medium" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em', minWidth: '2.5rem', textAlign: 'center' }}>
+                              {p.number}
+                            </span>
+                          ) : <span className="text-stone-400">–</span>
+                        )}
+                      </td>
                       <td className="p-3 font-medium">
                         {p.firstName} {p.lastName}
                         <div className="text-xs text-stone-500 md:hidden">{p.team}</div>
@@ -524,16 +542,44 @@ function CoachesView({ data, update }) {
   return <PersonsView data={data} update={update} kind="coach" />;
 }
 
-function PlayerForm({ player, players, teams, labels, onSave, onCancel }) {
+function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) {
+  const isCoach = kind === 'coach';
+  const numberLabel = isCoach ? 'Initialen (max. 3 Zeichen)' : 'Rückennummer';
+  const numberPlaceholder = isCoach ? 'z.B. DW' : '';
   const L = labels || { addNew: 'Spieler anlegen', editNew: 'Spieler bearbeiten', singular: 'Spieler' };
   const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '' });
-  const numberConflict = form.number && players.some(p => p.id !== player?.id && p.team === form.team && String(p.number) === String(form.number));
+
+  // Konflikt-Check funktioniert für Spieler (Nummer) wie Trainer (Initialen) gleich:
+  // Pro Mannschaft darf der gleiche Wert nicht doppelt vergeben sein.
+  const numberConflict = form.number && players.some(p =>
+    p.id !== player?.id
+    && p.team === form.team
+    && String(p.number).trim().toLowerCase() === String(form.number).trim().toLowerCase()
+  );
+
+  function handleNumberChange(val) {
+    if (isCoach) {
+      // Trainer: nur Buchstaben, max. 3, automatisch Großbuchstaben
+      const cleaned = val.replace(/[^a-zA-ZäöüÄÖÜß]/g, '').slice(0, 3).toUpperCase();
+      setForm({ ...form, number: cleaned });
+    } else {
+      // Spieler: nur Ziffern
+      const cleaned = val.replace(/[^0-9]/g, '');
+      setForm({ ...form, number: cleaned });
+    }
+  }
 
   function submit() {
     if (!form.firstName || !form.lastName) return alert('Name fehlt');
     if (!form.team) return alert('Bitte zuerst eine Mannschaft in den Einstellungen anlegen.');
-    if (numberConflict) return alert('Rückennummer in dieser Mannschaft bereits vergeben');
-    onSave({ ...form, number: form.number ? parseInt(form.number) : null });
+    if (numberConflict) return alert(`${isCoach ? 'Initialen' : 'Rückennummer'} in dieser Mannschaft bereits vergeben`);
+
+    // Spieler-Nummer als Integer speichern, Trainer-Initialen als String
+    const numberValue = isCoach
+      ? (form.number ? String(form.number).trim().toUpperCase() : null)
+      : (form.number ? parseInt(form.number) : null);
+
+    onSave({ ...form, number: numberValue });
   }
 
   return (
@@ -553,9 +599,16 @@ function PlayerForm({ player, players, teams, labels, onSave, onCancel }) {
             {teams.map(t => <option key={t}>{t}</option>)}
           </select>
         </Field>
-        <Field label={`Rückennummer ${numberConflict ? '⚠ vergeben' : ''}`}>
-          <input type="number" className={`w-full border px-3 py-2 text-sm ${numberConflict ? 'border-red-500' : 'border-stone-300'}`}
-            value={form.number || ''} onChange={e => setForm({ ...form, number: e.target.value })} />
+        <Field label={`${numberLabel} ${numberConflict ? '⚠ vergeben' : ''}`}>
+          <input
+            type="text"
+            inputMode={isCoach ? 'text' : 'numeric'}
+            maxLength={isCoach ? 3 : 3}
+            placeholder={numberPlaceholder}
+            className={`w-full border px-3 py-2 text-sm ${numberConflict ? 'border-red-500' : 'border-stone-300'} ${isCoach ? 'uppercase' : ''}`}
+            value={form.number || ''}
+            onChange={e => handleNumberChange(e.target.value)}
+          />
         </Field>
         <Field label="Größe">
           <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.size} onChange={e => setForm({ ...form, size: e.target.value })}>
@@ -573,14 +626,20 @@ function PlayerForm({ player, players, teams, labels, onSave, onCancel }) {
 }
 
 // ============ SPIELER-IMPORT ============
-function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
+function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
+  const isCoach = kind === 'coach';
+  const numberLabel = isCoach ? 'Initialen' : 'Rückennummer';
+
   const [step, setStep] = useState('upload'); // upload | preview
   const [rows, setRows] = useState([]);
   const [error, setError] = useState('');
 
   function downloadTemplate() {
-    const header = ['Vorname', 'Nachname', 'Mannschaft', 'Rückennummer', 'Größe', 'Notizen'];
-    const example = [
+    const header = ['Vorname', 'Nachname', 'Mannschaft', numberLabel, 'Größe', 'Notizen'];
+    const example = isCoach ? [
+      ['Dennis', 'Hasecke', teams[0] || '1. Mannschaft', 'DH', 'XL', 'Cheftrainer'],
+      ['Sven', 'Berger', teams[0] || '1. Mannschaft', 'SB', 'L', 'Co-Trainer'],
+    ] : [
       ['Max', 'Mustermann', teams[0] || '1. Mannschaft', '10', 'L', ''],
       ['Tim', 'Beispiel', teams[0] || '1. Mannschaft', '7', 'M', 'Kapitän'],
     ];
@@ -588,7 +647,7 @@ function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'spieler_import_vorlage.csv'; a.click();
+    a.href = url; a.download = isCoach ? 'trainer_import_vorlage.csv' : 'spieler_import_vorlage.csv'; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -612,7 +671,7 @@ function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
       const iVorname = col('vorname', 'firstname', 'first name');
       const iNachname = col('nachname', 'lastname', 'last name', 'name');
       const iTeam = col('mannschaft', 'team');
-      const iNumber = col('rückennummer', 'rueckennummer', 'nummer', 'number', 'nr');
+      const iNumber = col('rückennummer', 'rueckennummer', 'nummer', 'number', 'nr', 'initialen', 'kürzel', 'kuerzel');
       const iSize = col('größe', 'groesse', 'size');
       const iNotes = col('notizen', 'notes', 'bemerkung');
 
@@ -621,15 +680,19 @@ function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
       }
 
       const dataRows = parsed.slice(1).filter(r => r.some(c => c && c.trim()));
-      const rows = dataRows.map((r, idx) => ({
-        _idx: idx,
-        firstName: (r[iVorname] || '').trim(),
-        lastName: (r[iNachname] || '').trim(),
-        team: iTeam >= 0 ? (r[iTeam] || '').trim() : (teams[0] || ''),
-        number: iNumber >= 0 ? (r[iNumber] || '').trim() : '',
-        size: iSize >= 0 ? ((r[iSize] || '').trim().toUpperCase() || 'L') : 'L',
-        notes: iNotes >= 0 ? (r[iNotes] || '').trim() : '',
-      }));
+      const rows = dataRows.map((r, idx) => {
+        let numberRaw = iNumber >= 0 ? (r[iNumber] || '').trim() : '';
+        if (isCoach) numberRaw = numberRaw.replace(/[^a-zA-ZäöüÄÖÜß]/g, '').slice(0, 3).toUpperCase();
+        return {
+          _idx: idx,
+          firstName: (r[iVorname] || '').trim(),
+          lastName: (r[iNachname] || '').trim(),
+          team: iTeam >= 0 ? (r[iTeam] || '').trim() : (teams[0] || ''),
+          number: numberRaw,
+          size: iSize >= 0 ? ((r[iSize] || '').trim().toUpperCase() || 'L') : 'L',
+          notes: iNotes >= 0 ? (r[iNotes] || '').trim() : '',
+        };
+      });
 
       setRows(rows);
       setStep('preview');
@@ -654,17 +717,34 @@ function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
     if (!row.team) errors.push('Mannschaft fehlt');
     else if (!teams.includes(row.team)) errors.push('Mannschaft unbekannt');
     if (row.number) {
-      const n = parseInt(row.number);
-      if (isNaN(n)) errors.push('Nummer ungültig');
-      else {
-        // Konflikt mit existierenden Spielern
-        const conflictExisting = existingPlayers.some(p => p.team === row.team && String(p.number) === String(n));
-        if (conflictExisting) errors.push('Nummer bereits vergeben');
-        // Konflikt innerhalb der Importliste
-        const conflictImport = allRows.some(o =>
-          o._idx !== row._idx && o.team === row.team && o.number && parseInt(o.number) === n
-        );
-        if (conflictImport) errors.push('Nummer doppelt im Import');
+      if (isCoach) {
+        // Trainer: Initialen, max. 3 Buchstaben
+        if (!/^[a-zA-ZäöüÄÖÜß]{1,3}$/.test(row.number)) {
+          errors.push('Initialen ungültig (1–3 Buchstaben)');
+        } else {
+          const norm = String(row.number).trim().toUpperCase();
+          // Konflikt mit existierenden
+          const conflictExisting = existingPlayers.some(p =>
+            p.team === row.team && String(p.number).trim().toUpperCase() === norm
+          );
+          if (conflictExisting) errors.push('Initialen bereits vergeben');
+          // Konflikt im Import
+          const conflictImport = allRows.some(o =>
+            o._idx !== row._idx && o.team === row.team && o.number && String(o.number).trim().toUpperCase() === norm
+          );
+          if (conflictImport) errors.push('Initialen doppelt im Import');
+        }
+      } else {
+        const n = parseInt(row.number);
+        if (isNaN(n)) errors.push('Nummer ungültig');
+        else {
+          const conflictExisting = existingPlayers.some(p => p.team === row.team && String(p.number) === String(n));
+          if (conflictExisting) errors.push('Nummer bereits vergeben');
+          const conflictImport = allRows.some(o =>
+            o._idx !== row._idx && o.team === row.team && o.number && parseInt(o.number) === n
+          );
+          if (conflictImport) errors.push('Nummer doppelt im Import');
+        }
       }
     }
     return errors;
@@ -728,7 +808,7 @@ function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
 
           <div className="text-xs p-4" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
             <strong style={{ color: 'var(--vereinsblau)' }}>Pflichtspalten:</strong> Vorname, Nachname<br />
-            <strong style={{ color: 'var(--vereinsblau)' }}>Optionale Spalten:</strong> Mannschaft, Rückennummer, Größe (XS/S/M/L/XL/XXL/3XL), Notizen<br />
+            <strong style={{ color: 'var(--vereinsblau)' }}>Optionale Spalten:</strong> Mannschaft, {numberLabel}{isCoach ? ' (1–3 Buchstaben)' : ''}, Größe (XS/S/M/L/XL/XXL/3XL), Notizen<br />
             <strong style={{ color: 'var(--vereinsblau)' }}>Trennzeichen:</strong> Semikolon (;) oder Komma (,) — wird automatisch erkannt<br />
             <strong style={{ color: 'var(--vereinsblau)' }}>Verfügbare Mannschaften:</strong> {teams.length > 0 ? teams.join(' · ') : '— keine angelegt —'}
           </div>
@@ -769,7 +849,7 @@ function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
                   <th className="text-left p-2">Vorname</th>
                   <th className="text-left p-2">Nachname</th>
                   <th className="text-left p-2">Mannschaft</th>
-                  <th className="text-left p-2">Nr.</th>
+                  <th className="text-left p-2">{isCoach ? 'Init.' : 'Nr.'}</th>
                   <th className="text-left p-2">Größe</th>
                   <th className="text-left p-2">Notizen</th>
                   <th className="text-left p-2">Status</th>
@@ -788,7 +868,22 @@ function PlayerImport({ teams, existingPlayers, onImport, onCancel }) {
                         {r.team && !teams.includes(r.team) && <option value={r.team}>{r.team} (unbekannt)</option>}
                       </select>
                     </td>
-                    <td className="p-1"><input type="number" className="w-16 px-2 py-1 text-xs" value={r.number} onChange={e => updateRow(r._idx, 'number', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                    <td className="p-1">
+                      <input
+                        type="text"
+                        inputMode={isCoach ? 'text' : 'numeric'}
+                        maxLength={3}
+                        className={`w-16 px-2 py-1 text-xs ${isCoach ? 'uppercase' : ''}`}
+                        value={r.number}
+                        onChange={e => {
+                          const val = isCoach
+                            ? e.target.value.replace(/[^a-zA-ZäöüÄÖÜß]/g, '').slice(0, 3).toUpperCase()
+                            : e.target.value.replace(/[^0-9]/g, '');
+                          updateRow(r._idx, 'number', val);
+                        }}
+                        style={{ border: '1px solid var(--rule)' }}
+                      />
+                    </td>
                     <td className="p-1">
                       <select className="px-2 py-1 text-xs" value={r.size} onChange={e => updateRow(r._idx, 'size', e.target.value)} style={{ border: '1px solid var(--rule)' }}>
                         {['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => <option key={s}>{s}</option>)}
@@ -881,18 +976,18 @@ function slugify(name) {
 }
 
 // ============ KATALOG-IMPORT (ARTIKELLISTE) ============
-function CatalogImport({ existingItems, onImport, onCancel }) {
+function CatalogImport({ existingItems, onImport, onCancel, suppliers = [] }) {
   const [step, setStep] = useState('upload'); // upload | preview
   const [rows, setRows] = useState([]);
-  const [mode, setMode] = useState('add'); // add | replace | update
+  const [mode, setMode] = useState('update'); // update | add | replace
   const [error, setError] = useState('');
 
   function downloadTemplate() {
-    const header = ['Artikelnummer', 'Name', 'Neupreis', 'Ersatzwert'];
+    const header = ['Artikelnummer', 'Name', 'Neupreis', 'Ersatzwert', 'Lieferant'];
     const example = [
-      ['praesentationsjacke', 'Präsentationsjacke', '40', '25'],
-      ['trainingsshirt', 'Trainingsshirt', '18', '10'],
-      ['neuer_artikel', 'Neuer Artikel', '35', '20'],
+      ['T-001', 'Präsentationsjacke', '40', '25', suppliers[0]?.name || ''],
+      ['T-002', 'Trainingsshirt', '18', '10', suppliers[0]?.name || ''],
+      ['T-003', 'Neuer Artikel', '35', '20', ''],
     ];
     const csv = [header, ...example].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -918,10 +1013,11 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
         }
         return -1;
       };
-      const iId = col('artikelnummer', 'id', 'nummer', 'sku');
+      const iArtNr = col('artikelnummer', 'art-nr', 'art.-nr.', 'artnr', 'sku');
       const iName = col('name', 'artikel', 'bezeichnung');
       const iPrice = col('neupreis', 'preis', 'price');
       const iReplacement = col('ersatzwert', 'replacementvalue', 'replacement');
+      const iSupplier = col('lieferant', 'supplier');
 
       if (iName < 0) {
         throw new Error('Spalte "Name" ist Pflicht. Bitte die Vorlage verwenden.');
@@ -930,17 +1026,30 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
       const dataRows = parsed.slice(1).filter(r => r.some(c => c && c.trim()));
       const items = dataRows.map((r, idx) => {
         const name = (r[iName] || '').trim();
-        const id = iId >= 0 && (r[iId] || '').trim()
-          ? (r[iId] || '').trim().toLowerCase()
-          : slugify(name);
+        const articleNumber = iArtNr >= 0 ? (r[iArtNr] || '').trim() : '';
+
+        // Supplier: per Name auflösen (case-insensitive)
+        let supplierId = null;
+        let supplierWarning = null;
+        if (iSupplier >= 0) {
+          const supName = (r[iSupplier] || '').trim();
+          if (supName) {
+            const found = suppliers.find(s => s.name.trim().toLowerCase() === supName.toLowerCase());
+            if (found) supplierId = found.id;
+            else supplierWarning = supName;
+          }
+        }
+
         return {
           _idx: idx,
-          id,
+          articleNumber,
           name,
           price: iPrice >= 0 ? parseFloat((r[iPrice] || '0').replace(',', '.')) || 0 : 0,
           replacementValue: iReplacement >= 0 && (r[iReplacement] || '').trim()
             ? parseFloat((r[iReplacement] || '0').replace(',', '.')) || 0
             : null,
+          supplierId,
+          supplierWarning,
         };
       });
 
@@ -958,16 +1067,22 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
     setRows(rows.filter(r => r._idx !== idx));
   }
 
-  // Was passiert mit jeder Zeile, je nach Modus?
-  const existingMap = new Map(existingItems.map(i => [i.id, i]));
+  // Match-Logik: vorhandene Artikel werden über articleNumber identifiziert (case-insensitive).
+  // Fallback: Wenn keine Artikelnummer in CSV, dann auf Name matchen.
+  function findExisting(row) {
+    if (row.articleNumber) {
+      const an = row.articleNumber.trim().toLowerCase();
+      return existingItems.find(e => (e.articleNumber || '').trim().toLowerCase() === an);
+    }
+    return existingItems.find(e => e.name.trim().toLowerCase() === row.name.trim().toLowerCase());
+  }
+
   function fateOf(row) {
     if (!row.name) return { type: 'skip', label: 'übersprungen', color: 'var(--ink-mute)' };
-    const exists = existingMap.has(row.id);
+    const exists = findExisting(row);
     if (mode === 'replace') return { type: 'replace', label: 'ersetzt', color: 'var(--warn)' };
     if (mode === 'add') {
-      return exists
-        ? { type: 'skip-dup', label: 'Duplikat – ignoriert', color: 'var(--warn)' }
-        : { type: 'add', label: 'hinzugefügt', color: 'var(--success)' };
+      return { type: 'add', label: 'hinzugefügt', color: 'var(--success)' };
     }
     if (mode === 'update') {
       return exists
@@ -976,19 +1091,73 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
     }
   }
 
-  const valid = rows.filter(r => r.name).map(r => ({
-    id: r.id,
-    name: r.name,
-    price: r.price,
-    replacementValue: r.replacementValue,
-  }));
+  // Den Import durchführen — fügt korrektes ID-Mapping hinzu, behält bestehende IDs bei Update
+  function buildMergedItems() {
+    const validRows = rows.filter(r => r.name);
+
+    if (mode === 'replace') {
+      return validRows.map((r, i) => ({
+        id: `item_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+        articleNumber: r.articleNumber || '',
+        name: r.name,
+        price: r.price || 0,
+        replacementValue: r.replacementValue,
+        supplierId: r.supplierId || null,
+      }));
+    }
+
+    if (mode === 'add') {
+      const additions = validRows.map((r, i) => ({
+        id: `item_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+        articleNumber: r.articleNumber || '',
+        name: r.name,
+        price: r.price || 0,
+        replacementValue: r.replacementValue,
+        supplierId: r.supplierId || null,
+      }));
+      return [...existingItems, ...additions];
+    }
+
+    // mode === 'update'
+    const result = [...existingItems];
+    validRows.forEach((r, i) => {
+      const existing = findExisting(r);
+      if (existing) {
+        const idx = result.findIndex(e => e.id === existing.id);
+        result[idx] = {
+          ...existing,
+          articleNumber: r.articleNumber || existing.articleNumber || '',
+          name: r.name,
+          price: r.price || 0,
+          replacementValue: r.replacementValue,
+          // Supplier nur überschreiben, wenn in CSV explizit gesetzt
+          supplierId: r.supplierId !== null ? r.supplierId : existing.supplierId,
+        };
+      } else {
+        result.push({
+          id: `item_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+          articleNumber: r.articleNumber || '',
+          name: r.name,
+          price: r.price || 0,
+          replacementValue: r.replacementValue,
+          supplierId: r.supplierId || null,
+        });
+      }
+    });
+    return result;
+  }
+
+  const validRowCount = rows.filter(r => r.name).length;
+  const supplierWarnings = rows.filter(r => r.supplierWarning).map(r => r.supplierWarning);
+  const uniqueWarnings = [...new Set(supplierWarnings)];
 
   function doImport() {
     if (mode === 'replace' && existingItems.length > 0) {
-      if (!confirm(`Achtung: Im Modus "Komplett ersetzen" werden alle ${existingItems.length} bestehenden Artikel gelöscht und durch ${valid.length} neue ersetzt. Fortfahren?`)) return;
+      if (!confirm(`Achtung: Im Modus "Komplett ersetzen" werden alle ${existingItems.length} bestehenden Artikel gelöscht und durch ${validRowCount} neue ersetzt. Fortfahren?`)) return;
     }
-    if (valid.length === 0) { alert('Keine gültigen Zeilen zum Import.'); return; }
-    onImport(valid, mode);
+    if (validRowCount === 0) { alert('Keine gültigen Zeilen zum Import.'); return; }
+    const merged = buildMergedItems();
+    onImport(merged, mode);
   }
 
   return (
@@ -1011,7 +1180,7 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
             <p className="mb-3">So funktioniert's:</p>
             <ol className="list-decimal pl-5 space-y-1.5">
               <li>Vorlage herunterladen oder eigene Liste vorbereiten.</li>
-              <li>Spalten: <strong>Artikelnummer</strong>, <strong>Name</strong>, <strong>Neupreis</strong>, <strong>Ersatzwert</strong>. Pflicht ist nur „Name".</li>
+              <li>Spalten: <strong>Artikelnummer</strong>, <strong>Name</strong>, <strong>Neupreis</strong>, <strong>Ersatzwert</strong>, <strong>Lieferant</strong>. Pflicht ist nur „Name".</li>
               <li>CSV-Datei hochladen, Modus wählen, importieren.</li>
             </ol>
           </div>
@@ -1029,7 +1198,7 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
           </div>
 
           <div className="text-xs p-4" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
-            <strong style={{ color: 'var(--vereinsblau)' }}>Tipp:</strong> Wird keine Artikelnummer angegeben, wird sie automatisch aus dem Namen erzeugt (z. B. "Trainingsshirt" → "trainingsshirt"). Für saubere Updates später lieber feste Artikelnummern vergeben.
+            <strong style={{ color: 'var(--vereinsblau)' }}>Tipp:</strong> Mit einer eindeutigen Artikelnummer (z. B. „T-001" oder die Lieferanten-SKU) lassen sich Artikel später sauber per CSV aktualisieren. Lieferanten werden über den Namen zugeordnet — sie müssen vorher in den Einstellungen angelegt sein.
           </div>
 
           {error && (
@@ -1044,8 +1213,8 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
             <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>IMPORT-MODUS</div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
               {[
-                { id: 'add', label: 'Hinzufügen', desc: 'Nur neue Artikel anlegen. Bestehende mit gleicher Nummer werden ignoriert.' },
-                { id: 'update', label: 'Aktualisieren', desc: 'Bestehende Artikel (per Artikelnummer) werden überschrieben, neue zusätzlich angelegt.' },
+                { id: 'update', label: 'Aktualisieren', desc: 'Bestehende Artikel (per Artikelnummer) werden überschrieben, neue zusätzlich angelegt. Empfohlen.' },
+                { id: 'add', label: 'Hinzufügen', desc: 'Alle CSV-Zeilen werden als neue Artikel angelegt. Bestehende bleiben unverändert.' },
                 { id: 'replace', label: 'Komplett ersetzen', desc: 'ALLE bestehenden Artikel werden gelöscht und durch die importierten ersetzt.' },
               ].map(m => (
                 <label key={m.id} className="flex items-start gap-2 p-3 cursor-pointer text-sm"
@@ -1060,14 +1229,21 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
             </div>
           </div>
 
+          {uniqueWarnings.length > 0 && (
+            <div className="mb-4 p-3 text-xs" style={{ background: '#F5EBDD', color: 'var(--warn)', borderLeft: '3px solid var(--warn)' }}>
+              <strong>Lieferant nicht gefunden:</strong> {uniqueWarnings.join(', ')}. Diese Zeilen werden ohne Lieferant importiert. Lege den Lieferanten in den Einstellungen an und importiere erneut, oder ordne ihn nach dem Import manuell zu.
+            </div>
+          )}
+
           <div className="overflow-x-auto mb-4" style={{ border: '1px solid var(--rule)' }}>
-            <table className="w-full text-xs min-w-[700px]">
+            <table className="w-full text-xs min-w-[800px]">
               <thead className="bg-stone-50">
                 <tr>
-                  <th className="text-left p-2">Artikelnummer</th>
+                  <th className="text-left p-2">Art.-Nr.</th>
                   <th className="text-left p-2">Name</th>
                   <th className="text-right p-2">Neupreis</th>
                   <th className="text-right p-2">Ersatzwert</th>
+                  <th className="text-left p-2">Lieferant</th>
                   <th className="text-left p-2">Aktion</th>
                   <th></th>
                 </tr>
@@ -1075,12 +1251,22 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
               <tbody>
                 {rows.map(r => {
                   const f = fateOf(r);
+                  const sup = r.supplierId ? suppliers.find(s => s.id === r.supplierId) : null;
                   return (
                     <tr key={r._idx} style={{ borderTop: '1px solid var(--rule)' }}>
-                      <td className="p-1"><input className="w-full px-2 py-1 text-xs font-mono" value={r.id} onChange={e => updateRow(r._idx, 'id', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
+                      <td className="p-1"><input className="w-24 px-2 py-1 text-xs font-mono" value={r.articleNumber} onChange={e => updateRow(r._idx, 'articleNumber', e.target.value)} style={{ border: '1px solid var(--rule)' }} placeholder="–" /></td>
                       <td className="p-1"><input className="w-full px-2 py-1 text-xs" value={r.name} onChange={e => updateRow(r._idx, 'name', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
                       <td className="p-1"><input type="number" step="0.01" className="w-20 px-2 py-1 text-xs text-right" value={r.price} onChange={e => updateRow(r._idx, 'price', parseFloat(e.target.value) || 0)} style={{ border: '1px solid var(--rule)' }} /></td>
                       <td className="p-1"><input type="number" step="0.01" className="w-20 px-2 py-1 text-xs text-right" value={r.replacementValue ?? ''} placeholder="–" onChange={e => updateRow(r._idx, 'replacementValue', e.target.value === '' ? null : (parseFloat(e.target.value) || 0))} style={{ border: '1px solid var(--rule)' }} /></td>
+                      <td className="p-1">
+                        <select className="w-full px-2 py-1 text-xs" value={r.supplierId || ''} onChange={e => updateRow(r._idx, 'supplierId', e.target.value || null)} style={{ border: '1px solid var(--rule)' }}>
+                          <option value="">– kein –</option>
+                          {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select>
+                        {r.supplierWarning && !sup && (
+                          <div className="text-[10px] mt-0.5" style={{ color: 'var(--warn)' }}>„{r.supplierWarning}" unbekannt</div>
+                        )}
+                      </td>
                       <td className="p-2 text-xs" style={{ color: f.color }}>{f.label}</td>
                       <td className="p-1"><button onClick={() => removeRow(r._idx)} className="p-1" style={{ color: 'var(--ink-mute)' }}><Trash2 size={12} /></button></td>
                     </tr>
@@ -1091,10 +1277,10 @@ function CatalogImport({ existingItems, onImport, onCancel }) {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button onClick={doImport} disabled={valid.length === 0}
+            <button onClick={doImport} disabled={validRowCount === 0}
               className="px-6 py-3 text-xs uppercase text-white disabled:opacity-50"
               style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-              {valid.length} Artikel importieren ({mode})
+              {validRowCount} Artikel importieren ({mode})
             </button>
             <button onClick={() => { setStep('upload'); setRows([]); }}
               className="px-6 py-3 text-xs uppercase"
@@ -1119,6 +1305,8 @@ function InventoryView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
   const [showAssign, setShowAssign] = useState(null);
   const [showCatalogImport, setShowCatalogImport] = useState(false);
+  const [view, setView] = useState('aggregiert'); // 'aggregiert' | 'einzeln'
+  const [openGroups, setOpenGroups] = useState({}); // {groupKey: true}
 
   const filtered = data.inventory.filter(i => {
     if (filter === 'alle') return true;
@@ -1128,28 +1316,58 @@ function InventoryView({ data, update }) {
     return i.itemType === filter;
   });
 
-  function applyCatalogImport(newItems, mode) {
-    let merged;
-    if (mode === 'replace') {
-      merged = newItems;
-    } else if (mode === 'add') {
-      // Doppelte IDs vermeiden
-      const existingIds = new Set(data.items.map(i => i.id));
-      const filtered = newItems.filter(n => !existingIds.has(n.id));
-      merged = [...data.items, ...filtered];
-    } else if (mode === 'update') {
-      // Per ID matchen, fehlende neu anhängen
-      const byId = new Map(data.items.map(i => [i.id, i]));
-      newItems.forEach(n => {
-        if (byId.has(n.id)) {
-          byId.set(n.id, { ...byId.get(n.id), ...n });
-        } else {
-          byId.set(n.id, n);
-        }
-      });
-      merged = Array.from(byId.values());
-    }
-    update('items', merged);
+  // Aggregation: pro Artikel × Größe eine Gruppe
+  const groups = useMemo(() => {
+    const map = new Map();
+    filtered.forEach(i => {
+      const key = `${i.itemType}__${i.size || '–'}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          itemType: i.itemType,
+          itemName: i.itemName,
+          size: i.size || '–',
+          items: [],
+          total: 0,
+          lager: 0,
+          ausgegeben: 0,
+          markiert: 0,
+        });
+      }
+      const g = map.get(key);
+      g.items.push(i);
+      g.total++;
+      if (i.status === 'lager') g.lager++;
+      if (i.status === 'ausgegeben') g.ausgegeben++;
+      if (i.flagged) g.markiert++;
+    });
+    // Größen-Sortierung: XS, S, M, L, XL, XXL, dann Rest
+    const sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '116', '128', '140', '152', '164', '176', '188'];
+    const sizeIdx = (s) => {
+      const i = sizeOrder.indexOf(s);
+      return i === -1 ? 999 : i;
+    };
+    return [...map.values()].sort((a, b) => {
+      if (a.itemName !== b.itemName) return a.itemName.localeCompare(b.itemName);
+      return sizeIdx(a.size) - sizeIdx(b.size);
+    });
+  }, [filtered]);
+
+  function toggleGroup(key) {
+    setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  function expandAll() {
+    setOpenGroups(Object.fromEntries(groups.map(g => [g.key, true])));
+  }
+
+  function collapseAll() {
+    setOpenGroups({});
+  }
+
+  function applyCatalogImport(mergedItems) {
+    // CatalogImport liefert die fertige Liste (inkl. Merge-Logik) — wir speichern sie direkt.
+    update('items', mergedItems);
     setShowCatalogImport(false);
   }
 
@@ -1190,6 +1408,54 @@ function InventoryView({ data, update }) {
     update('inventory', data.inventory.filter(i => i.id !== invId));
   }
 
+  function renderItemRow(i) {
+    const person = findPerson(data, i.assignedTo);
+    const conditionLabel = getConditionFactors(data.settings)[i.condition]?.label || i.condition;
+    return (
+      <tr key={i.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
+        <td className="p-3 pl-10 text-sm" style={{ color: 'var(--ink-mute)' }}>
+          <span className="text-xs">↳</span> {i.itemName}
+        </td>
+        <td className="p-3 hidden sm:table-cell text-sm">{i.size}</td>
+        <td className="p-3 hidden md:table-cell">
+          <span className={`inline-block px-2 py-0.5 text-xs ${i.status === 'lager' ? 'bg-stone-100 text-stone-700' : 'bg-emerald-50 text-emerald-700'}`}>
+            {i.status === 'lager' ? 'Lager' : 'Ausgegeben'}
+          </span>
+          {i.flagged && (
+            <span className="inline-block px-2 py-0.5 text-xs ml-1" style={{ background: '#F5EBDD', color: 'var(--warn)' }}
+              title={`Markiert: ${(i.flagReasons || []).map(x => REASON_LABELS[x] || x).join(', ')}`}>
+              ⚠ markiert
+            </span>
+          )}
+        </td>
+        <td className="p-3">
+          {person ? (
+            <div>
+              <div className="text-sm">
+                #{i.assignedNumber || person.number} {person.firstName} {person.lastName}
+                {person._kind === 'coach' && (
+                  <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
+                )}
+              </div>
+              <div className="text-xs text-stone-500">{person.team}</div>
+            </div>
+          ) : <span className="text-stone-400 text-sm">–</span>}
+        </td>
+        <td className="p-3 hidden lg:table-cell text-sm" style={{ color: 'var(--ink-soft)' }}>{conditionLabel}</td>
+        <td className="p-3 text-right whitespace-nowrap">
+          {i.status === 'lager' ? (
+            <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">Ausgeben</button>
+          ) : (
+            <button onClick={() => unassign(i.id)} className="text-xs border border-stone-300 px-2 py-1">Zurück</button>
+          )}
+          <button onClick={() => remove(i.id)} className="text-stone-400 hover:text-red-600 p-1 ml-1">
+            <Trash2 size={14} />
+          </button>
+        </td>
+      </tr>
+    );
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
@@ -1206,27 +1472,103 @@ function InventoryView({ data, update }) {
         </div>
       </div>
 
-      <div className="flex gap-2 mb-4 overflow-x-auto -mx-4 px-4 pb-1">
-        {[
-          { id: 'alle', label: `Alle (${data.inventory.length})` },
-          { id: 'lager', label: `Im Lager (${data.inventory.filter(i => i.status === 'lager').length})` },
-          { id: 'ausgegeben', label: `Ausgegeben (${data.inventory.filter(i => i.status === 'ausgegeben').length})` },
-          { id: 'markiert', label: `Markiert (${data.inventory.filter(i => i.flagged).length})` },
-        ].map(f => (
-          <button key={f.id} onClick={() => setFilter(f.id)}
-            className={`px-3 py-1.5 text-xs font-medium whitespace-nowrap ${filter === f.id ? 'bg-stone-900 text-white' : 'bg-white border border-stone-200'}`}>
-            {f.label}
+      <div className="flex flex-wrap gap-2 mb-4 items-center justify-between">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[
+            { id: 'alle', label: `Alle (${data.inventory.length})` },
+            { id: 'lager', label: `Im Lager (${data.inventory.filter(i => i.status === 'lager').length})` },
+            { id: 'ausgegeben', label: `Ausgegeben (${data.inventory.filter(i => i.status === 'ausgegeben').length})` },
+            { id: 'markiert', label: `Markiert (${data.inventory.filter(i => i.flagged).length})` },
+          ].map(f => (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              className={`px-3 py-1.5 text-xs font-medium whitespace-nowrap ${filter === f.id ? 'bg-stone-900 text-white' : 'bg-white border border-stone-200'}`}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1 items-center text-xs">
+          <span style={{ color: 'var(--ink-mute)' }}>Ansicht:</span>
+          <button onClick={() => setView('aggregiert')}
+            className={`px-3 py-1.5 ${view === 'aggregiert' ? 'bg-stone-900 text-white' : 'bg-white border border-stone-200'}`}>
+            Gruppiert
           </button>
-        ))}
+          <button onClick={() => setView('einzeln')}
+            className={`px-3 py-1.5 ${view === 'einzeln' ? 'bg-stone-900 text-white' : 'bg-white border border-stone-200'}`}>
+            Einzeln
+          </button>
+          {view === 'aggregiert' && groups.length > 0 && (
+            <>
+              <button onClick={expandAll} className="px-2 py-1.5 underline ml-2" style={{ color: 'var(--vereinsblau)' }}>Alle auf</button>
+              <button onClick={collapseAll} className="px-2 py-1.5 underline" style={{ color: 'var(--vereinsblau)' }}>Alle zu</button>
+            </>
+          )}
+        </div>
       </div>
 
       {showForm && <InventoryAddForm items={data.items} onSave={addBulk} onCancel={() => setShowForm(false)} />}
       {showAssign && <AssignForm inv={showAssign} persons={allPersons(data)} inventory={data.inventory} onAssign={assign} onCancel={() => setShowAssign(null)} />}
-      {showCatalogImport && <CatalogImport existingItems={data.items} onImport={applyCatalogImport} onCancel={() => setShowCatalogImport(false)} />}
+      {showCatalogImport && <CatalogImport existingItems={data.items} suppliers={data.suppliers || []} onImport={applyCatalogImport} onCancel={() => setShowCatalogImport(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
           <div className="p-12 text-center text-stone-500 text-sm">Kein Material in dieser Auswahl.</div>
+        ) : view === 'aggregiert' ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
+                <tr>
+                  <th className="text-left p-3 font-medium">Artikel</th>
+                  <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
+                  <th className="text-right p-3 font-medium">Lager</th>
+                  <th className="text-right p-3 font-medium">Ausgegeben</th>
+                  <th className="text-right p-3 font-medium">Markiert</th>
+                  <th className="text-right p-3 font-medium">Gesamt</th>
+                  <th className="p-3 w-8"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map(g => {
+                  const isOpen = !!openGroups[g.key];
+                  return (
+                    <React.Fragment key={g.key}>
+                      <tr className="border-t border-stone-100 cursor-pointer hover:bg-stone-50" onClick={() => toggleGroup(g.key)}>
+                        <td className="p-3 font-medium">
+                          <span className="inline-block w-4 mr-1 text-xs" style={{ color: 'var(--vereinsblau)' }}>{isOpen ? '▾' : '▸'}</span>
+                          {g.itemName}
+                        </td>
+                        <td className="p-3 hidden sm:table-cell">{g.size}</td>
+                        <td className="p-3 text-right">
+                          <span className={g.lager > 0 ? '' : 'text-stone-400'}>{g.lager}</span>
+                        </td>
+                        <td className="p-3 text-right">
+                          <span className={g.ausgegeben > 0 ? '' : 'text-stone-400'}>{g.ausgegeben}</span>
+                        </td>
+                        <td className="p-3 text-right">
+                          {g.markiert > 0 ? (
+                            <span className="inline-block px-2 py-0.5 text-xs" style={{ background: '#F5EBDD', color: 'var(--warn)' }}>⚠ {g.markiert}</span>
+                          ) : <span className="text-stone-400">0</span>}
+                        </td>
+                        <td className="p-3 text-right font-medium">{g.total}</td>
+                        <td className="p-3 text-right text-xs" style={{ color: 'var(--ink-mute)' }}>
+                          {isOpen ? 'zu' : 'auf'}
+                        </td>
+                      </tr>
+                      {isOpen && g.items.map(i => renderItemRow(i))}
+                    </React.Fragment>
+                  );
+                })}
+                {/* Summenzeile */}
+                <tr style={{ background: 'var(--paper-dark)', fontWeight: 600 }}>
+                  <td className="p-3" colSpan={2}>Summe</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.lager, 0)}</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.ausgegeben, 0)}</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.markiert, 0)}</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.total, 0)}</td>
+                  <td className="p-3"></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -1967,15 +2309,35 @@ function OrderForm({ data, onSave, onCancel }) {
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([]);
   const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '' });
+  const [showPersonPicker, setShowPersonPicker] = useState(false);
+  const [distributingLineId, setDistributingLineId] = useState(null);
 
   const suppliers = data.suppliers || [];
   const articleSuppliers = suppliers.filter(s => s.type === 'artikel' || s.type === 'beides');
   const flockSuppliers = suppliers.filter(s => s.type === 'flock' || s.type === 'beides');
 
-  const teamPlayers = data.players.filter(p => p.team === team);
+  // Mannschafts-Filter wird in allen Bestelltypen verwendet (auch "einzeln")
+  const teamPlayers = team ? data.players.filter(p => p.team === team) : data.players;
+  const teamCoaches = team ? (data.coaches || []).filter(c => c.team === team) : (data.coaches || []);
+
+  // Hilfsfunktion: Person-Anzeige mit Nummer/Initialen
+  function personLabel(p, kind) {
+    const isCoach = kind === 'coach';
+    const numStr = p.number ? (isCoach ? p.number : `#${p.number}`) : '';
+    return `${numStr ? numStr + ' ' : ''}${p.firstName} ${p.lastName}${p.size ? ` · ${p.size}` : ''}`;
+  }
 
   function addLine() {
-    setLines([...lines, { id: `l_${Date.now()}_${Math.random()}`, itemType: data.items[0].id, size: 'L', qty: 1, playerId: '', number: '', name: '' }]);
+    setLines([...lines, {
+      id: `l_${Date.now()}_${Math.random()}`,
+      itemType: data.items[0]?.id || '',
+      size: 'L',
+      qty: 1,
+      playerId: '',
+      personKind: null,
+      number: '',
+      name: '',
+    }]);
   }
 
   function updateLine(id, key, val) {
@@ -1983,11 +2345,26 @@ function OrderForm({ data, onSave, onCancel }) {
       if (l.id !== id) return l;
       const nl = { ...l, [key]: val };
       // Wenn Spieler/Trainer gewählt → automatisch Nummer und Name vorbelegen
-      if (key === 'playerId' && val) {
-        const p = findPerson(data, val);
-        if (p) {
-          nl.number = p.number || '';
-          nl.name = p.lastName.toUpperCase();
+      if (key === 'playerId') {
+        if (val) {
+          // Person finden
+          let person = data.players.find(p => p.id === val);
+          let kind = 'player';
+          if (!person) {
+            person = (data.coaches || []).find(c => c.id === val);
+            kind = 'coach';
+          }
+          if (person) {
+            nl.personKind = kind;
+            nl.number = person.number != null ? String(person.number) : '';
+            nl.name = (person.lastName || '').toUpperCase();
+            // Größe übernehmen, falls noch Standardwert
+            if (person.size && (!l.size || l.size === 'L')) {
+              nl.size = person.size;
+            }
+          }
+        } else {
+          nl.personKind = null;
         }
       }
       return nl;
@@ -1996,15 +2373,57 @@ function OrderForm({ data, onSave, onCancel }) {
 
   function removeLine(id) { setLines(lines.filter(l => l.id !== id)); }
 
+  // Erzeugt Linien aus einer Auswahl von Personen
+  function addLinesForPersons({ itemType, size, persons }) {
+    const newLines = persons.map((entry, idx) => {
+      const { person, kind } = entry;
+      return {
+        id: `l_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 5)}`,
+        itemType,
+        size: size || person.size || 'L',
+        qty: 1,
+        playerId: person.id,
+        personKind: kind,
+        number: person.number != null ? String(person.number) : '',
+        name: (person.lastName || '').toUpperCase(),
+      };
+    });
+    setLines([...lines, ...newLines]);
+  }
+
+  // Verteilt eine Sammelposition auf ausgewählte Personen:
+  // 1 Sammelzeile mit Menge N → N einzelne Personen-Zeilen mit Menge 1
+  function distributeLine({ lineId, persons }) {
+    const line = lines.find(l => l.id === lineId);
+    if (!line) return;
+    const newLines = persons.map((entry, idx) => {
+      const { person, kind } = entry;
+      return {
+        id: `l_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 5)}`,
+        itemType: line.itemType,
+        size: line.size,
+        qty: 1,
+        playerId: person.id,
+        personKind: kind,
+        number: person.number != null ? String(person.number) : '',
+        name: (person.lastName || '').toUpperCase(),
+      };
+    });
+    // Sammelzeile ersetzen
+    setLines(lines.flatMap(l => l.id === lineId ? newLines : [l]));
+  }
+
   function generateComplete() {
     // Komplettbestellung: für jeden Spieler der Mannschaft eine Standard-Set
     const newLines = [];
     teamPlayers.forEach(p => {
-      data.items.slice(0, 3).forEach(item => { // Trikot heim, auswärts, short heim als Beispiel-Standard
+      data.items.slice(0, 3).forEach((item, j) => {
         newLines.push({
-          id: `l_${Date.now()}_${Math.random()}`,
+          id: `l_${Date.now()}_${p.id}_${j}`,
           itemType: item.id, size: p.size || 'L', qty: 1,
-          playerId: p.id, number: p.number || '', name: p.lastName.toUpperCase(),
+          playerId: p.id, personKind: 'player',
+          number: p.number != null ? String(p.number) : '',
+          name: (p.lastName || '').toUpperCase(),
         });
       });
     });
@@ -2016,7 +2435,7 @@ function OrderForm({ data, onSave, onCancel }) {
     if (lines.length === 0) return alert('Keine Positionen');
     onSave({
       title, type,
-      team: type === 'komplett' || type === 'teilweise' ? team : null,
+      team: team || null,
       articleSupplierId, flockSupplierId, flockBy,
       notes, lines, sponsors,
       fromReports: [],
@@ -2037,14 +2456,12 @@ function OrderForm({ data, onSave, onCancel }) {
             <option value="einzeln">Einzelteile (Verschleiß-Ersatz)</option>
           </select>
         </Field>
-        {(type === 'komplett' || type === 'teilweise') && (
-          <Field label="Mannschaft">
-            <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={team} onChange={e => setTeam(e.target.value)}>
-              <option value="">– wählen –</option>
-              {data.teams.map(t => <option key={t}>{t}</option>)}
-            </select>
-          </Field>
-        )}
+        <Field label="Mannschaft (Vorfilter)">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={team} onChange={e => setTeam(e.target.value)}>
+            <option value="">– alle / mehrere –</option>
+            {data.teams.map(t => <option key={t}>{t}</option>)}
+          </select>
+        </Field>
         <Field label="Artikel-Lieferant (Ausrüster)">
           <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={articleSupplierId} onChange={e => setArticleSupplierId(e.target.value)}>
             <option value="">– kein Lieferant ausgewählt –</option>
@@ -2120,7 +2537,11 @@ function OrderForm({ data, onSave, onCancel }) {
       </div>
 
       <div className="flex flex-wrap gap-2 mb-3">
-        <button onClick={addLine} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1"><Plus size={12} /> Position</button>
+        <button onClick={addLine} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1"><Plus size={12} /> Einzelne Position</button>
+        <button onClick={() => setShowPersonPicker(true)} className="text-xs px-3 py-1.5 flex items-center gap-1 text-white"
+          style={{ background: 'var(--vereinsblau)' }}>
+          <Users size={12} /> Personen auswählen…
+        </button>
         {type === 'komplett' && teamPlayers.length > 0 && (
           <button onClick={generateComplete} className="text-xs bg-stone-100 px-3 py-1.5">
             Standard-Set für {teamPlayers.length} Spieler erzeugen
@@ -2128,51 +2549,127 @@ function OrderForm({ data, onSave, onCancel }) {
         )}
       </div>
 
+      {showPersonPicker && (
+        <PersonPicker
+          data={data}
+          team={team}
+          onSelect={(payload) => {
+            addLinesForPersons(payload);
+            setShowPersonPicker(false);
+          }}
+          onCancel={() => setShowPersonPicker(false)}
+        />
+      )}
+
+      {distributingLineId && (() => {
+        const line = lines.find(l => l.id === distributingLineId);
+        if (!line) return null;
+        const itemName = data.items.find(i => i.id === line.itemType)?.name || line.itemType;
+        return (
+          <PersonPicker
+            data={data}
+            team={team}
+            mode="distribute"
+            preselectQty={line.qty}
+            preselectSize={line.size}
+            preselectItemName={itemName}
+            onSelect={({ persons }) => {
+              distributeLine({ lineId: distributingLineId, persons });
+              setDistributingLineId(null);
+            }}
+            onCancel={() => setDistributingLineId(null)}
+          />
+        );
+      })()}
+
       {lines.length > 0 && (
         <div className="border border-stone-200 mb-4 overflow-x-auto">
-          <table className="w-full text-xs min-w-[600px]">
+          <table className="w-full text-xs min-w-[700px]">
             <thead className="bg-stone-50 uppercase tracking-wider text-stone-500">
               <tr>
                 <th className="text-left p-2">Artikel</th>
                 <th className="text-left p-2">Größe</th>
                 <th className="text-left p-2">Menge</th>
-                <th className="text-left p-2">Spieler</th>
-                <th className="text-left p-2">Nr.</th>
+                <th className="text-left p-2">Person</th>
+                <th className="text-left p-2">Nr./Init.</th>
                 <th className="text-left p-2">Flock-Name</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
-              {lines.map(l => (
-                <tr key={l.id} className="border-t border-stone-100">
-                  <td className="p-1">
-                    <select value={l.itemType} onChange={e => updateLine(l.id, 'itemType', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs w-full">
-                      {data.items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                    </select>
-                  </td>
-                  <td className="p-1">
-                    <select value={l.size} onChange={e => updateLine(l.id, 'size', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs">
-                      {['XS','S','M','L','XL','XXL','3XL'].map(s => <option key={s}>{s}</option>)}
-                    </select>
-                  </td>
-                  <td className="p-1"><input type="number" min="1" value={l.qty} onChange={e => updateLine(l.id, 'qty', parseInt(e.target.value) || 1)} className="border border-stone-300 px-1 py-1 text-xs w-14" /></td>
-                  <td className="p-1">
-                    <select value={l.playerId} onChange={e => updateLine(l.id, 'playerId', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs w-full">
-                      <option value="">– Lager –</option>
-                      <optgroup label="Spieler">
-                        {data.players.map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
-                      </optgroup>
-                      <optgroup label="Trainer">
-                        {(data.coaches || []).map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
-                      </optgroup>
-                    </select>
-                  </td>
-                  <td className="p-1"><input type="number" value={l.number} onChange={e => updateLine(l.id, 'number', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs w-12" /></td>
-                  <td className="p-1"><input value={l.name} onChange={e => updateLine(l.id, 'name', e.target.value.toUpperCase())} className="border border-stone-300 px-1 py-1 text-xs w-full" /></td>
-                  <td><button onClick={() => removeLine(l.id)} className="text-red-600 p-1"><X size={12} /></button></td>
-                </tr>
-              ))}
+              {lines.map(l => {
+                const isCoach = l.personKind === 'coach';
+                const isCollective = !l.playerId && l.qty > 1;
+                return (
+                  <tr key={l.id} className="border-t border-stone-100">
+                    <td className="p-1">
+                      <select value={l.itemType} onChange={e => updateLine(l.id, 'itemType', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs w-full">
+                        {data.items.map(i => (
+                          <option key={i.id} value={i.id}>
+                            {i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="p-1">
+                      <select value={l.size} onChange={e => updateLine(l.id, 'size', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs">
+                        {['XS','S','M','L','XL','XXL','3XL'].map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td className="p-1">
+                      <div className="flex items-center gap-1">
+                        <input type="number" min="1" value={l.qty} onChange={e => updateLine(l.id, 'qty', parseInt(e.target.value) || 1)} className="border border-stone-300 px-1 py-1 text-xs w-14" />
+                        {isCollective && (
+                          <button
+                            onClick={() => setDistributingLineId(l.id)}
+                            title={`${l.qty} Stück auf Personen verteilen`}
+                            className="text-[10px] px-1.5 py-1 whitespace-nowrap"
+                            style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.1em' }}>
+                            verteilen
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                    <td className="p-1">
+                      <select value={l.playerId} onChange={e => updateLine(l.id, 'playerId', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs w-full">
+                        <option value="">– Lager / Sammelpos. –</option>
+                        <optgroup label="Spieler">
+                          {teamPlayers.map(p => <option key={p.id} value={p.id}>#{p.number || '–'} {p.firstName} {p.lastName}{team ? '' : ` (${p.team})`}</option>)}
+                        </optgroup>
+                        <optgroup label="Trainer">
+                          {teamCoaches.map(p => <option key={p.id} value={p.id}>{p.number || '–'} {p.firstName} {p.lastName}{team ? '' : ` (${p.team})`}</option>)}
+                        </optgroup>
+                      </select>
+                    </td>
+                    <td className="p-1">
+                      <input
+                        type="text"
+                        inputMode={isCoach ? 'text' : 'numeric'}
+                        maxLength={3}
+                        placeholder={isCoach ? 'DW' : '7'}
+                        value={l.number}
+                        onChange={e => {
+                          const val = isCoach
+                            ? e.target.value.replace(/[^a-zA-ZäöüÄÖÜß]/g, '').slice(0, 3).toUpperCase()
+                            : e.target.value.replace(/[^0-9]/g, '');
+                          updateLine(l.id, 'number', val);
+                        }}
+                        className={`border border-stone-300 px-1 py-1 text-xs w-14 ${isCoach ? 'uppercase' : ''}`}
+                      />
+                    </td>
+                    <td className="p-1"><input value={l.name} onChange={e => updateLine(l.id, 'name', e.target.value.toUpperCase())} className="border border-stone-300 px-1 py-1 text-xs w-full" /></td>
+                    <td><button onClick={() => removeLine(l.id)} className="text-red-600 p-1"><X size={12} /></button></td>
+                  </tr>
+                );
+              })}
             </tbody>
+            <tfoot className="bg-stone-50 text-xs">
+              <tr>
+                <td className="p-2 font-medium" colSpan={2}>Summe Positionen</td>
+                <td className="p-2 font-medium">{lines.reduce((s, l) => s + (l.qty || 0), 0)} Teile</td>
+                <td className="p-2" colSpan={4}></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
@@ -2180,6 +2677,215 @@ function OrderForm({ data, onSave, onCancel }) {
       <div className="flex gap-2">
         <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Bestellung anlegen</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
+      </div>
+    </div>
+  );
+}
+
+// Picker für Spieler/Trainer-Multi-Select.
+// Modus 'add': Artikel + Größe wählen, beliebig viele Personen → eine Zeile pro Person.
+// Modus 'distribute': Artikel/Größe sind vorgegeben (Sammelposition), Auswahl auf preselectQty begrenzt.
+function PersonPicker({ data, team, mode = 'add', preselectQty, preselectSize, preselectItemName, onSelect, onCancel }) {
+  const isDistribute = mode === 'distribute';
+  const [filterTeam, setFilterTeam] = useState(team || '');
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState({}); // { personId: 'player' | 'coach' }
+  const [itemType, setItemType] = useState(isDistribute ? null : (data.items[0]?.id || ''));
+  const [size, setSize] = useState(preselectSize || 'L');
+
+  // Pool je nach Filter
+  const allPlayers = (data.players || []).filter(p => !filterTeam || p.team === filterTeam);
+  const allCoaches = (data.coaches || []).filter(c => !filterTeam || c.team === filterTeam);
+
+  const searchLower = search.trim().toLowerCase();
+  function matchesSearch(p) {
+    if (!searchLower) return true;
+    const haystack = `${p.firstName} ${p.lastName} ${p.number || ''}`.toLowerCase();
+    return haystack.includes(searchLower);
+  }
+  const filteredPlayers = allPlayers.filter(matchesSearch);
+  const filteredCoaches = allCoaches.filter(matchesSearch);
+
+  function toggle(id, kind) {
+    setSelected(prev => {
+      const copy = { ...prev };
+      if (copy[id]) delete copy[id];
+      else copy[id] = kind;
+      return copy;
+    });
+  }
+
+  function selectAllVisible() {
+    const all = { ...selected };
+    filteredPlayers.forEach(p => { all[p.id] = 'player'; });
+    filteredCoaches.forEach(c => { all[c.id] = 'coach'; });
+    setSelected(all);
+  }
+
+  function clearAll() {
+    setSelected({});
+  }
+
+  const selectedCount = Object.keys(selected).length;
+  const limitReached = isDistribute && preselectQty && selectedCount > preselectQty;
+
+  function confirm() {
+    if (!isDistribute && !itemType) {
+      alert('Bitte einen Artikel auswählen.');
+      return;
+    }
+    if (selectedCount === 0) {
+      alert('Bitte mindestens eine Person auswählen.');
+      return;
+    }
+    if (isDistribute && preselectQty && selectedCount !== preselectQty) {
+      if (!window.confirm(`Du hast ${selectedCount} Personen ausgewählt, die Sammelposition hatte aber Menge ${preselectQty}. Trotzdem fortfahren? Es wird je eine Zeile mit Menge 1 pro Person erzeugt.`)) {
+        return;
+      }
+    }
+
+    const persons = [];
+    [...filteredPlayers, ...allPlayers.filter(p => !filteredPlayers.includes(p))].forEach(p => {
+      if (selected[p.id] === 'player' && !persons.find(x => x.person.id === p.id)) {
+        persons.push({ person: p, kind: 'player' });
+      }
+    });
+    [...filteredCoaches, ...allCoaches.filter(c => !filteredCoaches.includes(c))].forEach(c => {
+      if (selected[c.id] === 'coach' && !persons.find(x => x.person.id === c.id)) {
+        persons.push({ person: c, kind: 'coach' });
+      }
+    });
+
+    onSelect({
+      itemType,
+      size,
+      persons,
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
+      <div className="bg-white max-w-2xl w-full max-h-[90vh] flex flex-col" style={{ border: '2px solid var(--vereinsblau)' }}>
+        <div className="p-5 border-b border-stone-200 flex justify-between items-start">
+          <div>
+            <div className="section-label mb-1">{isDistribute ? 'POSITION VERTEILEN' : 'PERSONEN AUSWÄHLEN'}</div>
+            <h2 className="font-display text-2xl">
+              {isDistribute ? `${preselectItemName || 'Artikel'} · Größe ${preselectSize} · ${preselectQty} Stück` : 'Spieler & Trainer wählen'}
+            </h2>
+            {isDistribute && (
+              <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>
+                Wähle bis zu {preselectQty} Personen aus. Die Sammelposition wird in einzelne Zeilen aufgesplittet.
+              </p>
+            )}
+          </div>
+          <button onClick={onCancel} className="p-1 hover:bg-stone-100"><X size={18} /></button>
+        </div>
+
+        <div className="p-5 space-y-3 overflow-y-auto flex-1">
+          {!isDistribute && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Artikel">
+                <select value={itemType} onChange={e => setItemType(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
+                  {data.items.map(i => (
+                    <option key={i.id} value={i.id}>
+                      {i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Größe">
+                <select value={size} onChange={e => setSize(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
+                  {['XS','S','M','L','XL','XXL','3XL'].map(s => <option key={s}>{s}</option>)}
+                </select>
+              </Field>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Mannschaft (Filter)">
+              <select value={filterTeam} onChange={e => setFilterTeam(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
+                <option value="">– alle Mannschaften –</option>
+                {(data.teams || []).map(t => <option key={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="Suche (Name oder Nummer)">
+              <input value={search} onChange={e => setSearch(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm" placeholder="z.B. Müller oder 7" />
+            </Field>
+          </div>
+
+          <div className="flex justify-between items-center text-xs">
+            <div style={{ color: 'var(--ink-mute)' }}>
+              {selectedCount} ausgewählt
+              {isDistribute && preselectQty ? ` von ${preselectQty}` : ''}
+              {limitReached && <span className="ml-2" style={{ color: 'var(--warn)' }}>· mehr als Sammelposition</span>}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={selectAllVisible} className="underline" style={{ color: 'var(--vereinsblau)' }}>Alle sichtbaren wählen</button>
+              <button onClick={clearAll} className="underline" style={{ color: 'var(--vereinsblau)' }}>Auswahl leeren</button>
+            </div>
+          </div>
+
+          {filteredPlayers.length > 0 && (
+            <div>
+              <div className="font-sub text-xs mb-2 mt-2" style={{ color: 'var(--ink-mute)', letterSpacing: '0.18em' }}>
+                SPIELER ({filteredPlayers.length})
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                {filteredPlayers.sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999)).map(p => (
+                  <label key={p.id} className="flex items-center gap-2 p-2 cursor-pointer text-sm hover:bg-stone-50"
+                    style={{ border: '1px solid', borderColor: selected[p.id] ? 'var(--vereinsblau)' : 'var(--rule)', background: selected[p.id] ? '#F1ECDF' : 'white' }}>
+                    <input type="checkbox" checked={!!selected[p.id]} onChange={() => toggle(p.id, 'player')} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-display text-base" style={{ color: 'var(--vereinsblau)', minWidth: '1.5rem' }}>{p.number || '–'}</span>
+                        <span className="truncate">{p.firstName} {p.lastName}</span>
+                      </div>
+                      <div className="text-[10px]" style={{ color: 'var(--ink-mute)' }}>{p.team} · {p.size || '–'}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {filteredCoaches.length > 0 && (
+            <div>
+              <div className="font-sub text-xs mb-2 mt-2" style={{ color: 'var(--ink-mute)', letterSpacing: '0.18em' }}>
+                TRAINER ({filteredCoaches.length})
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                {filteredCoaches.sort((a, b) => (a.lastName || '').localeCompare(b.lastName || '')).map(c => (
+                  <label key={c.id} className="flex items-center gap-2 p-2 cursor-pointer text-sm hover:bg-stone-50"
+                    style={{ border: '1px solid', borderColor: selected[c.id] ? 'var(--vereinsblau)' : 'var(--rule)', background: selected[c.id] ? '#F1ECDF' : 'white' }}>
+                    <input type="checkbox" checked={!!selected[c.id]} onChange={() => toggle(c.id, 'coach')} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em', minWidth: '2rem', textAlign: 'center' }}>
+                          {c.number || '–'}
+                        </span>
+                        <span className="truncate">{c.firstName} {c.lastName}</span>
+                      </div>
+                      <div className="text-[10px]" style={{ color: 'var(--ink-mute)' }}>{c.team} · {c.size || '–'}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {filteredPlayers.length === 0 && filteredCoaches.length === 0 && (
+            <p className="text-sm py-4 text-center" style={{ color: 'var(--ink-mute)' }}>Keine Personen für diese Auswahl.</p>
+          )}
+        </div>
+
+        <div className="p-5 border-t border-stone-200 flex justify-end gap-2">
+          <button onClick={onCancel} className="px-4 py-2 text-sm border border-stone-300">Abbrechen</button>
+          <button onClick={confirm} disabled={selectedCount === 0}
+            className="px-5 py-2 text-sm uppercase text-white disabled:opacity-50"
+            style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            {isDistribute ? `${selectedCount} Zeilen erzeugen` : `${selectedCount} Personen übernehmen`}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2197,14 +2903,17 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 
   function exportFlockList() {
     const sponsors = order.sponsors || {};
-    const rows = [['Artikel', 'Größe', 'Menge', 'Mannschaft', 'Spieler', 'Rückennummer', 'Flock-Name', 'Sponsor Brust', 'Sponsor Rücken', 'Sponsor Ärmel']];
+    const rows = [['Art.-Nr.', 'Artikel', 'Größe', 'Menge', 'Mannschaft', 'Person', 'Rolle', 'Nr./Init.', 'Flock-Name', 'Sponsor Brust', 'Sponsor Rücken', 'Sponsor Ärmel']];
     order.lines.forEach(l => {
+      const item = data.items.find(i => i.id === l.itemType);
       const player = findPerson(data, l.playerId);
       rows.push([
-        data.items.find(i => i.id === l.itemType)?.name || l.itemType,
+        item?.articleNumber || '',
+        item?.name || l.itemType,
         l.size, l.qty,
         player?.team || order.team || '–',
         player ? `${player.firstName} ${player.lastName}` : 'Lagerware',
+        l.personKind === 'coach' ? 'Trainer' : (l.personKind === 'player' ? 'Spieler' : ''),
         l.number || '–',
         l.name || '–',
         sponsors.brust || '',
@@ -2216,7 +2925,7 @@ function OrderDetail({ order, data, onBack, onStatus }) {
   }
 
   function exportOrderList() {
-    const rows = [['Artikel', 'Größe', 'Menge']];
+    const rows = [['Art.-Nr.', 'Artikel', 'Größe', 'Menge']];
     // Aggregiert nach Artikel + Größe (für Lieferantenbestellung)
     const agg = {};
     order.lines.forEach(l => {
@@ -2225,7 +2934,13 @@ function OrderDetail({ order, data, onBack, onStatus }) {
       agg[key].qty += l.qty;
     });
     Object.values(agg).forEach(l => {
-      rows.push([data.items.find(i => i.id === l.itemType)?.name || l.itemType, l.size, l.qty]);
+      const item = data.items.find(i => i.id === l.itemType);
+      rows.push([
+        item?.articleNumber || '',
+        item?.name || l.itemType,
+        l.size,
+        l.qty,
+      ]);
     });
     downloadCSV(rows, `bestellliste_${order.title.replace(/\s+/g, '_')}.csv`);
   }
@@ -2316,14 +3031,19 @@ function OrderDetail({ order, data, onBack, onStatus }) {
         const key = `${l.itemType}__${l.size}`;
         if (!agg[key]) {
           const item = data.items.find(i => i.id === l.itemType);
-          agg[key] = { name: item?.name || l.itemType, size: l.size, qty: 0 };
+          agg[key] = {
+            articleNumber: item?.articleNumber || '',
+            name: item?.name || l.itemType,
+            size: l.size,
+            qty: 0,
+          };
         }
         agg[key].qty += l.qty;
       });
 
       doc.autoTable({
         startY: y,
-        head: [['BESTELLLISTE FUER LIEFERANTEN', '', '']],
+        head: [['BESTELLLISTE FUER LIEFERANTEN', '', '', '']],
         body: [],
         theme: 'plain',
         headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
@@ -2331,19 +3051,23 @@ function OrderDetail({ order, data, onBack, onStatus }) {
       });
       doc.autoTable({
         startY: doc.lastAutoTable.finalY,
-        head: [['Artikel', 'Groesse', 'Menge']],
-        body: Object.values(agg).map(a => [a.name, a.size, String(a.qty)]),
+        head: [['Art.-Nr.', 'Artikel', 'Groesse', 'Menge']],
+        body: Object.values(agg).map(a => [a.articleNumber || '-', a.name, a.size, String(a.qty)]),
         headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
         bodyStyles: { fontSize: 9 },
         alternateRowStyles: { fillColor: [252, 250, 246] },
-        columnStyles: { 2: { halign: 'right' } },
+        columnStyles: {
+          0: { fontStyle: 'bold', cellWidth: 28 },
+          2: { halign: 'center', cellWidth: 18 },
+          3: { halign: 'right', cellWidth: 18 },
+        },
         margin: { left: 14, right: 14 },
       });
 
       // Flock-Liste
       doc.autoTable({
         startY: doc.lastAutoTable.finalY + 8,
-        head: [['FLOCK-LISTE FUER DEN AUSRUESTER', '', '', '', '', '']],
+        head: [['FLOCK-LISTE FUER DEN AUSRUESTER', '', '', '', '', '', '']],
         body: [],
         theme: 'plain',
         headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
@@ -2351,15 +3075,20 @@ function OrderDetail({ order, data, onBack, onStatus }) {
       });
       doc.autoTable({
         startY: doc.lastAutoTable.finalY,
-        head: [['Artikel', 'Gr.', 'Mge', 'Mannschaft / Spieler', 'Nr.', 'Flock-Name']],
+        head: [['Art.-Nr.', 'Artikel', 'Gr.', 'Mge', 'Mannschaft / Person', 'Nr./Init.', 'Flock-Name']],
         body: order.lines.map(l => {
           const player = findPerson(data, l.playerId);
           const item = data.items.find(i => i.id === l.itemType);
+          const isCoach = l.personKind === 'coach';
+          const personLine = player
+            ? `${player.team || order.team || '-'}\n${player.firstName} ${player.lastName}${isCoach ? ' (Trainer)' : ''}`
+            : `${order.team || '-'}\nLagerware`;
           return [
+            item?.articleNumber || '-',
             item?.name || l.itemType,
             l.size,
             String(l.qty),
-            player ? `${player.team || order.team || '-'}\n${player.firstName} ${player.lastName}` : `${order.team || '-'}\nLagerware`,
+            personLine,
             l.number ? String(l.number) : '-',
             l.name || '-',
           ];
@@ -2368,10 +3097,11 @@ function OrderDetail({ order, data, onBack, onStatus }) {
         bodyStyles: { fontSize: 9, valign: 'middle' },
         alternateRowStyles: { fillColor: [252, 250, 246] },
         columnStyles: {
-          1: { halign: 'center' },
-          2: { halign: 'right' },
-          4: { halign: 'center', fontStyle: 'bold', fontSize: 11 },
-          5: { fontStyle: 'bold' },
+          0: { fontStyle: 'bold', cellWidth: 22 },
+          2: { halign: 'center', cellWidth: 12 },
+          3: { halign: 'right', cellWidth: 12 },
+          5: { halign: 'center', fontStyle: 'bold', fontSize: 11, cellWidth: 18 },
+          6: { fontStyle: 'bold' },
         },
         margin: { left: 14, right: 14 },
         didDrawPage: () => {
@@ -2465,12 +3195,13 @@ function OrderDetail({ order, data, onBack, onStatus }) {
           <table className="w-full text-sm">
             <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
               <tr>
+                <th className="text-left p-3">Art.-Nr.</th>
                 <th className="text-left p-3">Artikel</th>
                 <th className="text-left p-3">Größe</th>
                 <th className="text-left p-3">Menge</th>
                 <th className="text-left p-3">Mannschaft</th>
-                <th className="text-left p-3">Spieler</th>
-                <th className="text-left p-3 font-display text-base">NR.</th>
+                <th className="text-left p-3">Person</th>
+                <th className="text-left p-3 font-display text-base">NR./INIT.</th>
                 <th className="text-left p-3 font-display text-base">FLOCK-NAME</th>
               </tr>
             </thead>
@@ -2478,14 +3209,27 @@ function OrderDetail({ order, data, onBack, onStatus }) {
               {order.lines.map(l => {
                 const player = findPerson(data, l.playerId);
                 const item = data.items.find(i => i.id === l.itemType);
+                const isCoach = l.personKind === 'coach';
                 return (
                   <tr key={l.id} className="border-t border-stone-100">
+                    <td className="p-3 font-mono text-xs" style={{ color: 'var(--ink-soft)' }}>{item?.articleNumber || '–'}</td>
                     <td className="p-3">{item?.name}</td>
                     <td className="p-3">{l.size}</td>
                     <td className="p-3 font-medium">{l.qty}</td>
                     <td className="p-3 text-stone-600">{player?.team || order.team || '–'}</td>
-                    <td className="p-3">{player ? `${player.firstName} ${player.lastName}` : <span className="text-stone-400">Lagerware</span>}</td>
-                    <td className="p-3 font-display text-2xl">{l.number || '–'}</td>
+                    <td className="p-3">
+                      {player ? (
+                        <>
+                          {player.firstName} {player.lastName}
+                          {isCoach && (
+                            <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
+                          )}
+                        </>
+                      ) : <span className="text-stone-400">Lagerware</span>}
+                    </td>
+                    <td className={`p-3 ${isCoach ? 'font-sub text-xl' : 'font-display text-2xl'}`} style={isCoach ? { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.05em' } : undefined}>
+                      {l.number || '–'}
+                    </td>
                     <td className="p-3 font-display text-xl tracking-wider">{l.name || '–'}</td>
                   </tr>
                 );
@@ -2710,26 +3454,10 @@ function SettingsView({ data, update }) {
         {showItemImport && (
           <CatalogImport
             existingItems={items}
-            onImport={(newItems, mode) => {
-              let merged;
-              if (mode === 'replace') {
-                merged = newItems;
-              } else if (mode === 'add') {
-                const existingIds = new Set(items.map(i => i.id));
-                const additions = newItems.filter(n => !existingIds.has(n.id));
-                merged = [...items, ...additions];
-              } else { // update
-                const byId = new Map(items.map(i => [i.id, i]));
-                newItems.forEach(n => {
-                  if (byId.has(n.id)) {
-                    byId.set(n.id, { ...byId.get(n.id), ...n });
-                  } else {
-                    byId.set(n.id, n);
-                  }
-                });
-                merged = Array.from(byId.values());
-              }
-              setItems(merged);
+            suppliers={data.suppliers || []}
+            onImport={(mergedItems) => {
+              // CatalogImport liefert die fertige Liste — direkt übernehmen
+              setItems(mergedItems);
               setShowItemImport(false);
             }}
             onCancel={() => setShowItemImport(false)}
@@ -3336,12 +4064,18 @@ function ReportsView({ data, update }) {
     const lines = selected.map((r, idx) => {
       const person = getPlayer(r.team, r.number);
       const item = getItem(r.item);
+      // personKind aus Report (identifiedRole) oder durch Lookup ableiten
+      let personKind = r.identifiedRole || null;
+      if (!personKind && person) {
+        personKind = data.players.find(p => p.id === person.id) ? 'player' : 'coach';
+      }
       return {
         id: `l_${Date.now()}_${idx}`,
         itemType: r.item,
         size: person?.size || 'L',
         qty: 1,
         playerId: person?.id || '',
+        personKind,
         number: r.number || '',
         name: person?.lastName?.toUpperCase() || '',
         reportRef: r.id,
@@ -3409,9 +4143,12 @@ function ReportsView({ data, update }) {
   const filtered = filter === 'alle' ? reports : reports.filter(r => r.status === filter);
 
   function getPlayer(team, number) {
-    // Sucht zuerst unter Spielern, dann unter Trainern (Trainer haben oft hohe Nummern wie 99)
-    return data.players.find(p => p.team === team && String(p.number) === String(number))
-      || (data.coaches || []).find(c => c.team === team && String(c.number) === String(number));
+    // Spieler: numerisch matchen
+    const player = data.players.find(p => p.team === team && String(p.number) === String(number));
+    if (player) return player;
+    // Trainer: alphabetisch matchen, case-insensitive (Initialen)
+    const initials = String(number || '').trim().toUpperCase();
+    return (data.coaches || []).find(c => c.team === team && String(c.number || '').trim().toUpperCase() === initials);
   }
   function getItem(itemId) {
     return data.items.find(i => i.id === itemId);
@@ -3532,12 +4269,17 @@ function ReportsView({ data, update }) {
     openReports.forEach(r => {
       const player = getPlayer(r.team, r.number);
       const item = getItem(r.item);
+      let personKind = r.identifiedRole || null;
+      if (!personKind && player) {
+        personKind = data.players.find(p => p.id === player.id) ? 'player' : 'coach';
+      }
       lines.push({
         id: `l_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         itemType: r.item,
         size: player?.size || 'L',
         qty: 1,
         playerId: player?.id || '',
+        personKind,
         number: r.number,
         name: player ? player.lastName.toUpperCase() : '',
         reportRef: r.id,
@@ -3696,7 +4438,7 @@ function ReportsView({ data, update }) {
                       </td>
                       <td className="p-3">
                         <div className="font-medium">
-                          {r.team} · #{r.number}
+                          {r.team} · {r.identifiedRole === 'coach' ? r.number : `#${r.number}`}
                           {r.identifiedRole === 'coach' && (
                             <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
                           )}

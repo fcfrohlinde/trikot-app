@@ -210,8 +210,18 @@ export default function ReportForm({ onBack }) {
               </select>
             </Field>
 
-            <Field label="Rückennummer">
-              <input required type="number" inputMode="numeric" className="w-full px-3 py-2 text-sm" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={number} onChange={e => setNumber(e.target.value)} />
+            <Field label="Rückennummer (Spieler) oder Initialen (Trainer)">
+              <input
+                required
+                type="text"
+                inputMode="text"
+                maxLength={3}
+                placeholder="z.B. 7 oder DW"
+                className="w-full px-3 py-2 text-sm"
+                style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }}
+                value={number}
+                onChange={e => setNumber(e.target.value)}
+              />
             </Field>
 
             <Field label="Artikel">

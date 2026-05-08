@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     const { team, number, item, reasons, comment, name, photo } = req.body || {};
 
     if (!team || number === undefined || number === null || number === '') {
-      return res.status(400).json({ error: 'Team und Rückennummer sind Pflicht.' });
+      return res.status(400).json({ error: 'Team und Rückennummer/Initialen sind Pflicht.' });
     }
     if (!item) {
       return res.status(400).json({ error: 'Artikel fehlt.' });
@@ -54,8 +54,18 @@ export default async function handler(req, res) {
 
     const players = (await kv.get('data:players')) || [];
     const coaches = (await kv.get('data:coaches')) || [];
-    const player = players.find(p => p.team === team && String(p.number) === String(parseInt(number)));
-    const coach = coaches.find(c => c.team === team && String(c.number) === String(parseInt(number)));
+
+    // Spieler-Match: numerisch (parseInt für robusten Vergleich, falls "07" eingegeben wird)
+    const numAsInt = parseInt(String(number).replace(/[^0-9]/g, ''), 10);
+    const player = !isNaN(numAsInt)
+      ? players.find(p => p.team === team && String(p.number) === String(numAsInt))
+      : null;
+
+    // Trainer-Match: alphabetisch, case-insensitive (Initialen)
+    const numAsInitials = String(number).trim().toUpperCase();
+    const coach = numAsInitials
+      ? coaches.find(c => c.team === team && String(c.number || '').trim().toUpperCase() === numAsInitials)
+      : null;
 
     if (player) {
       identifiedRole = 'player';
