@@ -59,6 +59,65 @@ function findPerson(data, id) {
   return allPersons(data).find(p => p.id === id);
 }
 
+// Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
+function compressRanges(numbers) {
+  if (!numbers || numbers.length === 0) return '';
+  const sorted = [...numbers].sort((a, b) => a - b);
+  const parts = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i <= sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur !== prev + 1) {
+      // Bereich abschließen
+      if (start === prev) parts.push(String(start));
+      else if (prev === start + 1) parts.push(`${start}, ${prev}`);
+      else parts.push(`${start}–${prev}`);
+      start = cur;
+    }
+    prev = cur;
+  }
+  return parts.join(', ');
+}
+
+// Default-Permissions für Nicht-Admins. Spiegel der Backend-Defaults.
+const DEFAULT_USER_PERMISSIONS = {
+  canDeletePeople: false,
+  canCreateOrders: true,
+  canEditInventory: true,
+  canManageReports: true,
+  canManageDeposits: true,
+};
+
+// Zentrale Berechtigungsprüfung. Admins haben immer alles.
+function userCan(user, action) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  const perms = { ...DEFAULT_USER_PERMISSIONS, ...(user.permissions || {}) };
+  return perms[action] === true;
+}
+
+// Prüft, ob eine Person sicher gelöscht werden kann. Diese harten Schutzregeln gelten
+// AUCH für Admins — niemand soll versehentlich offene Pfänder oder ausgegebenes Material
+// auf den Boden fallen lassen, weil eine Person aus dem Datensatz verschwindet.
+function canDeletePerson(data, personId) {
+  const reasons = [];
+  const inventoryOut = (data.inventory || []).filter(i =>
+    i.assignedTo === personId && i.status === 'ausgegeben'
+  );
+  if (inventoryOut.length > 0) {
+    reasons.push(`${inventoryOut.length} ausgegebenes Materialteil${inventoryOut.length > 1 ? 'e' : ''} (zuerst zurückgeben)`);
+  }
+  const openDeposits = (data.deposits || []).filter(d =>
+    d.playerId === personId && !d.refunded && (Number(d.amount) || 0) > 0
+  );
+  if (openDeposits.length > 0) {
+    const sum = openDeposits.reduce((s, d) => s + (Number(d.amount) || 0), 0);
+    reasons.push(`${sum.toFixed(2)} € offenes Pfand (zuerst abrechnen)`);
+  }
+  return { ok: reasons.length === 0, reasons };
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -125,10 +184,16 @@ function AppContent() {
         return false;
       }),
       reports: (rawData.reports || []).filter(r => teamSet.has(r.team)),
-      // Inventur: Lagerware bleibt für alle sichtbar, ausgegebene Teile nur wenn an Person aus erlaubtem Team
+      // Inventur:
+      //  - Ausgegebene Teile sichtbar, wenn die Person zum erlaubten Team gehört
+      //  - Lagerware: sichtbar wenn ohne Team (Altbestand) ODER wenn das Team erlaubt ist
       inventory: (rawData.inventory || []).filter(i => {
-        if (i.status === 'lager') return true;
-        return i.assignedTo && allowedPersonIds.has(i.assignedTo);
+        if (i.status === 'ausgegeben') {
+          return i.assignedTo && allowedPersonIds.has(i.assignedTo);
+        }
+        // Lager
+        if (!i.team) return true; // Altbestand ohne Team-Zuordnung bleibt für alle sichtbar
+        return teamSet.has(i.team);
       }),
     };
   }, [rawData, user]);
@@ -166,7 +231,12 @@ function AppContent() {
         const allowedPlayerIds = new Set((rawData?.players || []).filter(p => allowedTeams.has(p.team)).map(p => p.id));
         const allowedCoachIds = new Set((rawData?.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
         const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
-        const isVisible = (i) => i.status === 'lager' || (i.assignedTo && allowedPersonIds.has(i.assignedTo));
+        const isVisible = (i) => {
+          if (i.status === 'ausgegeben') return i.assignedTo && allowedPersonIds.has(i.assignedTo);
+          // Lager
+          if (!i.team) return true;
+          return allowedTeams.has(i.team);
+        };
 
         const invisibleOriginals = rawList.filter(i => !isVisible(i));
         return update(key, [...invisibleOriginals, ...newValue]);
@@ -370,10 +440,19 @@ function Header({ view, setView, clubName, user, logout, openReportsCount = 0 })
       <div className="h-1" style={{ background: 'var(--vereinsblau)' }} />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-5">
         <div className="flex items-center justify-between mb-4">
-          <button onClick={() => setView('dashboard')} className="text-left">
-            <div className="font-sub text-xs" style={{ color: 'var(--vereinsblau)' }}>#DEINDORFVEREIN</div>
-            <div className="font-display text-3xl sm:text-4xl leading-tight" style={{ color: 'var(--ink)' }}>Trikotverwaltung</div>
-            <div className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>{clubName}</div>
+          <button onClick={() => setView('dashboard')} className="text-left flex items-center gap-3">
+            <img
+              src="/fcf-logo.png"
+              alt=""
+              width="30"
+              height="30"
+              style={{ width: 30, height: 30, objectFit: 'contain', flexShrink: 0 }}
+            />
+            <div>
+              <div className="font-sub text-xs" style={{ color: 'var(--vereinsblau)' }}>#DEINDORFVEREIN</div>
+              <div className="font-display text-3xl sm:text-4xl leading-tight" style={{ color: 'var(--ink)' }}>Trikotverwaltung</div>
+              <div className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>{clubName}</div>
+            </div>
           </button>
           <div className="flex items-center gap-3">
             <div className="text-right hidden sm:block">
@@ -521,6 +600,7 @@ function Dashboard({ data, setView }) {
 // ============ SPIELER ============
 // Generische Personen-Verwaltung: nutzt 'players' oder 'coaches' aus data
 function PersonsView({ data, update, kind }) {
+  const { user } = useAuth();
   const isPlayer = kind === 'player';
   const dataKey = isPlayer ? 'players' : 'coaches';
   const idPrefix = isPlayer ? 'p' : 'c';
@@ -533,6 +613,8 @@ function PersonsView({ data, update, kind }) {
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
+
+  const canDelete = userCan(user, 'canDeletePeople');
 
   const filtered = filter === 'alle' ? persons : persons.filter(p => p.team === filter);
 
@@ -558,6 +640,12 @@ function PersonsView({ data, update, kind }) {
   }
 
   function remove(id) {
+    // Harte Schutzregel (gilt auch für Admins): keine Person mit offenem Material/Pfand löschen.
+    const check = canDeletePerson(data, id);
+    if (!check.ok) {
+      alert(`Diese ${labels.singular === 'Spieler' ? 'Person' : labels.singular} kann nicht gelöscht werden:\n\n• ${check.reasons.join('\n• ')}`);
+      return;
+    }
     if (!confirm(`${labels.singular} wirklich löschen?`)) return;
     update(dataKey, persons.filter(p => p.id !== id));
   }
@@ -661,9 +749,18 @@ function PersonsView({ data, update, kind }) {
                         <button onClick={() => { setEditing(p); setShowForm(true); }} className="text-stone-400 hover:text-stone-900 p-1">
                           <Edit2 size={14} />
                         </button>
-                        <button onClick={() => remove(p.id)} className="text-stone-400 hover:text-red-600 p-1">
-                          <Trash2 size={14} />
-                        </button>
+                        {canDelete && (() => {
+                          const check = canDeletePerson(data, p.id);
+                          return (
+                            <button
+                              onClick={() => remove(p.id)}
+                              disabled={!check.ok}
+                              title={check.ok ? 'Löschen' : `Löschen blockiert: ${check.reasons.join(', ')}`}
+                              className={`p-1 ${check.ok ? 'text-stone-400 hover:text-red-600' : 'text-stone-300 cursor-not-allowed'}`}>
+                              <Trash2 size={14} />
+                            </button>
+                          );
+                        })()}
                       </td>
                     </tr>
                   );
@@ -1460,17 +1557,29 @@ function InventoryView({ data, update }) {
     return i.itemType === filter;
   });
 
-  // Aggregation: pro Artikel × Größe eine Gruppe
+  // Aggregation: pro Artikel × Größe × Team eine Gruppe.
+  // Lagerware wird so pro Mannschaft separat gezählt — wichtig fürs Bestandsmanagement.
+  // Lagerware ohne Team-Zuordnung erscheint als „global".
   const groups = useMemo(() => {
     const map = new Map();
     filtered.forEach(i => {
-      const key = `${i.itemType}__${i.size || '–'}`;
+      // Bei ausgegebenem Material gibt das Team der Person den Schlüssel,
+      // bei Lagerware das Inventur-eigene team-Feld.
+      let teamKey = '';
+      if (i.status === 'ausgegeben') {
+        const person = findPerson(data, i.assignedTo);
+        teamKey = person?.team || '— ohne Team —';
+      } else {
+        teamKey = i.team || '— global —';
+      }
+      const key = `${i.itemType}__${i.size || '–'}__${teamKey}`;
       if (!map.has(key)) {
         map.set(key, {
           key,
           itemType: i.itemType,
           itemName: i.itemName,
           size: i.size || '–',
+          team: teamKey,
           items: [],
           total: 0,
           lager: 0,
@@ -1492,10 +1601,11 @@ function InventoryView({ data, update }) {
       return i === -1 ? 999 : i;
     };
     return [...map.values()].sort((a, b) => {
+      if (a.team !== b.team) return a.team.localeCompare(b.team);
       if (a.itemName !== b.itemName) return a.itemName.localeCompare(b.itemName);
       return sizeIdx(a.size) - sizeIdx(b.size);
     });
-  }, [filtered]);
+  }, [filtered, data]);
 
   function toggleGroup(key) {
     setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
@@ -1683,6 +1793,7 @@ function InventoryView({ data, update }) {
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
                   <th className="text-left p-3 font-medium">Artikel</th>
+                  <th className="text-left p-3 font-medium hidden md:table-cell">Mannschaft</th>
                   <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
                   <th className="text-right p-3 font-medium">Lager</th>
                   <th className="text-right p-3 font-medium">Ausgegeben</th>
@@ -1700,7 +1811,9 @@ function InventoryView({ data, update }) {
                         <td className="p-3 font-medium">
                           <span className="inline-block w-4 mr-1 text-xs" style={{ color: 'var(--vereinsblau)' }}>{isOpen ? '▾' : '▸'}</span>
                           {g.itemName}
+                          <div className="text-xs md:hidden" style={{ color: 'var(--ink-mute)' }}>{g.team}</div>
                         </td>
+                        <td className="p-3 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>{g.team}</td>
                         <td className="p-3 hidden sm:table-cell">{g.size}</td>
                         <td className="p-3 text-right">
                           <span className={g.lager > 0 ? '' : 'text-stone-400'}>{g.lager}</span>
@@ -1724,7 +1837,7 @@ function InventoryView({ data, update }) {
                 })}
                 {/* Summenzeile */}
                 <tr style={{ background: 'var(--paper-dark)', fontWeight: 600 }}>
-                  <td className="p-3" colSpan={2}>Summe</td>
+                  <td className="p-3" colSpan={3}>Summe</td>
                   <td className="p-3 text-right">{groups.reduce((s, g) => s + g.lager, 0)}</td>
                   <td className="p-3 text-right">{groups.reduce((s, g) => s + g.ausgegeben, 0)}</td>
                   <td className="p-3 text-right">{groups.reduce((s, g) => s + g.markiert, 0)}</td>
@@ -1809,9 +1922,12 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
   const [mode, setMode] = useState('order');
   const [selectedOrderId, setSelectedOrderId] = useState('');
 
-  // Freie Einbuchungs-Zeilen: [{ itemType, size, qty, number, name, personKind }]
+  // Globale Default-Mannschaft fürs freie Einbuchen — wird für neue Zeilen übernommen
+  const [freeDefaultTeam, setFreeDefaultTeam] = useState((data.teams || [])[0] || '');
+
+  // Freie Einbuchungs-Zeilen: [{ itemType, size, qty, number, name, team }]
   const [freeRows, setFreeRows] = useState([
-    { id: `r_${Date.now()}`, itemType: items[0]?.id || '', size: 'L', qty: 1, number: '', name: '' },
+    { id: `r_${Date.now()}`, itemType: items[0]?.id || '', size: 'L', qty: 1, number: '', name: '', team: (data.teams || [])[0] || '' },
   ]);
 
   // Bestell-Eingangs-Zeilen: für jede offene Order-Line eine Zuordnung
@@ -1874,14 +1990,21 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
       itemType: last?.itemType || items[0]?.id || '',
       size: last?.size || 'L',
       qty: 1, number: '', name: '',
+      team: last?.team || freeDefaultTeam || '',
     }]);
   }
   function removeFreeRow(id) {
     if (freeRows.length === 1) {
-      setFreeRows([{ id: `r_${Date.now()}`, itemType: items[0]?.id || '', size: 'L', qty: 1, number: '', name: '' }]);
+      setFreeRows([{ id: `r_${Date.now()}`, itemType: items[0]?.id || '', size: 'L', qty: 1, number: '', name: '', team: freeDefaultTeam || '' }]);
     } else {
       setFreeRows(freeRows.filter(r => r.id !== id));
     }
+  }
+
+  // Default-Team-Wechsel überträgt sich auf alle Zeilen, die bisher den alten Default hatten
+  function setAllFreeTeam(newTeam) {
+    setFreeDefaultTeam(newTeam);
+    setFreeRows(freeRows.map(r => ({ ...r, team: newTeam })));
   }
 
   function updateReceiptRow(lineId, key, value) {
@@ -1901,6 +2024,13 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
         const qty = Number(r.deliveredNow) || 0;
         if (qty <= 0) return;
         const item = items.find(i => i.id === r.itemType);
+        // Team aus der Bestellung übernehmen (für Lager-Trennung pro Mannschaft).
+        // Falls die Order kein Team hat (Sammelbestellung), schauen wir die Person an.
+        let team = order.team || null;
+        if (!team && r.playerId) {
+          const person = findPerson(data, r.playerId);
+          if (person) team = person.team;
+        }
         for (let i = 0; i < qty; i++) {
           newInventory.push({
             id: `inv_${Date.now()}_${r.lineId}_${i}_${Math.random().toString(36).slice(2, 5)}`,
@@ -1908,6 +2038,7 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
             itemName: r.itemName,
             articleNumber: r.articleNumber || null,
             size: r.size,
+            team,
             status: 'lager',
             assignedTo: null,
             assignedNumber: r.number || null,
@@ -1944,6 +2075,7 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
             itemName: item?.name || r.itemType,
             articleNumber: item?.articleNumber || null,
             size: r.size,
+            team: r.team || null,
             status: 'lager',
             assignedTo: null,
             assignedNumber: r.number || null,
@@ -2080,12 +2212,23 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
 
       {mode === 'free' && (
         <div className="mt-2">
-          <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>POSITIONEN</div>
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <div className="font-sub text-xs" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>POSITIONEN</div>
+            <div className="flex items-center gap-2 text-xs">
+              <span style={{ color: 'var(--ink-mute)' }}>Mannschaft für alle Zeilen:</span>
+              <select value={freeDefaultTeam} onChange={e => setAllFreeTeam(e.target.value)}
+                className="border border-stone-300 px-2 py-1 text-xs">
+                <option value="">– keine / global –</option>
+                {(data.teams || []).map(t => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
           <div className="border border-stone-200 overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-stone-50 uppercase tracking-wider">
                 <tr>
                   <th className="text-left p-2">Artikel</th>
+                  <th className="text-left p-2">Mannschaft</th>
                   <th className="text-left p-2">Größe</th>
                   <th className="text-right p-2">Menge</th>
                   <th className="text-left p-2">Nr./Init. (optional)</th>
@@ -2103,6 +2246,12 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
                             {i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}
                           </option>
                         ))}
+                      </select>
+                    </td>
+                    <td className="p-1">
+                      <select value={r.team || ''} onChange={e => updateFreeRow(r.id, 'team', e.target.value)} className="border border-stone-300 px-2 py-1 text-xs">
+                        <option value="">– global –</option>
+                        {(data.teams || []).map(t => <option key={t}>{t}</option>)}
                       </select>
                     </td>
                     <td className="p-1">
@@ -2174,10 +2323,11 @@ function InventoryPrintDialog({ data, onClose }) {
     }
 
     if (filterTeam) {
-      // Im Lager: passt nicht zu Team-Filter (Lager ist global) — wenn explizit Person angefordert, raus
       const person = findPerson(data, inv.assignedTo);
-      if (filterPersonKind === 'lager' || (filterPersonKind === 'alle' && inv.status === 'lager')) {
-        // Lagerware bleibt unabhängig vom Team-Filter sichtbar (kein Team zugeordnet)
+      if (inv.status === 'lager') {
+        // Lagerware: zum Team gehört, wenn das inv.team passt oder global (kein team)
+        if (inv.team && inv.team !== filterTeam) return false;
+        // Wenn der Filter explizit „nur ausgegeben" verlangt, ist Lager schon oben raus.
       } else if (!person || person.team !== filterTeam) {
         return false;
       }
@@ -2353,6 +2503,92 @@ function InventoryPrintDialog({ data, onClose }) {
         });
       }
 
+      // ============ NUMMERN-/INITIALEN-ÜBERSICHT ============
+      // Pro Mannschaft: belegte Spielernummern und Trainer-Initialen + freie Nummern.
+      // So sieht man auf einen Blick, welche Trikotnummern für Neuzugänge verfügbar sind.
+      const teamsForNumbers = filterTeam ? [filterTeam] : (data.teams || []);
+      if (teamsForNumbers.length > 0) {
+        // Neue Seite für die Übersicht, wenn wenig Platz
+        const yCheck = doc.lastAutoTable?.finalY || 40;
+        if (yCheck > 220) {
+          doc.addPage();
+        } else {
+          // 12 mm Abstand zur vorigen Tabelle
+          // (autoTable startet selbst mit etwas Abstand, wir pushen nur den Header)
+        }
+
+        doc.autoTable({
+          startY: doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 8 : 40,
+          head: [['NUMMERN- UND INITIALEN-UEBERSICHT', '']],
+          body: [],
+          theme: 'plain',
+          headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 9, halign: 'left' },
+          margin: { left: 14, right: 14 },
+        });
+
+        const numberRows = [];
+        teamsForNumbers.forEach(teamName => {
+          const teamPlayers = (data.players || []).filter(p => p.team === teamName);
+          const teamCoaches = (data.coaches || []).filter(c => c.team === teamName);
+
+          // Belegte Spielernummern
+          const usedNumbers = teamPlayers
+            .map(p => p.number)
+            .filter(n => n != null && !isNaN(parseInt(n)))
+            .map(n => parseInt(n))
+            .sort((a, b) => a - b);
+          const usedSet = new Set(usedNumbers);
+
+          // Freie Nummern (1-99) — kompakt mit Bereichen darstellen
+          const freeNumbers = [];
+          for (let i = 1; i <= 99; i++) {
+            if (!usedSet.has(i)) freeNumbers.push(i);
+          }
+          const freeRanges = compressRanges(freeNumbers);
+
+          // Trainer-Initialen
+          const usedInitials = teamCoaches
+            .map(c => c.number)
+            .filter(n => n != null && String(n).trim() !== '')
+            .map(n => String(n).trim().toUpperCase())
+            .sort();
+
+          numberRows.push([
+            teamName,
+            'Belegte Nummern',
+            usedNumbers.length > 0 ? usedNumbers.join(', ') : '—',
+          ]);
+          numberRows.push([
+            '',
+            'Freie Nummern (1–99)',
+            freeRanges || '— alle belegt —',
+          ]);
+          if (usedInitials.length > 0) {
+            numberRows.push([
+              '',
+              'Trainer-Initialen',
+              usedInitials.join(', '),
+            ]);
+          }
+          // Trennzeile
+          numberRows.push(['', '', '']);
+        });
+
+        doc.autoTable({
+          startY: doc.lastAutoTable.finalY,
+          head: [['Mannschaft', 'Bereich', 'Nummern / Initialen']],
+          body: numberRows,
+          headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
+          bodyStyles: { fontSize: 8 },
+          alternateRowStyles: { fillColor: [252, 250, 246] },
+          columnStyles: {
+            0: { fontStyle: 'bold', cellWidth: 38 },
+            1: { cellWidth: 38, fontStyle: 'normal' },
+          },
+          margin: { left: 14, right: 14 },
+        });
+      }
+
       // Footer
       const pageCount = doc.internal.getNumberOfPages();
       for (let p = 1; p <= pageCount; p++) {
@@ -2474,33 +2710,82 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
   const [personId, setPersonId] = useState('');
   const [number, setNumber] = useState('');
   const person = persons.find(p => p.id === personId);
+  const isCoach = person?._kind === 'coach';
+
+  // Wenn das Material einer Mannschaft zugeordnet ist, dürfen nur Personen aus genau
+  // diesem Team es bekommen — sonst würde der Lagerbestand der einen Mannschaft
+  // implizit zur anderen verschoben.
+  const compatible = inv.team
+    ? persons.filter(p => p.team === inv.team)
+    : persons;
 
   useEffect(() => {
-    if (person) setNumber(person.number || '');
+    if (person) {
+      // Bei Spielern: Nummer als String speichern (kann später als Int gespeichert werden)
+      // Bei Trainern: Initialen als String (1-3 Großbuchstaben)
+      setNumber(person.number != null ? String(person.number) : '');
+    } else {
+      setNumber('');
+    }
   }, [personId]);
+
+  function handleNumberChange(val) {
+    if (isCoach) {
+      const cleaned = val.replace(/[^a-zA-ZäöüÄÖÜß]/g, '').slice(0, 3).toUpperCase();
+      setNumber(cleaned);
+    } else {
+      const cleaned = val.replace(/[^0-9]/g, '');
+      setNumber(cleaned);
+    }
+  }
+
+  function submit() {
+    if (!personId) return;
+    let storedNumber;
+    if (isCoach) {
+      storedNumber = number ? String(number).trim().toUpperCase() : null;
+    } else {
+      storedNumber = number ? parseInt(number) : null;
+    }
+    onAssign(inv.id, personId, storedNumber);
+  }
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
       <h2 className="font-display text-2xl mb-4">MATERIAL AUSGEBEN</h2>
-      <p className="text-sm text-stone-600 mb-4">{inv.itemName} · Größe {inv.size}</p>
+      <p className="text-sm text-stone-600 mb-4">
+        {inv.itemName} · Größe {inv.size}
+        {inv.team && <span> · Lagerbestand <strong>{inv.team}</strong></span>}
+      </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Field label="Person (Spieler oder Trainer)">
           <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={personId} onChange={e => setPersonId(e.target.value)}>
             <option value="">– wählen –</option>
             <optgroup label="Spieler">
-              {persons.filter(p => p._kind === 'player').map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+              {compatible.filter(p => p._kind === 'player').map(p => <option key={p.id} value={p.id}>#{p.number || '–'} {p.firstName} {p.lastName} ({p.team})</option>)}
             </optgroup>
             <optgroup label="Trainer">
-              {persons.filter(p => p._kind === 'coach').map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
+              {compatible.filter(p => p._kind === 'coach').map(p => <option key={p.id} value={p.id}>{p.number || '–'} {p.firstName} {p.lastName} ({p.team})</option>)}
             </optgroup>
           </select>
+          {inv.team && compatible.length === 0 && (
+            <p className="text-xs mt-1" style={{ color: 'var(--warn)' }}>Keine Personen in Mannschaft „{inv.team}" — Material an dieses Team gebunden.</p>
+          )}
         </Field>
-        <Field label="Rückennummer (auf diesem Teil)">
-          <input type="number" className="w-full border border-stone-300 px-3 py-2 text-sm" value={number} onChange={e => setNumber(e.target.value)} />
+        <Field label={isCoach ? 'Initialen (1–3 Buchstaben)' : 'Rückennummer (auf diesem Teil)'}>
+          <input
+            type="text"
+            inputMode={isCoach ? 'text' : 'numeric'}
+            maxLength={3}
+            placeholder={isCoach ? 'z.B. DH' : 'z.B. 7'}
+            className={`w-full border border-stone-300 px-3 py-2 text-sm ${isCoach ? 'uppercase' : ''}`}
+            value={number}
+            onChange={e => handleNumberChange(e.target.value)}
+          />
         </Field>
       </div>
       <div className="flex gap-2 mt-4">
-        <button onClick={() => personId && onAssign(inv.id, personId, number ? parseInt(number) : null)}
+        <button onClick={submit}
           disabled={!personId} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">Ausgeben</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
       </div>
@@ -3222,69 +3507,85 @@ function OrderForm({ data, onSave, onCancel }) {
     setLines(lines.flatMap(l => l.id === lineId ? newLines : [l]));
   }
 
-  // Standard-Sets aus den Settings holen (Fallback: erste 3 Katalog-Artikel)
+  // Standard-Sets aus den Settings holen — neue flexible Liste (settings.standardSets)
+  // mit Migration von alten standardSetPlayer/-Coach-Feldern.
   const settings = data.settings || {};
-  const standardSetPlayer = Array.isArray(settings.standardSetPlayer) && settings.standardSetPlayer.length > 0
-    ? settings.standardSetPlayer
-    : data.items.slice(0, 3).map(i => ({ itemId: i.id, qty: 1 }));
-  const standardSetCoach = Array.isArray(settings.standardSetCoach) && settings.standardSetCoach.length > 0
-    ? settings.standardSetCoach
-    : []; // für Trainer keinen Fallback — wenn nicht definiert, nur Spieler
+  const allSets = (() => {
+    const list = Array.isArray(settings.standardSets) ? [...settings.standardSets] : [];
+    // Backward-compat: alte Felder bei Bedarf einlesen
+    if (Array.isArray(settings.standardSetPlayer) && settings.standardSetPlayer.length > 0 && !list.some(s => s.id === 'set_player_default')) {
+      list.push({ id: 'set_player_default', name: 'Spieler-Set (Erstausstattung)', target: 'player', items: settings.standardSetPlayer });
+    }
+    if (Array.isArray(settings.standardSetCoach) && settings.standardSetCoach.length > 0 && !list.some(s => s.id === 'set_coach_default')) {
+      list.push({ id: 'set_coach_default', name: 'Trainer-Set (Erstausstattung)', target: 'coach', items: settings.standardSetCoach });
+    }
+    return list.filter(s => Array.isArray(s.items) && s.items.length > 0);
+  })();
 
-  function generateStandardSet({ includeCoaches = false } = {}) {
-    // Erstausstattung: für jeden Spieler (und optional Trainer) der gefilterten Mannschaft die definierten Sets erzeugen.
+  // Wer hat schon was? Wir prüfen das aktuelle Inventar — wenn eine Person bereits
+  // ein Item desselben Typs (Artikel) ausgegeben hat, gilt sie für dieses Item als ausgestattet.
+  // Das ist absichtlich grob: wir prüfen pro Artikel, nicht pro Stückzahl. Wer schon ein
+  // Trainingsshirt hat, kriegt aus dem Set kein zweites — auch wenn das Set 2 Stück sagt.
+  // Wer mehr will, bestellt manuell nach.
+  function hasItemAssigned(personId, itemId) {
+    return (data.inventory || []).some(inv =>
+      inv.assignedTo === personId
+      && inv.itemType === itemId
+      && inv.status === 'ausgegeben'
+    );
+  }
+
+  function applySetById(setId) {
+    const set = allSets.find(s => s.id === setId);
+    if (!set) return;
     const newLines = [];
     const seen = new Set(lines.map(l => `${l.playerId}__${l.itemType}__${l.size}`));
 
-    teamPlayers.forEach(p => {
-      standardSetPlayer.forEach((entry, j) => {
+    // Welche Personen bekommen das Set?
+    const candidates = [];
+    if (set.target === 'player' || set.target === 'both') {
+      teamPlayers.forEach(p => candidates.push({ person: p, kind: 'player' }));
+    }
+    if (set.target === 'coach' || set.target === 'both') {
+      teamCoaches.forEach(c => candidates.push({ person: c, kind: 'coach' }));
+    }
+
+    let skippedFully = 0;
+    candidates.forEach(({ person, kind }, idxP) => {
+      const size = person.size || 'L';
+      let addedForPerson = 0;
+      set.items.forEach((entry, idxItem) => {
         const item = data.items.find(i => i.id === entry.itemId);
         if (!item) return;
-        const size = p.size || 'L';
-        const key = `${p.id}__${item.id}__${size}`;
+        // Filter: Nur Personen, die diesen Artikel noch nicht haben
+        if (hasItemAssigned(person.id, item.id)) return;
+        const key = `${person.id}__${item.id}__${size}`;
         if (seen.has(key)) return;
         seen.add(key);
         newLines.push({
-          id: `l_${Date.now()}_${p.id}_${j}_${Math.random().toString(36).slice(2, 5)}`,
+          id: `l_${Date.now()}_${idxP}_${idxItem}_${Math.random().toString(36).slice(2, 5)}`,
           itemType: item.id,
           size,
           qty: Number(entry.qty) || 1,
-          playerId: p.id,
-          personKind: 'player',
-          number: p.number != null ? String(p.number) : '',
-          name: (p.lastName || '').toUpperCase(),
+          playerId: person.id,
+          personKind: kind,
+          number: person.number != null ? String(person.number) : '',
+          name: (person.lastName || '').toUpperCase(),
         });
+        addedForPerson++;
       });
+      if (addedForPerson === 0) skippedFully++;
     });
 
-    if (includeCoaches && standardSetCoach.length > 0) {
-      teamCoaches.forEach(c => {
-        standardSetCoach.forEach((entry, j) => {
-          const item = data.items.find(i => i.id === entry.itemId);
-          if (!item) return;
-          const size = c.size || 'L';
-          const key = `${c.id}__${item.id}__${size}`;
-          if (seen.has(key)) return;
-          seen.add(key);
-          newLines.push({
-            id: `l_${Date.now()}_${c.id}_${j}_${Math.random().toString(36).slice(2, 5)}`,
-            itemType: item.id,
-            size,
-            qty: Number(entry.qty) || 1,
-            playerId: c.id,
-            personKind: 'coach',
-            number: c.number != null ? String(c.number) : '',
-            name: (c.lastName || '').toUpperCase(),
-          });
-        });
-      });
-    }
-
     if (newLines.length === 0) {
-      alert('Es konnten keine Zeilen erzeugt werden — bitte Standard-Sets in den Einstellungen pflegen oder Personen prüfen.');
+      alert(`Keine neuen Bestellzeilen erzeugt — alle ${candidates.length} Personen sind bereits mit diesem Set ausgestattet.`);
       return;
     }
+    const personsAdded = candidates.length - skippedFully;
     setLines([...lines, ...newLines]);
+    if (skippedFully > 0) {
+      alert(`Set angewendet: ${newLines.length} Zeilen für ${personsAdded} Personen erzeugt. ${skippedFully} Personen waren bereits ausgestattet und wurden übersprungen.`);
+    }
   }
 
   function submit() {
@@ -3393,21 +3694,44 @@ function OrderForm({ data, onSave, onCancel }) {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-3">
+      <div className="flex flex-wrap gap-2 mb-3 items-center">
         <button onClick={addLine} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1"><Plus size={12} /> Einzelne Position</button>
         <button onClick={() => setShowPersonPicker(true)} className="text-xs px-3 py-1.5 flex items-center gap-1 text-white"
           style={{ background: 'var(--vereinsblau)' }}>
           <Users size={12} /> Personen auswählen…
         </button>
-        {teamPlayers.length > 0 && standardSetPlayer.length > 0 && (
-          <button onClick={() => generateStandardSet({ includeCoaches: false })} className="text-xs bg-stone-100 px-3 py-1.5">
-            Spieler-Set ({teamPlayers.length} × {standardSetPlayer.length} Pos.)
-          </button>
-        )}
-        {teamCoaches.length > 0 && standardSetCoach.length > 0 && (
-          <button onClick={() => generateStandardSet({ includeCoaches: true })} className="text-xs bg-stone-100 px-3 py-1.5">
-            Spieler + Trainer-Set ({teamPlayers.length + teamCoaches.length} Personen)
-          </button>
+
+        {allSets.length > 0 && (
+          <div className="flex items-center gap-1">
+            <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>Set:</span>
+            <select
+              onChange={e => {
+                if (e.target.value) {
+                  applySetById(e.target.value);
+                  e.target.value = '';
+                }
+              }}
+              className="text-xs border border-stone-300 px-2 py-1.5 bg-white"
+              defaultValue=""
+            >
+              <option value="">– Standard-Set anwenden –</option>
+              {allSets.map(set => {
+                // Anzeigen: wieviele Personen würden was bekommen
+                const target = set.target;
+                const candidates =
+                  target === 'player' ? teamPlayers.length :
+                  target === 'coach' ? teamCoaches.length :
+                  teamPlayers.length + teamCoaches.length;
+                if (candidates === 0) return null;
+                const targetLabel = target === 'player' ? 'Spieler' : target === 'coach' ? 'Trainer' : 'Sp.+Tr.';
+                return (
+                  <option key={set.id} value={set.id}>
+                    {set.name} ({targetLabel}, max. {candidates} Personen)
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         )}
       </div>
 
@@ -4214,6 +4538,32 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 }
 
 // ============ EINSTELLUNGEN ============
+
+// Migrations-Helper: Wandelt alte standardSetPlayer/-Coach in die neue Liste um
+function migrateStandardSets(rawSettings) {
+  const existing = Array.isArray(rawSettings?.standardSets) ? rawSettings.standardSets : null;
+  if (existing) return existing;
+
+  const migrated = [];
+  if (Array.isArray(rawSettings?.standardSetPlayer) && rawSettings.standardSetPlayer.length > 0) {
+    migrated.push({
+      id: `set_player_default`,
+      name: 'Spieler-Set (Erstausstattung)',
+      target: 'player',
+      items: rawSettings.standardSetPlayer,
+    });
+  }
+  if (Array.isArray(rawSettings?.standardSetCoach) && rawSettings.standardSetCoach.length > 0) {
+    migrated.push({
+      id: `set_coach_default`,
+      name: 'Trainer-Set (Erstausstattung)',
+      target: 'coach',
+      items: rawSettings.standardSetCoach,
+    });
+  }
+  return migrated;
+}
+
 function SettingsView({ data, update }) {
   const [settings, setSettings] = useState({
     defaultDeposit: 100,
@@ -4223,8 +4573,7 @@ function SettingsView({ data, update }) {
     weeklyReportEnabled: false,
     weeklyReportEmail: '',
     weeklyReportFrom: '',
-    standardSetPlayer: [],   // [{ itemId, qty }]
-    standardSetCoach: [],    // [{ itemId, qty }]
+    standardSets: [],
     ...(data.settings || {}),
     // conditionFactors absichern: jedes Feld muss label und factor haben
     conditionFactors: Object.fromEntries(
@@ -4234,9 +4583,8 @@ function SettingsView({ data, update }) {
           factor: typeof v?.factor === 'number' ? v.factor : (DEFAULT_CONDITION_FACTORS[k]?.factor ?? 0),
         }])
     ),
-    // Standard-Sets als Array sichern
-    standardSetPlayer: Array.isArray(data.settings?.standardSetPlayer) ? data.settings.standardSetPlayer : [],
-    standardSetCoach: Array.isArray(data.settings?.standardSetCoach) ? data.settings.standardSetCoach : [],
+    // Standard-Sets: neue Liste mit Migration aus den alten beiden Feldern
+    standardSets: migrateStandardSets(data.settings),
   });
   const [items, setItems] = useState(Array.isArray(data.items) ? data.items : []);
   const [newTeam, setNewTeam] = useState('');
@@ -4245,7 +4593,10 @@ function SettingsView({ data, update }) {
   const [showItemImport, setShowItemImport] = useState(false);
 
   function saveSettings() {
-    update('settings', settings);
+    // Beim Speichern entfernen wir die alten Felder, falls vorhanden — die neue
+    // standardSets-Liste ist die Single Source of Truth.
+    const { standardSetPlayer, standardSetCoach, ...cleanSettings } = settings;
+    update('settings', cleanSettings);
     update('items', items);
     alert('Einstellungen gespeichert.');
   }
@@ -4590,23 +4941,13 @@ function SettingsView({ data, update }) {
       <div className="bg-white border border-stone-200 p-6 mb-4">
         <h2 className="font-display text-2xl mb-2">STANDARD-SETS (ERSTAUSSTATTUNG)</h2>
         <p className="text-xs text-stone-500 mb-4">
-          Lege fest, welche Artikel und in welcher Stückzahl Spieler bzw. Trainer als Erstausstattung erhalten. Diese Sets werden als Vorlage in der Bestellung über den Button „Standard-Set anwenden" genutzt.
+          Lege beliebig viele Sets an — etwa „Erstausstattung Senioren", „Trainer-Set 1. Mannschaft" oder „Jugend-Basis". Pro Set wählst du, ob es für Spieler, Trainer oder beide gilt. In der Bestellung erscheint ein Auswahlmenü mit allen passenden Sets, das nur Personen ohne diese Ausstattung berücksichtigt.
         </p>
 
-        <StandardSetEditor
-          label="STANDARD-SET SPIELER"
+        <StandardSetsManager
           items={items}
-          set={settings.standardSetPlayer || []}
-          onChange={(newSet) => setSettings({ ...settings, standardSetPlayer: newSet })}
-        />
-
-        <div className="h-px my-5" style={{ background: 'var(--rule)' }} />
-
-        <StandardSetEditor
-          label="STANDARD-SET TRAINER"
-          items={items}
-          set={settings.standardSetCoach || []}
-          onChange={(newSet) => setSettings({ ...settings, standardSetCoach: newSet })}
+          sets={settings.standardSets || []}
+          onChange={(newSets) => setSettings({ ...settings, standardSets: newSets })}
         />
       </div>
 
@@ -4700,43 +5041,163 @@ function SettingsView({ data, update }) {
 }
 
 // Editor für Standard-Sets (Spieler/Trainer-Erstausstattung)
-function StandardSetEditor({ label, items, set, onChange }) {
+// Manager für die Liste der Standard-Sets — anlegen / umbenennen / Ziel ändern / löschen.
+// Pro Set öffnet sich darunter ein Editor mit Artikeln und Stückzahlen.
+function StandardSetsManager({ items, sets, onChange }) {
   const validItems = (items || []).filter(i => i && i.id && i.name);
+  const [openSetId, setOpenSetId] = useState(null);
 
-  function addRow() {
-    if (validItems.length === 0) {
-      alert('Bitte zuerst Artikel im Katalog anlegen.');
-      return;
-    }
-    // Default: erster noch nicht im Set vorhandener Artikel
-    const used = new Set(set.map(s => s.itemId));
-    const available = validItems.find(i => !used.has(i.id)) || validItems[0];
-    onChange([...set, { itemId: available.id, qty: 1 }]);
+  function addSet() {
+    const id = `set_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+    const newSet = { id, name: 'Neues Set', target: 'player', items: [] };
+    onChange([...sets, newSet]);
+    setOpenSetId(id);
   }
 
-  function updateRow(idx, key, value) {
-    const next = set.map((row, i) => i === idx ? { ...row, [key]: value } : row);
-    onChange(next);
+  function updateSet(id, updates) {
+    onChange(sets.map(s => s.id === id ? { ...s, ...updates } : s));
   }
 
-  function removeRow(idx) {
-    onChange(set.filter((_, i) => i !== idx));
+  function removeSet(id) {
+    const set = sets.find(s => s.id === id);
+    if (!set) return;
+    if (!confirm(`Set „${set.name}" wirklich löschen?`)) return;
+    onChange(sets.filter(s => s.id !== id));
+    if (openSetId === id) setOpenSetId(null);
   }
 
-  const totalPieces = set.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+  function duplicateSet(id) {
+    const original = sets.find(s => s.id === id);
+    if (!original) return;
+    const newId = `set_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+    const copy = { ...original, id: newId, name: `${original.name} (Kopie)` };
+    onChange([...sets, copy]);
+    setOpenSetId(newId);
+  }
+
+  function targetLabel(target) {
+    if (target === 'player') return 'Nur Spieler';
+    if (target === 'coach') return 'Nur Trainer';
+    return 'Spieler + Trainer';
+  }
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-3">
-        <div className="font-sub text-xs" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>{label}</div>
+      <div className="flex justify-end mb-3">
+        <button onClick={addSet} className="text-xs px-3 py-1.5 flex items-center gap-1 text-white"
+          style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>
+          <Plus size={12} /> Neues Set
+        </button>
+      </div>
+
+      {sets.length === 0 ? (
+        <div className="text-xs py-4 px-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-mute)' }}>
+          Noch keine Sets angelegt. Klicke auf „Neues Set", um deine erste Erstausstattung zu definieren.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {sets.map(set => {
+            const totalPieces = (set.items || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
+            const isOpen = openSetId === set.id;
+            return (
+              <div key={set.id} className="border border-stone-200">
+                <div className="flex items-center justify-between p-3" style={{ background: isOpen ? 'var(--paper)' : 'white' }}>
+                  <button
+                    onClick={() => setOpenSetId(isOpen ? null : set.id)}
+                    className="flex-1 text-left flex items-center gap-3"
+                  >
+                    <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{isOpen ? '▾' : '▸'}</span>
+                    <div>
+                      <div className="font-medium">{set.name}</div>
+                      <div className="text-xs mt-0.5" style={{ color: 'var(--ink-mute)' }}>
+                        {targetLabel(set.target)} · {(set.items || []).length} Artikel · {totalPieces} Teile
+                      </div>
+                    </div>
+                  </button>
+                  <div className="flex gap-2">
+                    <button onClick={() => duplicateSet(set.id)} className="text-xs underline" style={{ color: 'var(--vereinsblau)' }} title="Kopieren">
+                      Kopieren
+                    </button>
+                    <button onClick={() => removeSet(set.id)} className="text-stone-400 hover:text-red-600 p-1" title="Löschen">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                {isOpen && (
+                  <div className="p-4 border-t border-stone-200" style={{ background: 'var(--paper)' }}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                      <Field label="Set-Name">
+                        <input
+                          className="w-full border border-stone-300 px-3 py-2 text-sm"
+                          value={set.name}
+                          onChange={e => updateSet(set.id, { name: e.target.value })}
+                          placeholder="z.B. Erstausstattung Senioren"
+                        />
+                      </Field>
+                      <Field label="Gilt für">
+                        <select
+                          className="w-full border border-stone-300 px-3 py-2 text-sm"
+                          value={set.target}
+                          onChange={e => updateSet(set.id, { target: e.target.value })}
+                        >
+                          <option value="player">Nur Spieler</option>
+                          <option value="coach">Nur Trainer</option>
+                          <option value="both">Spieler und Trainer</option>
+                        </select>
+                      </Field>
+                    </div>
+
+                    <SetItemsEditor
+                      items={set.items || []}
+                      catalog={validItems}
+                      onChange={(newItems) => updateSet(set.id, { items: newItems })}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Innerer Editor: Artikel-Zeilen eines einzelnen Sets
+function SetItemsEditor({ items, catalog, onChange }) {
+  function addRow() {
+    if (catalog.length === 0) {
+      alert('Bitte zuerst Artikel im Katalog anlegen.');
+      return;
+    }
+    const used = new Set(items.map(s => s.itemId));
+    const available = catalog.find(i => !used.has(i.id)) || catalog[0];
+    onChange([...items, { itemId: available.id, qty: 1 }]);
+  }
+
+  function updateRow(idx, key, value) {
+    onChange(items.map((row, i) => i === idx ? { ...row, [key]: value } : row));
+  }
+
+  function removeRow(idx) {
+    onChange(items.filter((_, i) => i !== idx));
+  }
+
+  const totalPieces = items.reduce((s, r) => s + (Number(r.qty) || 0), 0);
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-2">
+        <div className="font-sub text-xs" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>ARTIKEL</div>
         <button onClick={addRow} className="text-xs bg-stone-100 px-3 py-1.5 flex items-center gap-1">
           <Plus size={12} /> Artikel
         </button>
       </div>
 
-      {set.length === 0 ? (
-        <div className="text-xs py-4 px-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-mute)' }}>
-          Kein Standard-Set definiert. Klicke auf „Artikel", um die Erstausstattung zusammenzustellen.
+      {items.length === 0 ? (
+        <div className="text-xs py-3 px-3" style={{ background: 'white', color: 'var(--ink-mute)' }}>
+          Noch keine Artikel im Set. Klicke auf „Artikel", um den ersten Eintrag hinzuzufügen.
         </div>
       ) : (
         <div className="space-y-2">
@@ -4744,8 +5205,8 @@ function StandardSetEditor({ label, items, set, onChange }) {
             <div className="col-span-8">Artikel</div>
             <div className="col-span-3 text-right">Stückzahl</div>
           </div>
-          {set.map((row, idx) => {
-            const item = validItems.find(i => i.id === row.itemId);
+          {items.map((row, idx) => {
+            const item = catalog.find(i => i.id === row.itemId);
             return (
               <div key={idx} className="grid grid-cols-12 gap-2 items-center">
                 <select
@@ -4754,7 +5215,7 @@ function StandardSetEditor({ label, items, set, onChange }) {
                   onChange={e => updateRow(idx, 'itemId', e.target.value)}
                 >
                   {!item && <option value={row.itemId}>— unbekannter Artikel —</option>}
-                  {validItems.map(i => (
+                  {catalog.map(i => (
                     <option key={i.id} value={i.id}>
                       {i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}
                     </option>
@@ -4963,9 +5424,12 @@ function UsersView({ data }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ username: '', password: '', name: '', role: 'user', teams: [] });
+  const [form, setForm] = useState({
+    username: '', password: '', name: '', role: 'user', teams: [],
+    permissions: { ...DEFAULT_USER_PERMISSIONS },
+  });
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState(null); // { name, role, teams, password }
+  const [editForm, setEditForm] = useState(null);
   const [error, setError] = useState('');
 
   const allTeams = (data?.teams) || [];
@@ -4993,7 +5457,10 @@ function UsersView({ data }) {
       const r = await authFetch('/api/auth/users', { method: 'POST', body: JSON.stringify(form) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error);
-      setForm({ username: '', password: '', name: '', role: 'user', teams: [] });
+      setForm({
+        username: '', password: '', name: '', role: 'user', teams: [],
+        permissions: { ...DEFAULT_USER_PERMISSIONS },
+      });
       setShowForm(false);
       load();
     } catch (e) { setError(e.message); }
@@ -5016,6 +5483,7 @@ function UsersView({ data }) {
       name: u.name || '',
       role: u.role,
       teams: Array.isArray(u.teams) ? [...u.teams] : [],
+      permissions: { ...DEFAULT_USER_PERMISSIONS, ...(u.permissions || {}) },
       password: '',
     });
   }
@@ -5038,6 +5506,7 @@ function UsersView({ data }) {
         name: editForm.name,
         role: editForm.role,
         teams: editForm.role === 'admin' ? [] : editForm.teams,
+        permissions: editForm.role === 'admin' ? null : editForm.permissions,
       };
       if (editForm.password) payload.password = editForm.password;
       const r = await authFetch('/api/auth/users', { method: 'PUT', body: JSON.stringify(payload) });
@@ -5067,6 +5536,12 @@ function UsersView({ data }) {
       teams: f.teams.includes(team) ? f.teams.filter(t => t !== team) : [...f.teams, team],
     }));
   }
+  function toggleFormPerm(key) {
+    setForm(f => ({ ...f, permissions: { ...f.permissions, [key]: !f.permissions[key] } }));
+  }
+  function toggleEditPerm(key) {
+    setEditForm(f => ({ ...f, permissions: { ...f.permissions, [key]: !f.permissions[key] } }));
+  }
 
   function teamSummary(u) {
     if (u.role === 'admin') return 'alle (Admin)';
@@ -5074,6 +5549,15 @@ function UsersView({ data }) {
     if (u.teams.length === allTeams.length && allTeams.length > 0) return 'alle Mannschaften';
     return u.teams.join(' · ');
   }
+
+  // Permission-Labels für die UI
+  const PERMISSION_LABELS = [
+    { key: 'canDeletePeople',   label: 'Spieler/Trainer löschen', desc: 'Endgültiges Entfernen aus dem Kader' },
+    { key: 'canCreateOrders',   label: 'Bestellungen anlegen',     desc: 'Neue Bestellungen, Sammelbestellungen, Status ändern' },
+    { key: 'canEditInventory',  label: 'Material verwalten',       desc: 'Einbuchen, ausgeben, zurücknehmen' },
+    { key: 'canManageDeposits', label: 'Pfand verwalten',          desc: 'Einnehmen, zurückzahlen, Saison-Rückgabe' },
+    { key: 'canManageReports',  label: 'Bedarfsmeldungen bearbeiten', desc: 'Status setzen, Bestellungen daraus erzeugen' },
+  ];
 
   return (
     <div>
@@ -5136,6 +5620,30 @@ function UsersView({ data }) {
               )}
               <p className="text-xs mt-2" style={{ color: 'var(--ink-mute)' }}>
                 Ohne Zuordnung sieht der Nutzer keine Mannschaft. Mehrfachauswahl möglich.
+              </p>
+            </div>
+          )}
+
+          {form.role === 'user' && (
+            <div className="mb-3">
+              <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>
+                BERECHTIGUNGEN
+              </div>
+              <div className="space-y-2">
+                {PERMISSION_LABELS.map(perm => (
+                  <label key={perm.key} className="flex items-start gap-3 p-2 cursor-pointer text-sm"
+                    style={{ border: '1px solid var(--rule)', background: form.permissions[perm.key] ? '#F1ECDF' : 'white' }}>
+                    <input type="checkbox" checked={!!form.permissions[perm.key]}
+                      onChange={() => toggleFormPerm(perm.key)} className="mt-0.5" />
+                    <div>
+                      <div className="font-medium">{perm.label}</div>
+                      <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>{perm.desc}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs mt-2" style={{ color: 'var(--ink-mute)' }}>
+                Hinweis: Personen mit ausgegebenem Material oder offenem Pfand können nie gelöscht werden — diese Schutzregel gilt auch für Admins.
               </p>
             </div>
           )}
@@ -5220,6 +5728,30 @@ function UsersView({ data }) {
                                   })}
                                 </div>
                               )}
+                            </div>
+                          )}
+
+                          {editForm.role === 'user' && (
+                            <div className="mb-4">
+                              <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>
+                                BERECHTIGUNGEN
+                              </div>
+                              <div className="space-y-2">
+                                {PERMISSION_LABELS.map(perm => (
+                                  <label key={perm.key} className="flex items-start gap-3 p-2 cursor-pointer text-sm"
+                                    style={{ border: '1px solid var(--rule)', background: editForm.permissions?.[perm.key] ? '#F1ECDF' : 'white' }}>
+                                    <input type="checkbox" checked={!!editForm.permissions?.[perm.key]}
+                                      onChange={() => toggleEditPerm(perm.key)} className="mt-0.5" />
+                                    <div>
+                                      <div className="font-medium">{perm.label}</div>
+                                      <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>{perm.desc}</div>
+                                    </div>
+                                  </label>
+                                ))}
+                              </div>
+                              <p className="text-xs mt-2" style={{ color: 'var(--ink-mute)' }}>
+                                Hinweis: Personen mit ausgegebenem Material oder offenem Pfand können nie gelöscht werden — diese Schutzregel gilt auch für Admins.
+                              </p>
                             </div>
                           )}
 

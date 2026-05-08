@@ -28,6 +28,7 @@ export default async function handler(req, res) {
       role: user.role,
       name: user.name,
       teams: Array.isArray(user.teams) ? user.teams : [],
+      permissions: user.permissions || null,
     },
   });
 }

@@ -23,7 +23,8 @@ export default async function handler(req, res) {
     name: name || username,
     passwordHash,
     role: 'admin',
-    teams: [], // Admin sieht alle Mannschaften — Feld bleibt leer und wird ignoriert
+    teams: [],
+    permissions: null, // Admin hat keine Permissions-Flags — alles erlaubt
     createdAt: new Date().toISOString(),
     updatedAt: null,
   };
@@ -35,6 +36,6 @@ export default async function handler(req, res) {
   const token = signToken(user);
   res.json({
     token,
-    user: { id: user.id, username: user.username, role: user.role, name: user.name, teams: [] },
+    user: { id: user.id, username: user.username, role: user.role, name: user.name, teams: [], permissions: null },
   });
 }

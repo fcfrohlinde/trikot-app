@@ -51,7 +51,6 @@ export default function ReportForm({ onBack }) {
   const [item, setItem] = useState('');
   const [reasons, setReasons] = useState([]);
   const [comment, setComment] = useState('');
-  const [name, setName] = useState('');
   const [photo, setPhoto] = useState(null);
   const [photoSize, setPhotoSize] = useState(0);
   const [photoBusy, setPhotoBusy] = useState(false);
@@ -59,6 +58,11 @@ export default function ReportForm({ onBack }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Person-Lookup: wird befüllt sobald team + number gesetzt sind
+  // null = noch nicht gesucht, undefined = nicht gefunden, { name, role } = identifiziert
+  const [lookupPerson, setLookupPerson] = useState(null);
+  const [lookupBusy, setLookupBusy] = useState(false);
 
   useEffect(() => {
     fetch('/api/public/info')
@@ -70,6 +74,37 @@ export default function ReportForm({ onBack }) {
       })
       .catch(() => setError('Stammdaten konnten nicht geladen werden.'));
   }, []);
+
+  // Bei jedem Team-/Nummer-Wechsel: Person nachschlagen (debounced)
+  useEffect(() => {
+    if (!team || !number || String(number).trim() === '') {
+      setLookupPerson(null);
+      return;
+    }
+    let cancelled = false;
+    setLookupBusy(true);
+    const timer = setTimeout(() => {
+      fetch(`/api/public/info?team=${encodeURIComponent(team)}&number=${encodeURIComponent(number)}`)
+        .then(r => r.json())
+        .then(d => {
+          if (cancelled) return;
+          // d.person ist null, wenn nichts gefunden — dann setzen wir undefined als
+          // Marker für "gesucht aber nicht gefunden", damit die UI das unterscheidet
+          // vom initialen "noch nichts eingegeben" (null).
+          setLookupPerson(d.person || undefined);
+          setLookupBusy(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setLookupPerson(null);
+          setLookupBusy(false);
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [team, number]);
 
   function toggleReason(id) {
     setReasons(reasons.includes(id) ? reasons.filter(r => r !== id) : [...reasons, id]);
@@ -123,6 +158,19 @@ export default function ReportForm({ onBack }) {
   async function submit(e) {
     e.preventDefault();
     setError('');
+    if (!team || !number) {
+      setError('Bitte Mannschaft und Nummer/Initialen ausfüllen.');
+      return;
+    }
+    if (lookupPerson === undefined) {
+      setError('Es konnte keine Person zur Mannschaft mit dieser Nummer/Initialen gefunden werden. Bitte prüfe deine Eingabe.');
+      return;
+    }
+    if (!lookupPerson) {
+      // Lookup hat noch nicht gelaufen oder wartet — kurz Geduld
+      setError('Person wird noch identifiziert, bitte einen Moment warten.');
+      return;
+    }
     if (reasons.length === 0) {
       setError('Bitte mindestens einen Grund auswählen.');
       return;
@@ -136,7 +184,10 @@ export default function ReportForm({ onBack }) {
       const r = await fetch('/api/public/report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ team, number, item, reasons, comment, name, photo }),
+        // Der Name kommt jetzt automatisch vom Backend-Lookup —
+        // wir senden ihn trotzdem mit, damit bei späteren Kader-Änderungen
+        // der ursprüngliche Name in der Meldung erhalten bleibt.
+        body: JSON.stringify({ team, number, item, reasons, comment, name: lookupPerson.name, photo }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'Meldung fehlgeschlagen');
@@ -151,9 +202,9 @@ export default function ReportForm({ onBack }) {
     setNumber('');
     setReasons([]);
     setComment('');
-    setName('');
     setPhoto(null);
     setPhotoSize(0);
+    setLookupPerson(null);
     setDone(false);
     setError('');
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -296,8 +347,30 @@ export default function ReportForm({ onBack }) {
               )}
             </Field>
 
-            <Field label="Dein Name (optional)">
-              <input className="w-full px-3 py-2 text-sm" style={{ border: '1px solid #DCD6C8', background: '#FCFAF6' }} value={name} onChange={e => setName(e.target.value)} placeholder="Falls Rückfragen nötig sind" />
+            <Field label="Dein Name">
+              {!team || !number ? (
+                <div className="px-3 py-2 text-sm" style={{ background: '#FCFAF6', border: '1px dashed #DCD6C8', color: '#9C9892' }}>
+                  Wähle Mannschaft und gib deine Nummer/Initialen ein — der Name wird automatisch eingetragen.
+                </div>
+              ) : lookupBusy ? (
+                <div className="px-3 py-2 text-sm" style={{ background: '#FCFAF6', border: '1px solid #DCD6C8', color: '#807D78' }}>
+                  Suche Person…
+                </div>
+              ) : lookupPerson ? (
+                <div className="px-3 py-2 text-sm" style={{ background: '#F1ECDF', border: '2px solid #0B2D5C', color: '#0B2D5C', fontWeight: 600 }}>
+                  ✓ {lookupPerson.name}
+                  {lookupPerson.role === 'coach' && (
+                    <span className="ml-2 text-[10px] px-1.5 py-0.5"
+                      style={{ background: '#0B2D5C', color: '#C9A227', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em', verticalAlign: 'middle' }}>
+                      TRAINER
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div className="px-3 py-2 text-sm" style={{ background: '#FFF3F3', border: '2px solid #9A2828', color: '#9A2828' }}>
+                  ⚠ Keine Person mit dieser Nummer in „{team}" gefunden. Prüfe Mannschaft und Nummer/Initialen.
+                </div>
+              )}
             </Field>
 
             {error && (
@@ -305,7 +378,7 @@ export default function ReportForm({ onBack }) {
             )}
 
             <div className="flex gap-2 pt-2">
-              <button type="submit" disabled={busy} className="flex-1 py-3 text-xs uppercase text-white disabled:opacity-50" style={{ background: '#0B2D5C', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              <button type="submit" disabled={busy || !lookupPerson} className="flex-1 py-3 text-xs uppercase text-white disabled:opacity-50" style={{ background: '#0B2D5C', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
                 {busy ? '...' : 'Meldung absenden'}
               </button>
               <button type="button" onClick={onBack} className="px-5 py-3 text-xs uppercase" style={{ border: '1px solid #DCD6C8', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>

@@ -1,30 +1,44 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.8.1';
+export const APP_VERSION = '1.8.2';
 
 export const CHANGELOG = [
+  {
+    version: '1.8.2',
+    date: '2026-05-08',
+    changes: [
+      'Neues Vereinslogo + Favicon-Set aus dem aktuellen FC-Frohlinde-Wappen erzeugt',
+      'Logo erscheint jetzt im App-Header (30×30 px) und auf der Login-Seite (60×60)',
+      'Standard-Sets in den Einstellungen vollständig konfigurierbar: anlegen, umbenennen, kopieren, löschen — pro Set mit Ziel „Spieler", „Trainer" oder „beide"',
+      'Beim Bestellen wird jetzt eine Set-Auswahl (Dropdown) angeboten, die nur Personen ohne diese Ausstattung berücksichtigt',
+      'Lager-Trennung pro Mannschaft: Material wird beim Wareneingang automatisch dem Team der Bestellung zugeordnet',
+      'Beim freien Einbuchen kann die Mannschaft pro Zeile gewählt oder global voreingestellt werden',
+      'Lagerübersicht aggregiert pro Artikel × Größe × Mannschaft — eine eigene Spalte „Mannschaft"',
+      'Bei der Material-Ausgabe sind nur Personen aus dem Team des Lagerbestands wählbar',
+      'Material-Ausgabe-Formular akzeptiert Initialen für Trainer (1–3 Buchstaben) und Nummern für Spieler',
+      'Spieler/Trainer-Löschen ist gesperrt, solange Material ausgegeben oder Pfand offen ist — Schutzregel auch für Admins',
+      'Konfigurierbare Berechtigungen pro Nutzer in der Benutzerverwaltung: Personen löschen, Bestellungen, Material, Pfand, Bedarfsmeldungen',
+      'Default für neue Nutzer: keine Lösch-Rechte; alle anderen Bereiche aktiv',
+      'Bedarfsmeldung: Name wird automatisch aus Mannschaft + Nummer/Initialen identifiziert und angezeigt',
+      'Submit ist gesperrt, wenn keine Person zur Eingabe gefunden wird — verhindert Tippfehler',
+      'PDF-Bestandsliste enthält am Ende eine Übersicht aller belegten und freien Trikotnummern (1–99) sowie Trainer-Initialen pro Mannschaft',
+    ],
+  },
   {
     version: '1.8.1',
     date: '2026-05-08',
     changes: [
-      'Hotfix: Weiße Seite nach 1.8.0-Update behoben — Hooks waren nach einem bedingten Return platziert, was React mit „Rendered fewer hooks than expected" abbrach',
-      'Filter-Logik und safeUpdate-Wrapper ziehen jetzt vor den frühen Loader-Return',
+      'Hotfix: Weiße Seite nach 1.8.0-Update behoben — Hooks waren nach einem bedingten Return platziert',
     ],
   },
   {
     version: '1.8.0',
     date: '2026-05-08',
     changes: [
-      'Nutzer können auf eine oder mehrere Mannschaften zugeordnet werden (Rolle „Nutzer")',
-      'Admins haben weiterhin Vollzugriff und sehen alle Mannschaften',
-      'Nutzer sehen nur Spieler, Trainer, Pfänder, Bestellungen und Bedarfsmeldungen ihrer zugeordneten Mannschaften',
-      'Lagerware bleibt für alle sichtbar — der gemeinsame Bestand des Vereins',
-      'Inline-Bearbeiten in der Nutzerverwaltung: Name, Rolle, Passwort und Team-Zuordnung nachträglich änderbar',
-      'Team-Zuordnung über Multi-Select-Buttons (Mehrfachauswahl, sofort sichtbar)',
-      'Header zeigt für Nutzer die zugeordneten Mannschaften, für Admins das ADMIN-Badge',
+      'Nutzer können auf eine oder mehrere Mannschaften zugeordnet werden',
+      'Inline-Bearbeiten in der Nutzerverwaltung mit Multi-Select für Teams',
       'Settings und Nutzerverwaltung nur für Admins zugänglich',
-      'Auto-Refresh des eigenen User-Stands beim App-Start',
-      'Schutzregel: Mindestens ein Admin muss erhalten bleiben',
+      'Auto-Refresh des User-Stands beim App-Start',
     ],
   },
   {

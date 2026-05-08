@@ -34,8 +34,8 @@ export async function requireAuth(req, res) {
     res.status(401).json({ error: 'Nicht angemeldet' });
     return null;
   }
-  // Aktuellen Stand aus KV laden — damit nachträgliche Team- oder Rollen-Änderungen
-  // sofort wirken, statt erst nach Token-Ablauf nach 30 Tagen.
+  // Aktuellen Stand aus KV laden — damit nachträgliche Team-, Rollen- oder
+  // Berechtigungs-Änderungen sofort wirken statt erst nach Token-Ablauf.
   const fresh = await kv.get(`user:${tokenUser.username}`);
   if (!fresh) {
     res.status(401).json({ error: 'Account existiert nicht mehr' });
@@ -47,6 +47,7 @@ export async function requireAuth(req, res) {
     name: fresh.name,
     role: fresh.role,
     teams: Array.isArray(fresh.teams) ? fresh.teams : [],
+    permissions: fresh.permissions || null,
   };
 }
 

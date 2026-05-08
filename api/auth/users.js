@@ -1,11 +1,30 @@
 import bcrypt from 'bcryptjs';
 import { kv, requireAdmin } from '../_lib/auth.js';
 
-// Hilfsfunktion: Teams immer als Array sicherstellen.
-// Admins haben Vollzugriff (kein Team-Filter), User können auf 1..n Mannschaften eingeschränkt werden.
+// Default-Permissions für die Rolle 'user' — das ist der konservative Ausgangszustand.
+// Admins ignorieren diese Flags und haben immer alles.
+export const DEFAULT_USER_PERMISSIONS = {
+  canDeletePeople: false,    // Spieler/Trainer löschen
+  canCreateOrders: true,     // Bestellungen anlegen
+  canEditInventory: true,    // Material einbuchen/ausgeben/zurücknehmen
+  canManageReports: true,    // Bedarfsmeldungen bearbeiten
+  canManageDeposits: true,   // Pfand einnehmen/zurückzahlen
+};
+
 function normalizeTeams(teams) {
   if (!Array.isArray(teams)) return [];
   return teams.filter(t => typeof t === 'string' && t.trim()).map(t => t.trim());
+}
+
+function normalizePermissions(perms) {
+  // Wir akzeptieren nur die bekannten Flags, alles andere wird verworfen.
+  const out = { ...DEFAULT_USER_PERMISSIONS };
+  if (perms && typeof perms === 'object') {
+    for (const key of Object.keys(DEFAULT_USER_PERMISSIONS)) {
+      if (typeof perms[key] === 'boolean') out[key] = perms[key];
+    }
+  }
+  return out;
 }
 
 export default async function handler(req, res) {
@@ -21,13 +40,14 @@ export default async function handler(req, res) {
       name: u.name,
       role: u.role,
       teams: normalizeTeams(u.teams),
+      permissions: normalizePermissions(u.permissions),
       createdAt: u.createdAt,
       updatedAt: u.updatedAt || null,
     })));
   }
 
   if (req.method === 'POST') {
-    const { username, password, name, role, teams } = req.body || {};
+    const { username, password, name, role, teams, permissions } = req.body || {};
     if (!username || !password || password.length < 8) {
       return res.status(400).json({ error: 'Benutzername und Passwort (mind. 8 Zeichen)' });
     }
@@ -46,9 +66,8 @@ export default async function handler(req, res) {
       name: name || u,
       passwordHash,
       role: finalRole,
-      // Admins ignorieren die Team-Liste in der Praxis. Wir speichern sie trotzdem leer,
-      // damit ein späterer Rollenwechsel zu 'user' nicht heimlich Vollzugriff erbt.
       teams: finalRole === 'admin' ? [] : normalizeTeams(teams),
+      permissions: finalRole === 'admin' ? null : normalizePermissions(permissions),
       createdAt: new Date().toISOString(),
       updatedAt: null,
     };
@@ -57,7 +76,9 @@ export default async function handler(req, res) {
     await kv.incr('meta:userCount');
     return res.json({
       id: user.id, username: user.username, name: user.name,
-      role: user.role, teams: user.teams, createdAt: user.createdAt,
+      role: user.role, teams: user.teams,
+      permissions: normalizePermissions(user.permissions),
+      createdAt: user.createdAt,
     });
   }
 
@@ -74,7 +95,7 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'PUT') {
-    const { username, password, role, name, teams } = req.body || {};
+    const { username, password, role, name, teams, permissions } = req.body || {};
     if (!username) return res.status(400).json({ error: 'username fehlt' });
     const u = username.toLowerCase();
     const existing = await kv.get(`user:${u}`);
@@ -103,13 +124,23 @@ export default async function handler(req, res) {
       }
       updated.role = newRole;
       // Bei Wechsel zu Admin: Teams leeren (Admins haben Vollzugriff).
-      if (newRole === 'admin') updated.teams = [];
+      if (newRole === 'admin') {
+        updated.teams = [];
+        updated.permissions = null;
+      } else if (existing.role === 'admin') {
+        // Vom Admin zum User: Default-Permissions setzen, falls noch keine da
+        updated.permissions = normalizePermissions(updated.permissions || permissions);
+      }
     }
 
     if (name !== undefined) updated.name = name;
 
     if (teams !== undefined && updated.role !== 'admin') {
       updated.teams = normalizeTeams(teams);
+    }
+
+    if (permissions !== undefined && updated.role !== 'admin') {
+      updated.permissions = normalizePermissions(permissions);
     }
 
     updated.updatedAt = new Date().toISOString();
@@ -119,6 +150,7 @@ export default async function handler(req, res) {
       user: {
         id: updated.id, username: updated.username, name: updated.name,
         role: updated.role, teams: updated.teams || [],
+        permissions: normalizePermissions(updated.permissions),
         createdAt: updated.createdAt, updatedAt: updated.updatedAt,
       },
     });
