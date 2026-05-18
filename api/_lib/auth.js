@@ -1,7 +1,14 @@
 import { kv } from '@vercel/kv';
 import jwt from 'jsonwebtoken';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+
+function getJwtSecret() {
+  if (!JWT_SECRET || JWT_SECRET.length < 32) {
+    throw new Error('JWT_SECRET fehlt oder ist zu kurz. Bitte in Vercel als Environment Variable mit mindestens 32 Zeichen setzen.');
+  }
+  return JWT_SECRET;
+}
 
 export function signToken(user) {
   return jwt.sign(
@@ -12,7 +19,7 @@ export function signToken(user) {
       name: user.name || user.username,
       teams: Array.isArray(user.teams) ? user.teams : [],
     },
-    JWT_SECRET,
+    getJwtSecret(),
     { expiresIn: '30d' }
   );
 }
@@ -22,7 +29,7 @@ export function verifyToken(req) {
   const token = auth.replace(/^Bearer /, '');
   if (!token) return null;
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, getJwtSecret());
   } catch {
     return null;
   }

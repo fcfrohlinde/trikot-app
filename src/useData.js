@@ -33,6 +33,23 @@ const DEFAULTS = {
   },
 };
 
+async function readJsonResponse(response, fallbackMessage) {
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text.slice(0, 300) };
+    }
+  }
+  if (!response.ok) {
+    const requestSuffix = data.requestId ? ` (Fehler-ID: ${data.requestId})` : '';
+    throw new Error(`${data.error || fallbackMessage}${requestSuffix}`);
+  }
+  return data;
+}
+
 export function useData() {
   const { authFetch } = useAuth();
   const [data, setData] = useState(DEFAULTS);
@@ -44,7 +61,7 @@ export function useData() {
   async function load() {
     try {
       const r = await authFetch('/api/data');
-      const d = await r.json();
+      const d = await readJsonResponse(r, 'Daten konnten nicht geladen werden');
       setData({ ...DEFAULTS, ...d });
     } catch (e) {
       console.error(e);
@@ -53,17 +70,25 @@ export function useData() {
     setLoading(false);
   }
 
-  async function update(key, value) {
-    setData(prev => ({ ...prev, [key]: value }));
+  async function update(key, value, options = {}) {
+    const nextValue = typeof value === 'function' ? value(data[key]) : value;
+    setData(prev => {
+      const optimisticValue = typeof value === 'function' ? value(prev[key]) : value;
+      if (options.mode === 'mergeById' && Array.isArray(prev[key]) && Array.isArray(optimisticValue)) {
+        const byId = new Map(prev[key].map(entry => [entry?.id, entry]).filter(([entryId]) => entryId));
+        optimisticValue.forEach(entry => {
+          if (entry?.id) byId.set(entry.id, { ...(byId.get(entry.id) || {}), ...entry });
+        });
+        return { ...prev, [key]: [...byId.values()] };
+      }
+      return { ...prev, [key]: optimisticValue };
+    });
     try {
       const r = await authFetch('/api/data', {
         method: 'POST',
-        body: JSON.stringify({ key, value }),
+        body: JSON.stringify({ key, value: nextValue, mode: options.mode || 'replace' }),
       });
-      if (!r.ok) {
-        const d = await r.json();
-        throw new Error(d.error || 'Speichern fehlgeschlagen');
-      }
+      await readJsonResponse(r, 'Speichern fehlgeschlagen');
       setSaveError(null);
     } catch (e) {
       setSaveError(e.message);

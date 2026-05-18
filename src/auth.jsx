@@ -2,11 +2,29 @@ import { createContext, useContext, useState, useEffect } from 'react';
 
 const AuthContext = createContext(null);
 
+async function readJsonResponse(response, fallbackMessage) {
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text.slice(0, 300) };
+    }
+  }
+  if (!response.ok) {
+    const requestSuffix = data.requestId ? ` (Fehler-ID: ${data.requestId})` : '';
+    throw new Error(`${data.error || fallbackMessage}${requestSuffix}`);
+  }
+  return data;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [setupRequired, setSetupRequired] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState('');
 
   useEffect(() => {
     init();
@@ -16,10 +34,11 @@ export function AuthProvider({ children }) {
     // Status prüfen
     try {
       const r = await fetch('/api/auth/status');
-      const d = await r.json();
+      const d = await readJsonResponse(r, 'Auth-Status konnte nicht geladen werden');
       setSetupRequired(d.setupRequired);
+      setAuthError('');
     } catch (e) {
-      console.error(e);
+      setAuthError(e.message);
     }
     // Wenn Token da, User laden — zuerst aus localStorage für sofortige Anzeige,
     // dann frischen Stand aus dem Backend nachziehen.
@@ -34,7 +53,7 @@ export function AuthProvider({ children }) {
           headers: { Authorization: `Bearer ${t}` },
         });
         if (r.ok) {
-          const d = await r.json();
+          const d = await readJsonResponse(r, 'Benutzer konnte nicht geladen werden');
           setUser(d.user);
           localStorage.setItem('user', JSON.stringify(d.user));
         } else if (r.status === 401) {
@@ -45,8 +64,7 @@ export function AuthProvider({ children }) {
           setUser(null);
         }
       } catch (e) {
-        // Netzwerkfehler — wir behalten den lokalen Cache
-        console.warn('User-Refresh fehlgeschlagen:', e);
+        setAuthError(e.message);
       }
     }
     setLoading(false);
@@ -60,12 +78,12 @@ export function AuthProvider({ children }) {
         headers: { Authorization: `Bearer ${t}` },
       });
       if (r.ok) {
-        const d = await r.json();
+        const d = await readJsonResponse(r, 'Benutzer konnte nicht aktualisiert werden');
         setUser(d.user);
         localStorage.setItem('user', JSON.stringify(d.user));
       }
     } catch (e) {
-      console.warn('User-Refresh fehlgeschlagen:', e);
+      setAuthError(e.message);
     }
   }
 
@@ -75,8 +93,7 @@ export function AuthProvider({ children }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'Login fehlgeschlagen');
+    const d = await readJsonResponse(r, 'Login fehlgeschlagen');
     localStorage.setItem('token', d.token);
     localStorage.setItem('user', JSON.stringify(d.user));
     setToken(d.token);
@@ -89,8 +106,7 @@ export function AuthProvider({ children }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password, name }),
     });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'Setup fehlgeschlagen');
+    const d = await readJsonResponse(r, 'Setup fehlgeschlagen');
     localStorage.setItem('token', d.token);
     localStorage.setItem('user', JSON.stringify(d.user));
     setToken(d.token);
@@ -123,7 +139,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, setupRequired, loading, login, logout, setup, authFetch, refreshUser }}>
+    <AuthContext.Provider value={{ user, token, setupRequired, loading, authError, login, logout, setup, authFetch, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
