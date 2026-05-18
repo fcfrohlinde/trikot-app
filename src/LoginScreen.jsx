@@ -3,7 +3,7 @@ import { useAuth } from './auth.jsx';
 import ReportForm from './ReportForm.jsx';
 
 export default function LoginScreen() {
-  const { login, setup, setupRequired, authError } = useAuth();
+  const { login, setup, setupRequired } = useAuth();
   const [mode, setMode] = useState(setupRequired ? 'setup' : 'login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -20,12 +20,6 @@ export default function LoginScreen() {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-
-  useEffect(() => {
-    if (mode !== 'report' && setupRequired !== null) {
-      setMode(setupRequired ? 'setup' : 'login');
-    }
-  }, [setupRequired]);
 
   if (mode === 'report') {
     return <ReportForm onBack={() => { window.location.hash = ''; setMode(setupRequired ? 'setup' : 'login'); }} />;
@@ -80,12 +74,6 @@ export default function LoginScreen() {
           {mode === 'setup' && (
             <div className="p-3 text-xs" style={{ background: '#F1ECDF', color: '#4A4845', borderLeft: '3px solid #0B2D5C' }}>
               Lege den ersten Admin-Account an. Weitere Nutzer können später aus der App heraus angelegt werden.
-            </div>
-          )}
-
-          {authError && (
-            <div className="text-sm p-3" style={{ background: '#F5EBDD', color: '#B8651E', borderLeft: '3px solid #B8651E' }}>
-              {authError}
             </div>
           )}
 
