@@ -45,8 +45,16 @@ function getSeasonDepreciation(settings) {
   const v = settings?.seasonDepreciation;
   return (typeof v === 'number' && v >= 0 && v <= 1) ? v : DEFAULT_SEASON_DEPRECIATION;
 }
-function getDepositMode(settings) {
-  return settings?.depositMode || DEFAULT_DEPOSIT_MODE;
+function getTeamDepositRule(settings, team) {
+  const rules = settings?.teamDepositRules || {};
+  return team && rules[team] ? rules[team] : {};
+}
+function getDepositMode(settings, team) {
+  return getTeamDepositRule(settings, team).depositMode || settings?.depositMode || DEFAULT_DEPOSIT_MODE;
+}
+function getDefaultDeposit(settings, team) {
+  const teamAmount = getTeamDepositRule(settings, team).defaultDeposit;
+  return Number.isFinite(teamAmount) ? teamAmount : (settings?.defaultDeposit ?? DEFAULT_DEPOSIT_AMOUNT);
 }
 
 // Spieler + Trainer als gemeinsame Liste — für Material-Ausgabe, Pfand, Rückgabe, Bestellungen
@@ -1626,7 +1634,7 @@ function InventoryView({ data, update }) {
     }
 
     // Inventur erweitern
-    update('inventory', [...data.inventory, ...newInventory]);
+    update('inventory', newInventory, { mode: 'mergeById' });
 
     // Bestell-Status aktualisieren, falls Wareneingang an einer Bestellung
     if (orderId) {
@@ -1667,7 +1675,7 @@ function InventoryView({ data, update }) {
   function assign(invId, playerId, number) {
     update('inventory', data.inventory.map(i =>
       i.id === invId ? { ...i, status: 'ausgegeben', assignedTo: playerId, assignedAt: new Date().toISOString(), assignedNumber: number } : i
-    ));
+    ), { mode: 'replace' });
     setShowAssign(null);
   }
 
@@ -1675,7 +1683,7 @@ function InventoryView({ data, update }) {
     if (!confirm('Material zurück ins Lager buchen?')) return;
     update('inventory', data.inventory.map(i =>
       i.id === invId ? { ...i, status: 'lager', assignedTo: null, assignedAt: null, assignedNumber: null } : i
-    ));
+    ), { mode: 'replace' });
   }
 
   function remove(invId) {
@@ -1683,13 +1691,54 @@ function InventoryView({ data, update }) {
     update('inventory', data.inventory.filter(i => i.id !== invId));
   }
 
-  function renderItemRow(i) {
+  function assignedNumberLabel(i) {
     const person = findPerson(data, i.assignedTo);
+    const number = i.assignedNumber || person?.number;
+    if (number === undefined || number === null || number === '') return '';
+    const kind = i.personKind || person?._kind;
+    return kind === 'coach' ? `${number} (T)` : `#${number}`;
+  }
+
+  function assignedPersonLabel(i) {
+    const person = findPerson(data, i.assignedTo);
+    if (person) {
+      return {
+        title: `${person.firstName} ${person.lastName}`,
+        subtitle: person.team,
+        isCoach: person._kind === 'coach',
+      };
+    }
+    if (i.assignedName || i.assignedNumber) {
+      const parts = [];
+      if (i.assignedName) parts.push(i.assignedName);
+      if (i.sponsorKey) parts.push(i.sponsorKey);
+      return {
+        title: parts.length > 0 ? parts.join(' · ') : 'Vorbeflockt / reserviert',
+        subtitle: i.team ? `Lager ${i.team}` : 'Lager',
+        isCoach: i.personKind === 'coach',
+      };
+    }
+    return null;
+  }
+
+  function groupAssignedNumbers(g) {
+    const labels = g.items
+      .map(assignedNumberLabel)
+      .filter(Boolean);
+    return [...new Set(labels)].join(', ');
+  }
+
+  function renderItemRow(i) {
+    const assignment = assignedPersonLabel(i);
+    const numberLabel = assignedNumberLabel(i);
     const conditionLabel = getConditionFactors(data.settings)[i.condition]?.label || i.condition;
     return (
       <tr key={i.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
         <td className="p-3 pl-10 text-sm" style={{ color: 'var(--ink-mute)' }}>
           <span className="text-xs">↳</span> {i.itemName}
+        </td>
+        <td className="p-3 text-sm font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
+          {numberLabel || '–'}
         </td>
         <td className="p-3 hidden sm:table-cell text-sm">{i.size}</td>
         <td className="p-3 hidden md:table-cell">
@@ -1704,15 +1753,15 @@ function InventoryView({ data, update }) {
           )}
         </td>
         <td className="p-3">
-          {person ? (
+          {assignment ? (
             <div>
               <div className="text-sm">
-                #{i.assignedNumber || person.number} {person.firstName} {person.lastName}
-                {person._kind === 'coach' && (
+                {assignment.title}
+                {assignment.isCoach && (
                   <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
                 )}
               </div>
-              <div className="text-xs text-stone-500">{person.team}</div>
+              <div className="text-xs text-stone-500">{assignment.subtitle}</div>
             </div>
           ) : <span className="text-stone-400 text-sm">–</span>}
         </td>
@@ -1794,6 +1843,7 @@ function InventoryView({ data, update }) {
                 <tr>
                   <th className="text-left p-3 font-medium">Artikel</th>
                   <th className="text-left p-3 font-medium hidden md:table-cell">Mannschaft</th>
+                  <th className="text-left p-3 font-medium">Nr./Init.</th>
                   <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
                   <th className="text-right p-3 font-medium">Lager</th>
                   <th className="text-right p-3 font-medium">Ausgegeben</th>
@@ -1805,6 +1855,7 @@ function InventoryView({ data, update }) {
               <tbody>
                 {groups.map(g => {
                   const isOpen = !!openGroups[g.key];
+                  const assignedNumbers = groupAssignedNumbers(g);
                   return (
                     <React.Fragment key={g.key}>
                       <tr className="border-t border-stone-100 cursor-pointer hover:bg-stone-50" onClick={() => toggleGroup(g.key)}>
@@ -1812,8 +1863,14 @@ function InventoryView({ data, update }) {
                           <span className="inline-block w-4 mr-1 text-xs" style={{ color: 'var(--vereinsblau)' }}>{isOpen ? '▾' : '▸'}</span>
                           {g.itemName}
                           <div className="text-xs md:hidden" style={{ color: 'var(--ink-mute)' }}>{g.team}</div>
+                          {assignedNumbers && (
+                            <div className="text-xs sm:hidden mt-1" style={{ color: 'var(--vereinsblau)' }}>{assignedNumbers}</div>
+                          )}
                         </td>
                         <td className="p-3 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>{g.team}</td>
+                        <td className="p-3 text-sm" style={{ color: assignedNumbers ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
+                          {assignedNumbers || '–'}
+                        </td>
                         <td className="p-3 hidden sm:table-cell">{g.size}</td>
                         <td className="p-3 text-right">
                           <span className={g.lager > 0 ? '' : 'text-stone-400'}>{g.lager}</span>
@@ -1837,7 +1894,7 @@ function InventoryView({ data, update }) {
                 })}
                 {/* Summenzeile */}
                 <tr style={{ background: 'var(--paper-dark)', fontWeight: 600 }}>
-                  <td className="p-3" colSpan={3}>Summe</td>
+                  <td className="p-3" colSpan={4}>Summe</td>
                   <td className="p-3 text-right">{groups.reduce((s, g) => s + g.lager, 0)}</td>
                   <td className="p-3 text-right">{groups.reduce((s, g) => s + g.ausgegeben, 0)}</td>
                   <td className="p-3 text-right">{groups.reduce((s, g) => s + g.markiert, 0)}</td>
@@ -1853,6 +1910,7 @@ function InventoryView({ data, update }) {
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
                   <th className="text-left p-3 font-medium">Artikel</th>
+                  <th className="text-left p-3 font-medium">Nr./Init.</th>
                   <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
                   <th className="text-left p-3 font-medium hidden md:table-cell">Status</th>
                   <th className="text-left p-3 font-medium">Zugeordnet</th>
@@ -1862,10 +1920,14 @@ function InventoryView({ data, update }) {
               </thead>
               <tbody>
                 {filtered.map(i => {
-                  const person = findPerson(data, i.assignedTo);
+                  const assignment = assignedPersonLabel(i);
+                  const numberLabel = assignedNumberLabel(i);
                   return (
                     <tr key={i.id} className="border-t border-stone-100">
                       <td className="p-3 font-medium">{i.itemName}</td>
+                      <td className="p-3 font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
+                        {numberLabel || '–'}
+                      </td>
                       <td className="p-3 hidden sm:table-cell">{i.size}</td>
                       <td className="p-3 hidden md:table-cell">
                         <span className={`inline-block px-2 py-0.5 text-xs ${i.status === 'lager' ? 'bg-stone-100 text-stone-700' : 'bg-emerald-50 text-emerald-700'}`}>
@@ -1879,15 +1941,15 @@ function InventoryView({ data, update }) {
                         )}
                       </td>
                       <td className="p-3">
-                        {person ? (
+                        {assignment ? (
                           <div>
                             <div>
-                              #{i.assignedNumber || person.number} {person.firstName} {person.lastName}
-                              {person._kind === 'coach' && (
+                              {assignment.title}
+                              {assignment.isCoach && (
                                 <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
                               )}
                             </div>
-                            <div className="text-xs text-stone-500">{person.team}</div>
+                            <div className="text-xs text-stone-500">{assignment.subtitle}</div>
                           </div>
                         ) : <span className="text-stone-400">–</span>}
                       </td>
@@ -1938,6 +2000,12 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
   const eligibleOrders = orders.filter(o =>
     !['storniert', 'geliefert'].includes(o.status)
   ).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+  function orderSponsorLabel(order) {
+    if (order.sponsorKey) return order.sponsorKey;
+    const s = order.sponsors || {};
+    return [s.brust, s.ruecken, s.aermel].filter(Boolean).join(' / ');
+  }
 
   // Sobald eine Bestellung gewählt wird: receiptRows initialisieren
   useEffect(() => {
@@ -2050,6 +2118,7 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
             originalPrice: item?.price || 0,
             fromOrderId: order.id,
             fromLineId: r.lineId,
+            sponsorKey: orderSponsorLabel(order) || null,
           });
         }
         lineDeltas[r.lineId] = qty;
@@ -2129,9 +2198,10 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
               {eligibleOrders.length === 0 && <option disabled>(keine offenen Bestellungen)</option>}
               {eligibleOrders.map(o => {
                 const totalQty = (o.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
+                const sponsor = orderSponsorLabel(o);
                 return (
                   <option key={o.id} value={o.id}>
-                    {o.title} ({totalQty} Teile, Status: {o.status || 'offen'})
+                    {o.title}{sponsor ? ` · ${sponsor}` : ''} ({totalQty} Teile, Status: {o.status || 'offen'})
                   </option>
                 );
               })}
@@ -2434,9 +2504,14 @@ function InventoryPrintDialog({ data, onClose }) {
           });
           doc.autoTable({
             startY: doc.lastAutoTable.finalY,
-            head: [['Artikel', 'Größe', 'Zustand', 'Status']],
+            head: [['Artikel', 'Nr./Init.', 'Größe', 'Zustand', 'Status']],
             body: g.items.map(inv => [
               inv.itemName,
+              (() => {
+                const p = findPerson(data, inv.assignedTo);
+                const n = inv.assignedNumber || p?.number;
+                return n ? (p?._kind === 'coach' ? `${n} (T)` : `#${n}`) : '–';
+              })(),
               inv.size,
               getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
               [
@@ -2448,9 +2523,10 @@ function InventoryPrintDialog({ data, onClose }) {
             bodyStyles: { fontSize: 9 },
             alternateRowStyles: { fillColor: [252, 250, 246] },
             columnStyles: {
-              1: { halign: 'center', cellWidth: 18 },
-              2: { cellWidth: 32 },
-              3: { cellWidth: 50 },
+              1: { halign: 'center', cellWidth: 20 },
+              2: { halign: 'center', cellWidth: 18 },
+              3: { cellWidth: 32 },
+              4: { cellWidth: 44 },
             },
             margin: { left: 14, right: 14 },
           });
@@ -2467,15 +2543,18 @@ function InventoryPrintDialog({ data, onClose }) {
           .map(inv => {
             const p = findPerson(data, inv.assignedTo);
             const isCoach = p?._kind === 'coach';
+            const number = inv.assignedNumber || p?.number;
+            const numberLabel = number ? (isCoach ? `${number} (T)` : `#${number}`) : '';
             const personLabel = inv.status === 'lager'
               ? '— Lager —'
               : p
-                ? `${isCoach ? p.number : (p.number ? `#${p.number}` : '–')}  ${p.firstName} ${p.lastName}${isCoach ? ' (T)' : ''}`
+                ? `${p.firstName} ${p.lastName}${isCoach ? ' (T)' : ''}`
                 : '— unbekannt —';
             return {
               articleNumber: data.items.find(i => i.id === inv.itemType)?.articleNumber || '',
               itemName: inv.itemName,
               size: inv.size,
+              number: numberLabel,
               person: personLabel,
               team: p?.team || '',
               condition: getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
@@ -2488,16 +2567,17 @@ function InventoryPrintDialog({ data, onClose }) {
         if (y > 250) { doc.addPage(); y = 20; }
         doc.autoTable({
           startY: y,
-          head: [['Art.-Nr.', 'Artikel', 'Gr.', 'Person / Lager', 'Team', 'Zustand', 'Status']],
-          body: rows.map(r => [r.articleNumber || '–', r.itemName, r.size, r.person, r.team, r.condition, r.status]),
+          head: [['Art.-Nr.', 'Artikel', 'Nr./Init.', 'Gr.', 'Person / Lager', 'Team', 'Zustand', 'Status']],
+          body: rows.map(r => [r.articleNumber || '–', r.itemName, r.number || '–', r.size, r.person, r.team, r.condition, r.status]),
           headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 8, fontStyle: 'bold' },
           bodyStyles: { fontSize: 8 },
           alternateRowStyles: { fillColor: [252, 250, 246] },
           columnStyles: {
             0: { fontStyle: 'bold', cellWidth: 22 },
-            2: { halign: 'center', cellWidth: 12 },
-            5: { cellWidth: 24 },
-            6: { cellWidth: 28 },
+            2: { halign: 'center', cellWidth: 18 },
+            3: { halign: 'center', cellWidth: 12 },
+            6: { cellWidth: 24 },
+            7: { cellWidth: 24 },
           },
           margin: { left: 14, right: 14 },
         });
@@ -2832,7 +2912,7 @@ function DepositsView({ data, update }) {
         </button>
       </div>
 
-      {showForm && <DepositForm persons={allPersons(data)} deposits={data.deposits} defaultAmount={data.settings.defaultDeposit} onSave={addDeposit} onCancel={() => setShowForm(false)} />}
+      {showForm && <DepositForm persons={allPersons(data)} deposits={data.deposits} settings={data.settings} onSave={addDeposit} onCancel={() => setShowForm(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden mb-6">
         <div className="p-4 border-b border-stone-200 bg-stone-50">
@@ -2906,11 +2986,16 @@ function DepositsView({ data, update }) {
   );
 }
 
-function DepositForm({ persons, deposits, defaultAmount, onSave, onCancel }) {
+function DepositForm({ persons, deposits, settings, onSave, onCancel }) {
   const [playerId, setPlayerId] = useState('');
-  const [amount, setAmount] = useState(defaultAmount);
+  const selectedPerson = persons.find(p => p.id === playerId);
+  const [amount, setAmount] = useState(getDefaultDeposit(settings, selectedPerson?.team));
   const [note, setNote] = useState('');
   const existing = deposits.find(d => d.playerId === playerId && !d.refunded);
+
+  useEffect(() => {
+    setAmount(getDefaultDeposit(settings, selectedPerson?.team));
+  }, [playerId, selectedPerson?.team, settings]);
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
@@ -2958,7 +3043,7 @@ function ReturnsView({ data, update }) {
   const deposit = data.deposits.find(d => d.playerId === selectedPlayer && !d.refunded);
 
   // Berechnung — abhängig vom Pfandmodus
-  const mode = getDepositMode(data.settings);
+  const mode = getDepositMode(data.settings, player?.team);
   const conditionFactors = getConditionFactors(data.settings);
   const seasonDepreciation = getSeasonDepreciation(data.settings);
 
@@ -3219,6 +3304,12 @@ function OrdersView({ data, update }) {
     setShowForm(false);
   }
 
+  function orderSponsorLabel(order) {
+    if (order.sponsorKey) return order.sponsorKey;
+    const s = order.sponsors || {};
+    return [s.brust, s.ruecken, s.aermel].filter(Boolean).join(' / ');
+  }
+
   function setStatus(id, status) {
     update('orders', data.orders.map(o => o.id === id ? { ...o, status, updatedAt: new Date().toISOString() } : o));
   }
@@ -3266,6 +3357,7 @@ function OrdersView({ data, update }) {
       notes: `Zusammengeführt aus: ${ordersToMerge.map(o => o.title).join(', ')}`,
       lines: allLines.map((l, idx) => ({ ...l, id: l.id || `l_${Date.now()}_${idx}` })),
       sponsors: ordersToMerge[0]?.sponsors || { brust: '', ruecken: '', aermel: '' },
+      sponsorKey: orderSponsorLabel(ordersToMerge[0]) || '',
       fromReports: allReports,
       mergedFrom: ordersToMerge.map(o => o.id),
       createdAt: new Date().toISOString(),
@@ -3344,6 +3436,7 @@ function OrdersView({ data, update }) {
                   <th className="text-left p-3">Bestellung</th>
                   <th className="text-left p-3 hidden sm:table-cell">Mannschaft</th>
                   <th className="text-left p-3 hidden md:table-cell">Lieferant</th>
+                  <th className="text-left p-3 hidden lg:table-cell">Sponsor</th>
                   <th className="text-left p-3 hidden md:table-cell">Teile</th>
                   <th className="text-left p-3">Status</th>
                   <th className="p-3"></th>
@@ -3370,6 +3463,9 @@ function OrdersView({ data, update }) {
                       <td className="p-3 hidden sm:table-cell">{o.team || 'div.'}</td>
                       <td className="p-3 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>
                         {articleSupplier?.name || '–'}
+                      </td>
+                      <td className="p-3 hidden lg:table-cell text-xs" style={{ color: 'var(--vereinsblau)' }}>
+                        {orderSponsorLabel(o) || '–'}
                       </td>
                       <td className="p-3 hidden md:table-cell">{o.lines.reduce((s, l) => s + l.qty, 0)}</td>
                       <td className="p-3">
@@ -3403,6 +3499,7 @@ function OrderForm({ data, onSave, onCancel }) {
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([]);
   const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '' });
+  const [sponsorKey, setSponsorKey] = useState('');
   const [showPersonPicker, setShowPersonPicker] = useState(false);
   const [distributingLineId, setDistributingLineId] = useState(null);
 
@@ -3595,7 +3692,7 @@ function OrderForm({ data, onSave, onCancel }) {
       title, type,
       team: team || null,
       articleSupplierId, flockSupplierId, flockBy,
-      notes, lines, sponsors,
+      notes, lines, sponsors, sponsorKey,
       fromReports: [],
     });
   }
@@ -3691,6 +3788,13 @@ function OrderForm({ data, onSave, onCancel }) {
             <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={sponsors.aermel}
               onChange={e => setSponsors({ ...sponsors, aermel: e.target.value })} placeholder="z. B. Stadtwerke" />
           </Field>
+          <div className="sm:col-span-3">
+            <Field label="Sponsor-Kennung / Trikotsatz-ID">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={sponsorKey}
+                onChange={e => setSponsorKey(e.target.value)}
+                placeholder="z. B. Heimtrikot Brabus 2026 oder Satz Sparkasse A-Jugend" />
+            </Field>
+          </div>
         </div>
       </div>
 
@@ -4574,6 +4678,7 @@ function SettingsView({ data, update }) {
     weeklyReportEmail: '',
     weeklyReportFrom: '',
     standardSets: [],
+    teamDepositRules: {},
     ...(data.settings || {}),
     // conditionFactors absichern: jedes Feld muss label und factor haben
     conditionFactors: Object.fromEntries(
@@ -4657,6 +4762,17 @@ function SettingsView({ data, update }) {
       ...settings,
       defaultDeposit: 70,
       depositMode: 'pauschal',
+    });
+  }
+
+  function updateTeamDepositRule(team, patch) {
+    const current = settings.teamDepositRules || {};
+    setSettings({
+      ...settings,
+      teamDepositRules: {
+        ...current,
+        [team]: { ...(current[team] || {}), ...patch },
+      },
     });
   }
 
@@ -4836,6 +4952,42 @@ function SettingsView({ data, update }) {
       <div className="bg-white border border-stone-200 p-6 mb-4">
         <h2 className="font-display text-2xl mb-2">PFANDREGELN</h2>
         <p className="text-xs text-stone-500 mb-4">Wie wird bei der Rückgabe abgerechnet? Wähle das Modell, das zur Pfandordnung des Vereins passt.</p>
+
+        {data.teams.length > 0 && (
+          <div className="mb-5 p-4" style={{ background: 'var(--paper)', border: '1px solid var(--rule)' }}>
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>JE MANNSCHAFT</div>
+            <p className="text-xs text-stone-500 mb-3">Leer lassen bedeutet: globale Pfandregel verwenden. So können z. B. Senioren pauschal und Jugendteams per Saisonmodell abgerechnet werden.</p>
+            <div className="space-y-2">
+              {data.teams.map(teamName => {
+                const rule = (settings.teamDepositRules || {})[teamName] || {};
+                return (
+                  <div key={teamName} className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-12 sm:col-span-4 text-sm font-medium">{teamName}</div>
+                    <select
+                      className="col-span-7 sm:col-span-5 border border-stone-300 px-2 py-2 text-sm"
+                      value={rule.depositMode || ''}
+                      onChange={e => updateTeamDepositRule(teamName, { depositMode: e.target.value || undefined })}
+                    >
+                      <option value="">Globale Regel</option>
+                      <option value="pauschal">Pauschal</option>
+                      <option value="saison">Saison-Abschreibung</option>
+                    </select>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="col-span-5 sm:col-span-3 border border-stone-300 px-2 py-2 text-sm text-right"
+                      value={Number.isFinite(rule.defaultDeposit) ? rule.defaultDeposit : ''}
+                      placeholder={`${settings.defaultDeposit ?? DEFAULT_DEPOSIT_AMOUNT} €`}
+                      onChange={e => updateTeamDepositRule(teamName, {
+                        defaultDeposit: e.target.value === '' ? undefined : (parseFloat(e.target.value) || 0),
+                      })}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
           <label className="flex items-start gap-3 p-4 cursor-pointer"

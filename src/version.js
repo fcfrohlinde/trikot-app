@@ -1,8 +1,26 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.8.2';
+export const APP_VERSION = '1.9.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.9.0',
+    date: '2026-05-18',
+    changes: [
+      'Login- und Setup-Flow robuster gemacht: Auth-Status wird sauber ausgewertet und Fehler werden im Frontend verständlich angezeigt',
+      'API-Fehlerlogging mit Fehler-ID ergänzt, ohne Passwörter oder Tokens in Logs zu schreiben',
+      'JWT_SECRET ist jetzt Pflicht und muss in Vercel mindestens 32 Zeichen lang gesetzt sein',
+      'Material-Wareneingang schützt bestehenden Bestand vor Überschreiben: neue Inventarteile werden per ID in den Bestand gemergt',
+      'Materialübersicht zeigt Nummern/Initialen jetzt auch für eingebuchte Lagerartikel mit vorerfasster Beflockung',
+      'Eingebuchte Artikel behalten Nummer/Initialen, Flockname, Sponsor-Kennung und Bestellbezug im Inventar',
+      'Gruppierte und einzelne Materiallisten zeigen Nr./Init. als eigene Spalte',
+      'PDF-Bestandsliste enthält Nr./Init. ebenfalls als eigene Spalte',
+      'Bestellungen können über eine Sponsor-Kennung / Trikotsatz-ID identifiziert werden',
+      'Wareneingang zeigt Sponsor-Kennung in der Bestellauswahl an',
+      'Pfandregeln können je Mannschaft individuell überschrieben werden',
+      'Lokale optimistische Anzeige nach Material-Merge hält den vollständigen Bestand sichtbar',
+    ],
+  },
   {
     version: '1.8.2',
     date: '2026-05-08',
