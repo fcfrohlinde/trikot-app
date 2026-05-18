@@ -33,7 +33,7 @@ const DEFAULT_CONDITION_FACTORS = {
 
 const DEFAULT_SEASON_DEPRECIATION = 0.25;
 
-// Pfandregel-Modus: 'pauschal' (FCF-Standard), 'saison' (Abschreibung × Zustand) oder 'ohne_pfand'
+// Pfandregel-Modus: 'pauschal' (FCF-Standard) oder 'saison' (Abschreibung × Zustand)
 const DEFAULT_DEPOSIT_MODE = 'pauschal';
 const DEFAULT_DEPOSIT_AMOUNT = 70;
 
@@ -45,18 +45,8 @@ function getSeasonDepreciation(settings) {
   const v = settings?.seasonDepreciation;
   return (typeof v === 'number' && v >= 0 && v <= 1) ? v : DEFAULT_SEASON_DEPRECIATION;
 }
-function getTeamDepositRule(settings, team) {
-  const rules = settings?.teamDepositRules || {};
-  return team && rules[team] ? rules[team] : {};
-}
-function getDepositMode(settings, team) {
-  const mode = getTeamDepositRule(settings, team).depositMode || settings?.depositMode || DEFAULT_DEPOSIT_MODE;
-  return ['pauschal', 'saison', 'ohne_pfand'].includes(mode) ? mode : DEFAULT_DEPOSIT_MODE;
-}
-function getDefaultDeposit(settings, team) {
-  if (getDepositMode(settings, team) === 'ohne_pfand') return 0;
-  const teamAmount = getTeamDepositRule(settings, team).defaultDeposit;
-  return Number.isFinite(teamAmount) ? teamAmount : (settings?.defaultDeposit ?? DEFAULT_DEPOSIT_AMOUNT);
+function getDepositMode(settings) {
+  return settings?.depositMode || DEFAULT_DEPOSIT_MODE;
 }
 
 // Spieler + Trainer als gemeinsame Liste — für Material-Ausgabe, Pfand, Rückgabe, Bestellungen
@@ -67,19 +57,6 @@ function allPersons(data) {
 }
 function findPerson(data, id) {
   return allPersons(data).find(p => p.id === id);
-}
-
-function personNumberValue(person) {
-  if (!person || person.number === undefined || person.number === null || person.number === '') return '';
-  return person._kind === 'coach' ? String(person.number).trim().toUpperCase() : String(person.number).trim();
-}
-
-function inventoryMatchesPersonNumber(inv, person) {
-  const invNumber = inv.assignedNumber === undefined || inv.assignedNumber === null ? '' : String(inv.assignedNumber).trim().toUpperCase();
-  const personNumber = personNumberValue(person).toUpperCase();
-  if (!invNumber || !personNumber || invNumber !== personNumber) return false;
-  const invKind = inv.personKind || person._kind;
-  return invKind === person._kind;
 }
 
 // Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
@@ -621,34 +598,6 @@ function Dashboard({ data, setView }) {
 }
 
 // ============ SPIELER ============
-function SortHeader({ label, sortKey, sort, setSort, className = 'text-left p-3 font-medium' }) {
-  const active = sort.key === sortKey;
-  const dir = active ? sort.dir : null;
-  function click() {
-    setSort(active ? { key: sortKey, dir: dir === 'asc' ? 'desc' : 'asc' } : { key: sortKey, dir: 'asc' });
-  }
-  return (
-    <th className={className}>
-      <button onClick={click} className="inline-flex items-center gap-1 uppercase tracking-wider hover:text-stone-900">
-        <span>{label}</span>
-        <span className="text-[10px]" style={{ color: active ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
-          {active ? (dir === 'asc' ? '▲' : '▼') : '↕'}
-        </span>
-      </button>
-    </th>
-  );
-}
-
-function compareValues(a, b, dir = 'asc') {
-  const av = a === undefined || a === null || a === '' ? '~~~' : a;
-  const bv = b === undefined || b === null || b === '' ? '~~~' : b;
-  const bothNumbers = !isNaN(Number(av)) && !isNaN(Number(bv));
-  const result = bothNumbers
-    ? Number(av) - Number(bv)
-    : String(av).localeCompare(String(bv), 'de', { numeric: true, sensitivity: 'base' });
-  return dir === 'asc' ? result : -result;
-}
-
 // Generische Personen-Verwaltung: nutzt 'players' oder 'coaches' aus data
 function PersonsView({ data, update, kind }) {
   const { user } = useAuth();
@@ -664,12 +613,8 @@ function PersonsView({ data, update, kind }) {
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [equipmentPerson, setEquipmentPerson] = useState(null);
-  const [equipmentTeam, setEquipmentTeam] = useState(null);
-  const [sort, setSort] = useState({ key: 'number', dir: 'asc' });
 
   const canDelete = userCan(user, 'canDeletePeople');
-  const canEditInventory = userCan(user, 'canEditInventory');
 
   const filtered = filter === 'alle' ? persons : persons.filter(p => p.team === filter);
 
@@ -705,32 +650,6 @@ function PersonsView({ data, update, kind }) {
     update(dataKey, persons.filter(p => p.id !== id));
   }
 
-  function saveEquipmentInventory(nextInventory) {
-    update('inventory', nextInventory);
-    setEquipmentPerson(null);
-    setEquipmentTeam(null);
-  }
-
-  function sortPersonList(list) {
-    return [...list].sort((a, b) => {
-      if (sort.key === 'number') return compareValues(a.number, b.number, sort.dir);
-      if (sort.key === 'name') return compareValues(`${a.lastName || ''} ${a.firstName || ''}`, `${b.lastName || ''} ${b.firstName || ''}`, sort.dir);
-      if (sort.key === 'team') return compareValues(a.team, b.team, sort.dir);
-      if (sort.key === 'size') return compareValues(a.size, b.size, sort.dir);
-      if (sort.key === 'material') {
-        const ac = data.inventory.filter(i => i.assignedTo === a.id && i.status === 'ausgegeben').length;
-        const bc = data.inventory.filter(i => i.assignedTo === b.id && i.status === 'ausgegeben').length;
-        return compareValues(ac, bc, sort.dir);
-      }
-      if (sort.key === 'deposit') {
-        const ad = data.deposits.find(d => d.playerId === a.id && !d.refunded)?.amount || 0;
-        const bd = data.deposits.find(d => d.playerId === b.id && !d.refunded)?.amount || 0;
-        return compareValues(ad, bd, sort.dir);
-      }
-      return 0;
-    });
-  }
-
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
@@ -741,13 +660,6 @@ function PersonsView({ data, update, kind }) {
             style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
             <Download size={14} style={{ transform: 'rotate(180deg)' }} /> CSV importieren
           </button>
-          {canEditInventory && (
-            <button onClick={() => setEquipmentTeam(filter === 'alle' ? (data.teams[0] || '') : filter)}
-              className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
-              style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-              <Package size={14} /> Team-Set
-            </button>
-          )}
           <button onClick={() => { setEditing(null); setShowForm(true); }}
             className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
             style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
@@ -771,24 +683,6 @@ function PersonsView({ data, update, kind }) {
 
       {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
       {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} kind={kind} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
-      {equipmentPerson && (
-        <BasicEquipmentDialog
-          data={data}
-          person={{ ...equipmentPerson, _kind: kind }}
-          onSave={saveEquipmentInventory}
-          onCancel={() => setEquipmentPerson(null)}
-        />
-      )}
-      {equipmentTeam && (
-        <TeamBasicEquipmentDialog
-          data={data}
-          kind={kind}
-          team={equipmentTeam}
-          onTeamChange={setEquipmentTeam}
-          onSave={saveEquipmentInventory}
-          onCancel={() => setEquipmentTeam(null)}
-        />
-      )}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {filtered.length === 0 ? (
@@ -798,17 +692,23 @@ function PersonsView({ data, update, kind }) {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
-                  <SortHeader label={isPlayer ? 'Nr.' : 'Init.'} sortKey="number" sort={sort} setSort={setSort} />
-                  <SortHeader label="Name" sortKey="name" sort={sort} setSort={setSort} />
-                  <SortHeader label="Mannschaft" sortKey="team" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden md:table-cell" />
-                  <SortHeader label="Größe" sortKey="size" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden sm:table-cell" />
-                  <SortHeader label="Material" sortKey="material" sort={sort} setSort={setSort} />
-                  <SortHeader label="Pfand" sortKey="deposit" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden md:table-cell" />
+                  <th className="text-left p-3 font-medium">{isPlayer ? 'Nr.' : 'Init.'}</th>
+                  <th className="text-left p-3 font-medium">Name</th>
+                  <th className="text-left p-3 font-medium hidden md:table-cell">Mannschaft</th>
+                  <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
+                  <th className="text-left p-3 font-medium">Material</th>
+                  <th className="text-left p-3 font-medium hidden md:table-cell">Pfand</th>
                   <th className="p-3"></th>
                 </tr>
               </thead>
               <tbody>
-                {sortPersonList(filtered).map(p => {
+                {[...filtered].sort((a, b) => {
+                  if (isPlayer) {
+                    return (Number(a.number) || 999) - (Number(b.number) || 999);
+                  }
+                  // Trainer: alphabetisch nach Nachname
+                  return (a.lastName || '').localeCompare(b.lastName || '');
+                }).map(p => {
                   const itemCount = data.inventory.filter(i => i.assignedTo === p.id && i.status === 'ausgegeben').length;
                   const flaggedCount = data.inventory.filter(i => i.assignedTo === p.id && i.flagged).length;
                   const deposit = data.deposits.find(d => d.playerId === p.id && !d.refunded);
@@ -846,15 +746,6 @@ function PersonsView({ data, update, kind }) {
                         {deposit ? <span className="text-emerald-700 font-medium">{deposit.amount} €</span> : <span className="text-stone-400">–</span>}
                       </td>
                       <td className="p-3 text-right">
-                        {canEditInventory && (
-                          <button
-                            onClick={() => setEquipmentPerson(p)}
-                            className="text-stone-400 hover:text-stone-900 p-1 inline-flex items-center gap-1"
-                            title="Grundbestückung / Ausgabevorschläge">
-                            <Package size={14} />
-                            <span className="hidden lg:inline text-xs">Set</span>
-                          </button>
-                        )}
                         <button onClick={() => { setEditing(p); setShowForm(true); }} className="text-stone-400 hover:text-stone-900 p-1">
                           <Edit2 size={14} />
                         </button>
@@ -878,447 +769,6 @@ function PersonsView({ data, update, kind }) {
             </table>
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function BasicEquipmentDialog({ data, person, onSave, onCancel }) {
-  const allSets = migrateStandardSets(data.settings).filter(set =>
-    set.target === 'both' ||
-    (person._kind === 'coach' ? set.target === 'coach' : set.target === 'player')
-  );
-  const [setId, setSetId] = useState(allSets[0]?.id || '');
-  const [correctionMode, setCorrectionMode] = useState(true);
-  const selectedSet = allSets.find(s => s.id === setId);
-  const targetNumber = personNumberValue(person);
-  const targetName = (person.lastName || '').toUpperCase();
-
-  function issuedCountForItem(itemId) {
-    return (data.inventory || []).filter(inv =>
-      inv.itemType === itemId &&
-      inv.status === 'ausgegeben' &&
-      (
-        inv.assignedTo === person.id ||
-        (inv.assignedTo == null && inv.team === person.team && inventoryMatchesPersonNumber(inv, person))
-      )
-    ).length;
-  }
-
-  function buildSuggestions() {
-    if (!selectedSet) return [];
-    const usedStock = new Set();
-    const suggestions = [];
-    (selectedSet.items || []).forEach(entry => {
-      const item = (data.items || []).find(i => i.id === entry.itemId);
-      if (!item) return;
-      const qty = Number(entry.qty) || 1;
-      const alreadyIssued = issuedCountForItem(item.id);
-      const missing = Math.max(0, qty - alreadyIssued);
-      for (let idx = 0; idx < missing; idx++) {
-        const stock = (data.inventory || []).filter(inv =>
-          inv.status === 'lager' &&
-          inv.itemType === item.id &&
-          (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
-          !usedStock.has(inv.id)
-        );
-        const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-        const sized = correctionMode ? (exact || null) : (exact || stock[0] || null);
-        if (sized) usedStock.add(sized.id);
-        const oldNumber = sized?.assignedNumber ? String(sized.assignedNumber) : '';
-        const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonNumber(sized, person));
-        suggestions.push({
-          id: `${item.id}_${idx}`,
-          item,
-          size: person.size || sized?.size || 'L',
-          alreadyIssued,
-          stock: sized,
-          action: exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur',
-          needsReprint,
-          oldNumber,
-          newNumber: targetNumber,
-        });
-      }
-    });
-    return suggestions;
-  }
-
-  const suggestions = buildSuggestions();
-  const reprintRows = suggestions.filter(s => s.needsReprint);
-
-  function applySuggestions() {
-    if (!selectedSet) return;
-    const now = new Date().toISOString();
-    const byId = new Map((data.inventory || []).map(inv => [inv.id, inv]));
-    const additions = [];
-
-    suggestions.forEach((s, idx) => {
-      if (s.stock) {
-        const oldNumber = s.oldNumber || null;
-        byId.set(s.stock.id, {
-          ...s.stock,
-          status: 'ausgegeben',
-          assignedTo: person.id,
-          assignedNumber: targetNumber || null,
-          assignedName: targetName || null,
-          personKind: person._kind,
-          team: person.team || s.stock.team || null,
-          assignedAt: now,
-          needsReprint: s.needsReprint,
-          reprintFromNumber: s.needsReprint ? oldNumber : null,
-          reprintToNumber: s.needsReprint ? (targetNumber || null) : null,
-          reprintRequestedAt: s.needsReprint ? now : null,
-        });
-      } else if (correctionMode) {
-        additions.push({
-          id: `inv_corr_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 5)}`,
-          itemType: s.item.id,
-          itemName: s.item.name,
-          articleNumber: s.item.articleNumber || null,
-          size: s.size,
-          team: person.team || null,
-          status: 'ausgegeben',
-          assignedTo: person.id,
-          assignedNumber: targetNumber || null,
-          assignedName: targetName || null,
-          personKind: person._kind,
-          assignedAt: now,
-          acquiredAt: now,
-          correctionEntry: true,
-          correctionReason: 'Nachträgliche Grundbestückung ohne vorherigen Lagerbestand',
-          seasonsUsed: 0,
-          condition: 'gut',
-          originalPrice: s.item.price || 0,
-        });
-      }
-    });
-
-    onSave([...byId.values(), ...additions]);
-    alert(`Grundbestückung verarbeitet: ${suggestions.filter(s => s.stock).length} Lagerteil(e) ausgegeben, ${additions.length} Korrekturteil(e) angelegt.`);
-  }
-
-  function exportReprintCSV() {
-    const rows = [
-      ['Mannschaft', 'Person', person._kind === 'coach' ? 'Initialen alt' : 'Nummer alt', person._kind === 'coach' ? 'Initialen neu' : 'Nummer neu', 'Artikel', 'Größe', 'Inventar-ID'],
-      ...reprintRows.map(s => [
-        person.team || '',
-        `${person.firstName} ${person.lastName}`.trim(),
-        s.oldNumber || 'ohne',
-        s.newNumber || '',
-        s.item.name,
-        s.stock?.size || s.size,
-        s.stock?.id || '',
-      ]),
-    ];
-    const csv = rows.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `umbeflockung_${person.lastName || person.id}_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  return (
-    <div className="bg-white border-2 border-stone-900 p-6 mb-4">
-      <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
-        <div>
-          <h2 className="font-display text-2xl">GRUNDBESTÜCKUNG</h2>
-          <p className="text-sm text-stone-600">
-            {person.firstName} {person.lastName} · {person.team} · {person._kind === 'coach' ? 'Initialen' : 'Nr.'} {targetNumber || '–'}
-          </p>
-        </div>
-        <button onClick={onCancel} className="p-2 hover:bg-stone-100" title="Schließen">
-          <X size={18} />
-        </button>
-      </div>
-
-      {allSets.length === 0 ? (
-        <div className="p-4 text-sm" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
-          Kein passendes Standard-Set hinterlegt. Lege zuerst unter Einstellungen → Standard-Sets eine Erstausstattung an.
-        </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-            <Field label="Standard-Set als Basis">
-              <select value={setId} onChange={e => setSetId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
-                {allSets.map(set => <option key={set.id} value={set.id}>{set.name}</option>)}
-              </select>
-            </Field>
-            <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: correctionMode ? '#F1ECDF' : 'white' }}>
-              <input type="checkbox" checked={correctionMode} onChange={e => setCorrectionMode(e.target.checked)} className="mt-1" />
-              <div>
-                <div className="text-sm font-medium">Korrektur Ausgabemengen</div>
-                <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Fehlende Teile direkt als ausgegeben einpflegen, auch ohne vorherigen Lagerbestand.</div>
-              </div>
-            </label>
-          </div>
-
-          {correctionMode && (
-            <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
-              Korrekturmodus: Fehlende Teile werden mit der aktuell hinterlegten Nummer/Initiale {targetNumber || '–'} eingepflegt. Abweichend beflockte Lagerteile werden dabei nicht verwendet.
-            </div>
-          )}
-
-          <div className="border border-stone-200 overflow-x-auto mb-3">
-            <table className="w-full text-xs">
-              <thead className="bg-stone-50 uppercase tracking-wider">
-                <tr>
-                  <th className="text-left p-2">Artikel</th>
-                  <th className="text-left p-2">Größe</th>
-                  <th className="text-left p-2">Vorschlag</th>
-                  <th className="text-left p-2">Nr./Init. alt</th>
-                  <th className="text-left p-2">Nr./Init. neu</th>
-                  <th className="text-left p-2">Inventar</th>
-                </tr>
-              </thead>
-              <tbody>
-                {suggestions.length === 0 ? (
-                  <tr><td className="p-4 text-center text-stone-500" colSpan={6}>Standard-Set ist für diese Person bereits vollständig ausgegeben.</td></tr>
-                ) : suggestions.map(s => (
-                  <tr key={s.id} className="border-t border-stone-100">
-                    <td className="p-2 font-medium">{s.item.name}</td>
-                    <td className="p-2">{s.stock?.size || s.size}</td>
-                    <td className="p-2">
-                      {s.action === 'passend' && <span className="text-emerald-700">Passend aus Lager</span>}
-                      {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Aus Lager, Umbeflockung nötig</span>}
-                      {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur-Ausgabe' : 'Kein Lagerbestand'}</span>}
-                    </td>
-                    <td className="p-2">{s.oldNumber || '–'}</td>
-                    <td className="p-2 font-medium" style={{ color: 'var(--vereinsblau)' }}>{s.newNumber || '–'}</td>
-                    <td className="p-2 font-mono">{s.stock?.id || '–'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex flex-wrap justify-between gap-2">
-            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
-              {reprintRows.length} Teil(e) müssen umbeflockt oder mit neuer Nummer/Initialen versehen werden.
-            </div>
-            <div className="flex gap-2">
-              <button onClick={exportReprintCSV} disabled={reprintRows.length === 0}
-                className="px-4 py-2 text-xs uppercase disabled:opacity-50"
-                style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-                Umbeflockungsliste CSV
-              </button>
-              <button onClick={applySuggestions} disabled={suggestions.length === 0 || (!correctionMode && suggestions.every(s => !s.stock))}
-                className="px-4 py-2 text-xs uppercase text-white disabled:opacity-50"
-                style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-                Vorschläge übernehmen
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCancel }) {
-  const persons = (kind === 'coach' ? (data.coaches || []) : (data.players || [])).filter(p => p.team === team).map(p => ({ ...p, _kind: kind }));
-  const allSets = migrateStandardSets(data.settings).filter(set =>
-    set.target === 'both' || (kind === 'coach' ? set.target === 'coach' : set.target === 'player')
-  );
-  const [setId, setSetId] = useState(allSets[0]?.id || '');
-  const [correctionMode, setCorrectionMode] = useState(true);
-  const selectedSet = allSets.find(s => s.id === setId);
-
-  function issuedCountForPersonItem(person, itemId) {
-    return (data.inventory || []).filter(inv =>
-      inv.itemType === itemId &&
-      inv.status === 'ausgegeben' &&
-      (
-        inv.assignedTo === person.id ||
-        (inv.assignedTo == null && inv.team === person.team && inventoryMatchesPersonNumber(inv, person))
-      )
-    ).length;
-  }
-
-  function buildAllSuggestions() {
-    if (!selectedSet) return [];
-    const usedStock = new Set();
-    const out = [];
-    persons.forEach(person => {
-      const targetNumber = personNumberValue(person);
-      (selectedSet.items || []).forEach(entry => {
-        const item = (data.items || []).find(i => i.id === entry.itemId);
-        if (!item) return;
-        const missing = Math.max(0, (Number(entry.qty) || 1) - issuedCountForPersonItem(person, item.id));
-        for (let idx = 0; idx < missing; idx++) {
-          const stock = (data.inventory || []).filter(inv =>
-            inv.status === 'lager' &&
-            inv.itemType === item.id &&
-            (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
-            !usedStock.has(inv.id)
-          );
-          const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-          const sized = correctionMode ? (exact || null) : (exact || stock[0] || null);
-          if (sized) usedStock.add(sized.id);
-          out.push({
-            id: `${person.id}_${item.id}_${idx}`,
-            person,
-            item,
-            stock: sized,
-            size: person.size || sized?.size || 'L',
-            oldNumber: sized?.assignedNumber ? String(sized.assignedNumber) : '',
-            newNumber: targetNumber,
-            needsReprint: !correctionMode && !!sized && !inventoryMatchesPersonNumber(sized, person),
-            action: exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur',
-          });
-        }
-      });
-    });
-    return out;
-  }
-
-  const suggestions = buildAllSuggestions();
-  const reprintRows = suggestions.filter(s => s.needsReprint);
-
-  function applySuggestions() {
-    const now = new Date().toISOString();
-    const byId = new Map((data.inventory || []).map(inv => [inv.id, inv]));
-    const additions = [];
-    suggestions.forEach((s, idx) => {
-      const person = s.person;
-      const targetNumber = personNumberValue(person);
-      const targetName = (person.lastName || '').toUpperCase();
-      if (s.stock) {
-        byId.set(s.stock.id, {
-          ...s.stock,
-          status: 'ausgegeben',
-          assignedTo: person.id,
-          assignedNumber: targetNumber || null,
-          assignedName: targetName || null,
-          personKind: person._kind,
-          team: person.team || s.stock.team || null,
-          assignedAt: now,
-          needsReprint: s.needsReprint,
-          reprintFromNumber: s.needsReprint ? (s.oldNumber || null) : null,
-          reprintToNumber: s.needsReprint ? (targetNumber || null) : null,
-          reprintRequestedAt: s.needsReprint ? now : null,
-        });
-      } else if (correctionMode) {
-        additions.push({
-          id: `inv_corr_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 5)}`,
-          itemType: s.item.id,
-          itemName: s.item.name,
-          articleNumber: s.item.articleNumber || null,
-          size: s.size,
-          team: person.team || null,
-          status: 'ausgegeben',
-          assignedTo: person.id,
-          assignedNumber: targetNumber || null,
-          assignedName: targetName || null,
-          personKind: person._kind,
-          assignedAt: now,
-          acquiredAt: now,
-          correctionEntry: true,
-          correctionReason: 'Team-Grundbestückung ohne vorherigen Lagerbestand',
-          seasonsUsed: 0,
-          condition: 'gut',
-          originalPrice: s.item.price || 0,
-        });
-      }
-    });
-    onSave([...byId.values(), ...additions]);
-    alert(`Team-Set verarbeitet: ${suggestions.filter(s => s.stock).length} Lagerteil(e) ausgegeben, ${additions.length} Korrekturteil(e) angelegt.`);
-  }
-
-  function exportReprintCSV() {
-    const rows = [
-      ['Mannschaft', 'Person', kind === 'coach' ? 'Initialen alt' : 'Nummer alt', kind === 'coach' ? 'Initialen neu' : 'Nummer neu', 'Artikel', 'Größe', 'Inventar-ID'],
-      ...reprintRows.map(s => [
-        s.person.team || '',
-        `${s.person.firstName} ${s.person.lastName}`.trim(),
-        s.oldNumber || 'ohne',
-        s.newNumber || '',
-        s.item.name,
-        s.stock?.size || s.size,
-        s.stock?.id || '',
-      ]),
-    ];
-    const csv = rows.map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(';')).join('\r\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `umbeflockung_${team || 'team'}_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  return (
-    <div className="bg-white border-2 border-stone-900 p-6 mb-4">
-      <div className="flex flex-wrap justify-between gap-3 mb-4">
-        <div>
-          <h2 className="font-display text-2xl">TEAM-GRUNDBESTÜCKUNG</h2>
-          <p className="text-sm text-stone-600">{persons.length} {kind === 'coach' ? 'Trainer' : 'Spieler'} · {team || 'ohne Mannschaft'}</p>
-        </div>
-        <button onClick={onCancel} className="p-2 hover:bg-stone-100" title="Schließen"><X size={18} /></button>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-        <Field label="Mannschaft">
-          <select value={team} onChange={e => onTeamChange(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
-            {(data.teams || []).map(t => <option key={t}>{t}</option>)}
-          </select>
-        </Field>
-        <Field label="Standard-Set">
-          <select value={setId} onChange={e => setSetId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
-            {allSets.map(set => <option key={set.id} value={set.id}>{set.name}</option>)}
-          </select>
-        </Field>
-        <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: correctionMode ? '#F1ECDF' : 'white' }}>
-          <input type="checkbox" checked={correctionMode} onChange={e => setCorrectionMode(e.target.checked)} className="mt-1" />
-          <div>
-            <div className="text-sm font-medium">Korrektur Ausgabemengen</div>
-            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Fehlende Teile ohne Lagerbestand einpflegen.</div>
-          </div>
-        </label>
-      </div>
-      {correctionMode && (
-        <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
-          Korrekturmodus: fehlende Teile werden je Person mit der im Kader hinterlegten Nummer/Initiale eingepflegt. Abweichend beflockte Lagerteile werden nicht verwendet und erzeugen keine Umbeflockung.
-        </div>
-      )}
-      <div className="border border-stone-200 overflow-x-auto mb-3 max-h-80">
-        <table className="w-full text-xs">
-          <thead className="bg-stone-50 uppercase tracking-wider sticky top-0">
-            <tr>
-              <th className="text-left p-2">Person</th>
-              <th className="text-left p-2">Artikel</th>
-              <th className="text-left p-2">Vorschlag</th>
-              <th className="text-left p-2">Alt</th>
-              <th className="text-left p-2">Neu</th>
-            </tr>
-          </thead>
-          <tbody>
-            {suggestions.length === 0 ? (
-              <tr><td className="p-4 text-center text-stone-500" colSpan={5}>Für dieses Team ist das Set vollständig ausgegeben.</td></tr>
-            ) : suggestions.map(s => (
-              <tr key={s.id} className="border-t border-stone-100">
-                <td className="p-2">{s.person.firstName} {s.person.lastName}</td>
-                <td className="p-2">{s.item.name} · {s.stock?.size || s.size}</td>
-                <td className="p-2">
-                  {s.action === 'passend' && <span className="text-emerald-700">Passend</span>}
-                  {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umbeflockung</span>}
-                  {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur' : 'Kein Lager'}</span>}
-                </td>
-                <td className="p-2">{s.oldNumber || '–'}</td>
-                <td className="p-2 font-medium" style={{ color: 'var(--vereinsblau)' }}>{s.newNumber || '–'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="flex flex-wrap justify-between gap-2">
-        <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>{suggestions.length} offene Set-Position(en), {reprintRows.length} Umbeflockung(en).</div>
-        <div className="flex gap-2">
-          <button onClick={exportReprintCSV} disabled={reprintRows.length === 0} className="px-4 py-2 text-xs uppercase disabled:opacity-50" style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>Umbeflockungsliste CSV</button>
-          <button onClick={applySuggestions} disabled={suggestions.length === 0 || (!correctionMode && suggestions.every(s => !s.stock))} className="px-4 py-2 text-xs uppercase text-white disabled:opacity-50" style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>Team-Set übernehmen</button>
-        </div>
       </div>
     </div>
   );
@@ -2098,7 +1548,6 @@ function InventoryView({ data, update }) {
   const [showPrintDialog, setShowPrintDialog] = useState(false);
   const [view, setView] = useState('aggregiert'); // 'aggregiert' | 'einzeln'
   const [openGroups, setOpenGroups] = useState({}); // {groupKey: true}
-  const [sort, setSort] = useState({ key: 'item', dir: 'asc' });
 
   const filtered = data.inventory.filter(i => {
     if (filter === 'alle') return true;
@@ -2158,28 +1607,6 @@ function InventoryView({ data, update }) {
     });
   }, [filtered, data]);
 
-  const sortedGroups = useMemo(() => [...groups].sort((a, b) => {
-    if (sort.key === 'item') return compareValues(a.itemName, b.itemName, sort.dir);
-    if (sort.key === 'team') return compareValues(a.team, b.team, sort.dir);
-    if (sort.key === 'number') return compareValues(groupAssignedNumbers(a), groupAssignedNumbers(b), sort.dir);
-    if (sort.key === 'size') return compareValues(a.size, b.size, sort.dir);
-    if (sort.key === 'lager') return compareValues(a.lager, b.lager, sort.dir);
-    if (sort.key === 'ausgegeben') return compareValues(a.ausgegeben, b.ausgegeben, sort.dir);
-    if (sort.key === 'markiert') return compareValues(a.markiert, b.markiert, sort.dir);
-    if (sort.key === 'total') return compareValues(a.total, b.total, sort.dir);
-    return 0;
-  }), [groups, sort]);
-
-  const sortedItems = useMemo(() => [...filtered].sort((a, b) => {
-    if (sort.key === 'item') return compareValues(a.itemName, b.itemName, sort.dir);
-    if (sort.key === 'number') return compareValues(assignedNumberLabel(a), assignedNumberLabel(b), sort.dir);
-    if (sort.key === 'size') return compareValues(a.size, b.size, sort.dir);
-    if (sort.key === 'status') return compareValues(a.status, b.status, sort.dir);
-    if (sort.key === 'assigned') return compareValues(assignedPersonLabel(a)?.title, assignedPersonLabel(b)?.title, sort.dir);
-    if (sort.key === 'condition') return compareValues(getConditionFactors(data.settings)[a.condition]?.label || a.condition, getConditionFactors(data.settings)[b.condition]?.label || b.condition, sort.dir);
-    return 0;
-  }), [filtered, sort, data]);
-
   function toggleGroup(key) {
     setOpenGroups(prev => ({ ...prev, [key]: !prev[key] }));
   }
@@ -2199,7 +1626,7 @@ function InventoryView({ data, update }) {
     }
 
     // Inventur erweitern
-    update('inventory', newInventory, { mode: 'mergeById' });
+    update('inventory', [...data.inventory, ...newInventory]);
 
     // Bestell-Status aktualisieren, falls Wareneingang an einer Bestellung
     if (orderId) {
@@ -2237,29 +1664,18 @@ function InventoryView({ data, update }) {
     setShowForm(false);
   }
 
-  function assign(invId, playerId, number, reprint = {}) {
+  function assign(invId, playerId, number) {
     update('inventory', data.inventory.map(i =>
-      i.id === invId ? {
-        ...i,
-        status: 'ausgegeben',
-        assignedTo: playerId,
-        assignedAt: new Date().toISOString(),
-        assignedNumber: number,
-        personKind: reprint.personKind || i.personKind || null,
-        needsReprint: !!reprint.needsReprint,
-        reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
-        reprintToNumber: reprint.needsReprint ? (reprint.toNumber || number || null) : null,
-        reprintRequestedAt: reprint.needsReprint ? new Date().toISOString() : null,
-      } : i
-    ), { mode: 'replace' });
+      i.id === invId ? { ...i, status: 'ausgegeben', assignedTo: playerId, assignedAt: new Date().toISOString(), assignedNumber: number } : i
+    ));
     setShowAssign(null);
   }
 
   function unassign(invId) {
     if (!confirm('Material zurück ins Lager buchen?')) return;
     update('inventory', data.inventory.map(i =>
-      i.id === invId ? { ...i, status: 'lager', assignedTo: null, assignedAt: null } : i
-    ), { mode: 'replace' });
+      i.id === invId ? { ...i, status: 'lager', assignedTo: null, assignedAt: null, assignedNumber: null } : i
+    ));
   }
 
   function remove(invId) {
@@ -2267,54 +1683,13 @@ function InventoryView({ data, update }) {
     update('inventory', data.inventory.filter(i => i.id !== invId));
   }
 
-  function assignedNumberLabel(i) {
-    const person = findPerson(data, i.assignedTo);
-    const number = i.assignedNumber || person?.number;
-    if (number === undefined || number === null || number === '') return '';
-    const kind = i.personKind || person?._kind;
-    return kind === 'coach' ? `${number} (T)` : `#${number}`;
-  }
-
-  function assignedPersonLabel(i) {
-    const person = findPerson(data, i.assignedTo);
-    if (person) {
-      return {
-        title: `${person.firstName} ${person.lastName}`,
-        subtitle: person.team,
-        isCoach: person._kind === 'coach',
-      };
-    }
-    if (i.assignedName || i.assignedNumber) {
-      const parts = [];
-      if (i.assignedName) parts.push(i.assignedName);
-      if (i.sponsorKey) parts.push(i.sponsorKey);
-      return {
-        title: parts.length > 0 ? parts.join(' · ') : 'Vorbeflockt / reserviert',
-        subtitle: i.team ? `Lager ${i.team}` : 'Lager',
-        isCoach: i.personKind === 'coach',
-      };
-    }
-    return null;
-  }
-
-  function groupAssignedNumbers(g) {
-    const labels = g.items
-      .map(assignedNumberLabel)
-      .filter(Boolean);
-    return [...new Set(labels)].join(', ');
-  }
-
   function renderItemRow(i) {
-    const assignment = assignedPersonLabel(i);
-    const numberLabel = assignedNumberLabel(i);
+    const person = findPerson(data, i.assignedTo);
     const conditionLabel = getConditionFactors(data.settings)[i.condition]?.label || i.condition;
     return (
       <tr key={i.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
         <td className="p-3 pl-10 text-sm" style={{ color: 'var(--ink-mute)' }}>
           <span className="text-xs">↳</span> {i.itemName}
-        </td>
-        <td className="p-3 text-sm font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
-          {numberLabel || '–'}
         </td>
         <td className="p-3 hidden sm:table-cell text-sm">{i.size}</td>
         <td className="p-3 hidden md:table-cell">
@@ -2327,23 +1702,17 @@ function InventoryView({ data, update }) {
               ⚠ markiert
             </span>
           )}
-          {i.needsReprint && (
-            <span className="inline-block px-2 py-0.5 text-xs ml-1" style={{ background: '#F5EBDD', color: 'var(--warn)' }}
-              title={`Umbeflockung: ${i.reprintFromNumber || 'ohne'} → ${i.reprintToNumber || i.assignedNumber || 'neu'}`}>
-              Umbeflocken {i.reprintFromNumber || 'ohne'} → {i.reprintToNumber || i.assignedNumber || 'neu'}
-            </span>
-          )}
         </td>
         <td className="p-3">
-          {assignment ? (
+          {person ? (
             <div>
               <div className="text-sm">
-                {assignment.title}
-                {assignment.isCoach && (
+                #{i.assignedNumber || person.number} {person.firstName} {person.lastName}
+                {person._kind === 'coach' && (
                   <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
                 )}
               </div>
-              <div className="text-xs text-stone-500">{assignment.subtitle}</div>
+              <div className="text-xs text-stone-500">{person.team}</div>
             </div>
           ) : <span className="text-stone-400 text-sm">–</span>}
         </td>
@@ -2423,21 +1792,19 @@ function InventoryView({ data, update }) {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
-                  <SortHeader label="Artikel" sortKey="item" sort={sort} setSort={setSort} />
-                  <SortHeader label="Mannschaft" sortKey="team" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden md:table-cell" />
-                  <SortHeader label="Nr./Init." sortKey="number" sort={sort} setSort={setSort} />
-                  <SortHeader label="Größe" sortKey="size" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden sm:table-cell" />
-                  <SortHeader label="Lager" sortKey="lager" sort={sort} setSort={setSort} className="text-right p-3 font-medium" />
-                  <SortHeader label="Ausgegeben" sortKey="ausgegeben" sort={sort} setSort={setSort} className="text-right p-3 font-medium" />
-                  <SortHeader label="Markiert" sortKey="markiert" sort={sort} setSort={setSort} className="text-right p-3 font-medium" />
-                  <SortHeader label="Gesamt" sortKey="total" sort={sort} setSort={setSort} className="text-right p-3 font-medium" />
+                  <th className="text-left p-3 font-medium">Artikel</th>
+                  <th className="text-left p-3 font-medium hidden md:table-cell">Mannschaft</th>
+                  <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
+                  <th className="text-right p-3 font-medium">Lager</th>
+                  <th className="text-right p-3 font-medium">Ausgegeben</th>
+                  <th className="text-right p-3 font-medium">Markiert</th>
+                  <th className="text-right p-3 font-medium">Gesamt</th>
                   <th className="p-3 w-8"></th>
                 </tr>
               </thead>
               <tbody>
-                {sortedGroups.map(g => {
+                {groups.map(g => {
                   const isOpen = !!openGroups[g.key];
-                  const assignedNumbers = groupAssignedNumbers(g);
                   return (
                     <React.Fragment key={g.key}>
                       <tr className="border-t border-stone-100 cursor-pointer hover:bg-stone-50" onClick={() => toggleGroup(g.key)}>
@@ -2445,14 +1812,8 @@ function InventoryView({ data, update }) {
                           <span className="inline-block w-4 mr-1 text-xs" style={{ color: 'var(--vereinsblau)' }}>{isOpen ? '▾' : '▸'}</span>
                           {g.itemName}
                           <div className="text-xs md:hidden" style={{ color: 'var(--ink-mute)' }}>{g.team}</div>
-                          {assignedNumbers && (
-                            <div className="text-xs sm:hidden mt-1" style={{ color: 'var(--vereinsblau)' }}>{assignedNumbers}</div>
-                          )}
                         </td>
                         <td className="p-3 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>{g.team}</td>
-                        <td className="p-3 text-sm" style={{ color: assignedNumbers ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
-                          {assignedNumbers || '–'}
-                        </td>
                         <td className="p-3 hidden sm:table-cell">{g.size}</td>
                         <td className="p-3 text-right">
                           <span className={g.lager > 0 ? '' : 'text-stone-400'}>{g.lager}</span>
@@ -2476,11 +1837,11 @@ function InventoryView({ data, update }) {
                 })}
                 {/* Summenzeile */}
                 <tr style={{ background: 'var(--paper-dark)', fontWeight: 600 }}>
-                  <td className="p-3" colSpan={4}>Summe</td>
-                  <td className="p-3 text-right">{sortedGroups.reduce((s, g) => s + g.lager, 0)}</td>
-                  <td className="p-3 text-right">{sortedGroups.reduce((s, g) => s + g.ausgegeben, 0)}</td>
-                  <td className="p-3 text-right">{sortedGroups.reduce((s, g) => s + g.markiert, 0)}</td>
-                  <td className="p-3 text-right">{sortedGroups.reduce((s, g) => s + g.total, 0)}</td>
+                  <td className="p-3" colSpan={3}>Summe</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.lager, 0)}</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.ausgegeben, 0)}</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.markiert, 0)}</td>
+                  <td className="p-3 text-right">{groups.reduce((s, g) => s + g.total, 0)}</td>
                   <td className="p-3"></td>
                 </tr>
               </tbody>
@@ -2491,25 +1852,20 @@ function InventoryView({ data, update }) {
             <table className="w-full text-sm">
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
-                  <SortHeader label="Artikel" sortKey="item" sort={sort} setSort={setSort} />
-                  <SortHeader label="Nr./Init." sortKey="number" sort={sort} setSort={setSort} />
-                  <SortHeader label="Größe" sortKey="size" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden sm:table-cell" />
-                  <SortHeader label="Status" sortKey="status" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden md:table-cell" />
-                  <SortHeader label="Zugeordnet" sortKey="assigned" sort={sort} setSort={setSort} />
-                  <SortHeader label="Zustand" sortKey="condition" sort={sort} setSort={setSort} className="text-left p-3 font-medium hidden lg:table-cell" />
+                  <th className="text-left p-3 font-medium">Artikel</th>
+                  <th className="text-left p-3 font-medium hidden sm:table-cell">Größe</th>
+                  <th className="text-left p-3 font-medium hidden md:table-cell">Status</th>
+                  <th className="text-left p-3 font-medium">Zugeordnet</th>
+                  <th className="text-left p-3 font-medium hidden lg:table-cell">Zustand</th>
                   <th className="p-3"></th>
                 </tr>
               </thead>
               <tbody>
-                {sortedItems.map(i => {
-                  const assignment = assignedPersonLabel(i);
-                  const numberLabel = assignedNumberLabel(i);
+                {filtered.map(i => {
+                  const person = findPerson(data, i.assignedTo);
                   return (
                     <tr key={i.id} className="border-t border-stone-100">
                       <td className="p-3 font-medium">{i.itemName}</td>
-                      <td className="p-3 font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
-                        {numberLabel || '–'}
-                      </td>
                       <td className="p-3 hidden sm:table-cell">{i.size}</td>
                       <td className="p-3 hidden md:table-cell">
                         <span className={`inline-block px-2 py-0.5 text-xs ${i.status === 'lager' ? 'bg-stone-100 text-stone-700' : 'bg-emerald-50 text-emerald-700'}`}>
@@ -2521,23 +1877,17 @@ function InventoryView({ data, update }) {
                             ⚠ markiert
                           </span>
                         )}
-                        {i.needsReprint && (
-                          <span className="inline-block px-2 py-0.5 text-xs ml-1" style={{ background: '#F5EBDD', color: 'var(--warn)' }}
-                            title={`Umbeflockung: ${i.reprintFromNumber || 'ohne'} → ${i.reprintToNumber || i.assignedNumber || 'neu'}`}>
-                            Umbeflocken
-                          </span>
-                        )}
                       </td>
                       <td className="p-3">
-                        {assignment ? (
+                        {person ? (
                           <div>
                             <div>
-                              {assignment.title}
-                              {assignment.isCoach && (
+                              #{i.assignedNumber || person.number} {person.firstName} {person.lastName}
+                              {person._kind === 'coach' && (
                                 <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
                               )}
                             </div>
-                            <div className="text-xs text-stone-500">{assignment.subtitle}</div>
+                            <div className="text-xs text-stone-500">{person.team}</div>
                           </div>
                         ) : <span className="text-stone-400">–</span>}
                       </td>
@@ -2588,12 +1938,6 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
   const eligibleOrders = orders.filter(o =>
     !['storniert', 'geliefert'].includes(o.status)
   ).sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-
-  function orderSponsorLabel(order) {
-    if (order.sponsorKey) return order.sponsorKey;
-    const s = order.sponsors || {};
-    return [s.brust, s.ruecken, s.aermel].filter(Boolean).join(' / ');
-  }
 
   // Sobald eine Bestellung gewählt wird: receiptRows initialisieren
   useEffect(() => {
@@ -2706,7 +2050,6 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
             originalPrice: item?.price || 0,
             fromOrderId: order.id,
             fromLineId: r.lineId,
-            sponsorKey: orderSponsorLabel(order) || null,
           });
         }
         lineDeltas[r.lineId] = qty;
@@ -2786,10 +2129,9 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
               {eligibleOrders.length === 0 && <option disabled>(keine offenen Bestellungen)</option>}
               {eligibleOrders.map(o => {
                 const totalQty = (o.lines || []).reduce((s, l) => s + (l.qty || 0), 0);
-                const sponsor = orderSponsorLabel(o);
                 return (
                   <option key={o.id} value={o.id}>
-                    {o.title}{sponsor ? ` · ${sponsor}` : ''} ({totalQty} Teile, Status: {o.status || 'offen'})
+                    {o.title} ({totalQty} Teile, Status: {o.status || 'offen'})
                   </option>
                 );
               })}
@@ -3092,30 +2434,23 @@ function InventoryPrintDialog({ data, onClose }) {
           });
           doc.autoTable({
             startY: doc.lastAutoTable.finalY,
-            head: [['Artikel', 'Nr./Init.', 'Größe', 'Zustand', 'Status']],
+            head: [['Artikel', 'Größe', 'Zustand', 'Status']],
             body: g.items.map(inv => [
               inv.itemName,
-              (() => {
-                const p = findPerson(data, inv.assignedTo);
-                const n = inv.assignedNumber || p?.number;
-                return n ? (p?._kind === 'coach' ? `${n} (T)` : `#${n}`) : '–';
-              })(),
               inv.size,
               getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
               [
                 inv.status === 'lager' ? 'Lager' : 'Ausgegeben',
                 inv.flagged ? '⚠ markiert' : null,
-                inv.needsReprint ? `Umbeflocken ${inv.reprintFromNumber || 'ohne'} → ${inv.reprintToNumber || inv.assignedNumber || 'neu'}` : null,
               ].filter(Boolean).join(' · '),
             ]),
             headStyles: { fillColor: [241, 236, 223], textColor: [11, 45, 92], fontSize: 8, fontStyle: 'bold' },
             bodyStyles: { fontSize: 9 },
             alternateRowStyles: { fillColor: [252, 250, 246] },
             columnStyles: {
-              1: { halign: 'center', cellWidth: 20 },
-              2: { halign: 'center', cellWidth: 18 },
-              3: { cellWidth: 32 },
-              4: { cellWidth: 44 },
+              1: { halign: 'center', cellWidth: 18 },
+              2: { cellWidth: 32 },
+              3: { cellWidth: 50 },
             },
             margin: { left: 14, right: 14 },
           });
@@ -3131,27 +2466,20 @@ function InventoryPrintDialog({ data, onClose }) {
         const rows = filtered
           .map(inv => {
             const p = findPerson(data, inv.assignedTo);
-            const isCoach = (inv.personKind || p?._kind) === 'coach';
-            const number = inv.assignedNumber || p?.number;
-            const numberLabel = number ? (isCoach ? `${number} (T)` : `#${number}`) : '';
+            const isCoach = p?._kind === 'coach';
             const personLabel = inv.status === 'lager'
-              ? (inv.assignedName ? `Lager · ${inv.assignedName}` : '— Lager —')
+              ? '— Lager —'
               : p
-                ? `${p.firstName} ${p.lastName}${isCoach ? ' (T)' : ''}`
+                ? `${isCoach ? p.number : (p.number ? `#${p.number}` : '–')}  ${p.firstName} ${p.lastName}${isCoach ? ' (T)' : ''}`
                 : '— unbekannt —';
             return {
               articleNumber: data.items.find(i => i.id === inv.itemType)?.articleNumber || '',
               itemName: inv.itemName,
               size: inv.size,
-              number: numberLabel,
               person: personLabel,
               team: p?.team || '',
               condition: getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
-              status: [
-                inv.status === 'lager' ? 'Lager' : 'Ausgegeben',
-                inv.flagged ? '⚠' : null,
-                inv.needsReprint ? `Umbeflocken ${inv.reprintFromNumber || 'ohne'} → ${inv.reprintToNumber || inv.assignedNumber || 'neu'}` : null,
-              ].filter(Boolean).join(' · '),
+              status: [inv.status === 'lager' ? 'Lager' : 'Ausgegeben', inv.flagged ? '⚠' : null].filter(Boolean).join(' · '),
               _sortKey: `${inv.itemName}__${String(sizeIdx(inv.size)).padStart(3, '0')}__${p?.team || 'zzz'}__${p?.number ?? 'zzz'}`,
             };
           })
@@ -3160,17 +2488,16 @@ function InventoryPrintDialog({ data, onClose }) {
         if (y > 250) { doc.addPage(); y = 20; }
         doc.autoTable({
           startY: y,
-          head: [['Art.-Nr.', 'Artikel', 'Nr./Init.', 'Gr.', 'Person / Lager', 'Team', 'Zustand', 'Status']],
-          body: rows.map(r => [r.articleNumber || '–', r.itemName, r.number || '–', r.size, r.person, r.team, r.condition, r.status]),
+          head: [['Art.-Nr.', 'Artikel', 'Gr.', 'Person / Lager', 'Team', 'Zustand', 'Status']],
+          body: rows.map(r => [r.articleNumber || '–', r.itemName, r.size, r.person, r.team, r.condition, r.status]),
           headStyles: { fillColor: [11, 45, 92], textColor: [255, 255, 255], fontSize: 8, fontStyle: 'bold' },
           bodyStyles: { fontSize: 8 },
           alternateRowStyles: { fillColor: [252, 250, 246] },
           columnStyles: {
             0: { fontStyle: 'bold', cellWidth: 22 },
-            2: { halign: 'center', cellWidth: 18 },
-            3: { halign: 'center', cellWidth: 12 },
-            6: { cellWidth: 24 },
-            7: { cellWidth: 24 },
+            2: { halign: 'center', cellWidth: 12 },
+            5: { cellWidth: 24 },
+            6: { cellWidth: 28 },
           },
           margin: { left: 14, right: 14 },
         });
@@ -3382,8 +2709,6 @@ function InventoryPrintDialog({ data, onClose }) {
 function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
   const [personId, setPersonId] = useState('');
   const [number, setNumber] = useState('');
-  const [reprintFromNumber, setReprintFromNumber] = useState(inv.assignedNumber ? String(inv.assignedNumber) : '');
-  const [needsReprint, setNeedsReprint] = useState(false);
   const person = persons.find(p => p.id === personId);
   const isCoach = person?._kind === 'coach';
 
@@ -3399,12 +2724,8 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
       // Bei Spielern: Nummer als String speichern (kann später als Int gespeichert werden)
       // Bei Trainern: Initialen als String (1-3 Großbuchstaben)
       setNumber(person.number != null ? String(person.number) : '');
-      const from = inv.assignedNumber ? String(inv.assignedNumber) : '';
-      const to = person.number != null ? String(person.number) : '';
-      setNeedsReprint(!!from && !!to && from.toUpperCase() !== to.toUpperCase());
     } else {
       setNumber('');
-      setNeedsReprint(false);
     }
   }, [personId]);
 
@@ -3426,12 +2747,7 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
     } else {
       storedNumber = number ? parseInt(number) : null;
     }
-    onAssign(inv.id, personId, storedNumber, {
-      needsReprint,
-      fromNumber: reprintFromNumber || null,
-      toNumber: storedNumber || null,
-      personKind: person?._kind || null,
-    });
+    onAssign(inv.id, personId, storedNumber);
   }
 
   return (
@@ -3467,32 +2783,6 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
             onChange={e => handleNumberChange(e.target.value)}
           />
         </Field>
-        <div className="sm:col-span-2">
-          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: needsReprint ? '#F5EBDD' : 'white' }}>
-            <input type="checkbox" checked={needsReprint} onChange={e => setNeedsReprint(e.target.checked)} className="mt-1" />
-            <div className="flex-1">
-              <div className="text-sm font-medium" style={{ color: 'var(--ink)' }}>Umbeflockung / Nummernwechsel erfassen</div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-                <Field label="Alt">
-                  <input
-                    className="w-full border border-stone-300 px-3 py-2 text-sm"
-                    value={reprintFromNumber}
-                    onChange={e => setReprintFromNumber(e.target.value)}
-                    placeholder="bisherige Nr./Initialen"
-                  />
-                </Field>
-                <Field label="Neu">
-                  <input
-                    className="w-full border border-stone-300 px-3 py-2 text-sm"
-                    value={number}
-                    onChange={e => handleNumberChange(e.target.value)}
-                    placeholder="neue Nr./Initialen"
-                  />
-                </Field>
-              </div>
-            </div>
-          </label>
-        </div>
       </div>
       <div className="flex gap-2 mt-4">
         <button onClick={submit}
@@ -3542,7 +2832,7 @@ function DepositsView({ data, update }) {
         </button>
       </div>
 
-      {showForm && <DepositForm persons={allPersons(data)} deposits={data.deposits} settings={data.settings} onSave={addDeposit} onCancel={() => setShowForm(false)} />}
+      {showForm && <DepositForm persons={allPersons(data)} deposits={data.deposits} defaultAmount={data.settings.defaultDeposit} onSave={addDeposit} onCancel={() => setShowForm(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden mb-6">
         <div className="p-4 border-b border-stone-200 bg-stone-50">
@@ -3616,17 +2906,11 @@ function DepositsView({ data, update }) {
   );
 }
 
-function DepositForm({ persons, deposits, settings, onSave, onCancel }) {
+function DepositForm({ persons, deposits, defaultAmount, onSave, onCancel }) {
   const [playerId, setPlayerId] = useState('');
-  const selectedPerson = persons.find(p => p.id === playerId);
-  const depositMode = getDepositMode(settings, selectedPerson?.team);
-  const [amount, setAmount] = useState(getDefaultDeposit(settings, selectedPerson?.team));
+  const [amount, setAmount] = useState(defaultAmount);
   const [note, setNote] = useState('');
   const existing = deposits.find(d => d.playerId === playerId && !d.refunded);
-
-  useEffect(() => {
-    setAmount(getDefaultDeposit(settings, selectedPerson?.team));
-  }, [playerId, selectedPerson?.team, settings]);
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
@@ -3645,12 +2929,7 @@ function DepositForm({ persons, deposits, settings, onSave, onCancel }) {
           </select>
         </Field>
         <Field label="Betrag (€)">
-          <input type="number" step="0.01" disabled={depositMode === 'ohne_pfand'}
-            className="w-full border border-stone-300 px-3 py-2 text-sm disabled:opacity-60"
-            value={amount} onChange={e => setAmount(e.target.value)} />
-          {depositMode === 'ohne_pfand' && (
-            <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>Für diese Mannschaft ist „ohne Pfand" eingestellt.</p>
-          )}
+          <input type="number" step="0.01" className="w-full border border-stone-300 px-3 py-2 text-sm" value={amount} onChange={e => setAmount(e.target.value)} />
         </Field>
         <div className="sm:col-span-2">
           <Field label="Notiz">
@@ -3660,7 +2939,7 @@ function DepositForm({ persons, deposits, settings, onSave, onCancel }) {
       </div>
       <div className="flex gap-2 mt-4">
         <button onClick={() => playerId && amount && onSave(playerId, amount, note)}
-          disabled={!playerId || !amount || depositMode === 'ohne_pfand'} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">Speichern</button>
+          disabled={!playerId || !amount} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">Speichern</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
       </div>
     </div>
@@ -3679,12 +2958,12 @@ function ReturnsView({ data, update }) {
   const deposit = data.deposits.find(d => d.playerId === selectedPlayer && !d.refunded);
 
   // Berechnung — abhängig vom Pfandmodus
-  const mode = getDepositMode(data.settings, player?.team);
+  const mode = getDepositMode(data.settings);
   const conditionFactors = getConditionFactors(data.settings);
   const seasonDepreciation = getSeasonDepreciation(data.settings);
 
   const calc = playerItems.map(item => {
-    const cond = conditions[item.id] || (mode === 'saison' ? (item.condition || 'gut') : 'ok');
+    const cond = conditions[item.id] || (mode === 'pauschal' ? 'ok' : (item.condition || 'gut'));
     let lossValue = 0;
     let currentValue = item.originalPrice;
 
@@ -3697,24 +2976,20 @@ function ReturnsView({ data, update }) {
         lossValue = item_def?.replacementValue ?? Math.round(item.originalPrice * 0.6);
         currentValue = item.originalPrice - lossValue;
       }
-    } else if (mode === 'saison') {
+    } else {
       // Saison-Modell: Abschreibung × Zustandsfaktor
       const seasons = item.seasonsUsed || 0;
       const seasonValue = Math.max(0, 1 - (seasons * seasonDepreciation));
       const condFactor = conditionFactors[cond]?.factor ?? 0;
       currentValue = item.originalPrice * seasonValue * condFactor;
       lossValue = item.originalPrice - currentValue;
-    } else {
-      // Ohne Pfand: Material wird zurückgenommen, aber es gibt keine Pfandverrechnung.
-      lossValue = 0;
-      currentValue = item.originalPrice;
     }
     return { item, cond, currentValue, lossValue };
   });
 
   const itemLossSum = calc.reduce((s, c) => s + c.lossValue, 0);
   // Pauschal-Modus: Wenn "Total-Verfall" angehakt ist, verfällt das ganze Pfand (Punkt 8 Pfandordnung)
-  const totalLoss = mode === 'ohne_pfand' ? 0 : ((mode === 'pauschal' && totalForfeit) ? (deposit?.amount ?? 0) : itemLossSum);
+  const totalLoss = (mode === 'pauschal' && totalForfeit) ? (deposit?.amount ?? 0) : itemLossSum;
   const refund = deposit ? Math.max(0, deposit.amount - totalLoss) : 0;
   const retained = deposit ? deposit.amount - refund : 0;
 
@@ -3724,7 +2999,7 @@ function ReturnsView({ data, update }) {
     // Material zurück ins Lager mit Zustandsupdate
     const newInv = data.inventory.map(i => {
       if (i.assignedTo === selectedPlayer && i.status === 'ausgegeben') {
-        const cond = conditions[i.id] || (mode === 'saison' ? 'gut' : 'ok');
+        const cond = conditions[i.id] || (mode === 'pauschal' ? 'ok' : 'gut');
         // Status "verloren" / nicht mehr im Lager: bei Pauschal-Modus "fehlt", bei Saison "defekt"
         const isLost = (mode === 'pauschal' && cond === 'fehlt') || (mode === 'saison' && cond === 'defekt');
         if (isLost) {
@@ -3796,12 +3071,6 @@ function ReturnsView({ data, update }) {
 
       {player && (
         <>
-          {mode === 'ohne_pfand' && (
-            <div className="p-4 mb-4 text-sm" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
-              Für die Mannschaft {player.team} ist „ohne Pfand" eingestellt. Die Rückgabe bucht Material zurück, ohne eine Pfandabrechnung zu erzeugen.
-            </div>
-          )}
-
           <div className="bg-white border border-stone-200 mb-4">
             <div className="p-4 border-b border-stone-200 bg-stone-50 flex flex-wrap justify-between items-center gap-2">
               <div>
@@ -3839,9 +3108,7 @@ function ReturnsView({ data, update }) {
                             {mode === 'pauschal' ? `${replacementValue.toFixed(2)} €` : `${item.originalPrice.toFixed(2)} €`}
                           </td>
                           <td className="p-3">
-                            {mode === 'ohne_pfand' ? (
-                              <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>Keine Pfandbewertung</span>
-                            ) : mode === 'pauschal' ? (
+                            {mode === 'pauschal' ? (
                               <select className="border border-stone-300 px-2 py-1 text-xs"
                                 value={cond}
                                 onChange={e => setConditions({ ...conditions, [item.id]: e.target.value })}>
@@ -3935,7 +3202,6 @@ function OrdersView({ data, update }) {
   const [viewing, setViewing] = useState(null);
   const [selected, setSelected] = useState([]);
   const [mergeMode, setMergeMode] = useState(false);
-  const [sort, setSort] = useState({ key: 'createdAt', dir: 'desc' });
 
   function saveOrder(order) {
     const newOrder = { ...order, id: `ord_${Date.now()}`, createdAt: new Date().toISOString(), status: 'angelegt' };
@@ -3952,26 +3218,6 @@ function OrdersView({ data, update }) {
     }
     setShowForm(false);
   }
-
-  function orderSponsorLabel(order) {
-    if (order.sponsorKey) return order.sponsorKey;
-    const s = order.sponsors || {};
-    return [s.brust, s.ruecken, s.aermel].filter(Boolean).join(' / ');
-  }
-
-  const sortedOrders = [...data.orders].sort((a, b) => {
-    if (sort.key === 'title') return compareValues(a.title, b.title, sort.dir);
-    if (sort.key === 'team') return compareValues(a.team || 'div.', b.team || 'div.', sort.dir);
-    if (sort.key === 'supplier') {
-      const as = (data.suppliers || []).find(s => s.id === a.articleSupplierId)?.name || '';
-      const bs = (data.suppliers || []).find(s => s.id === b.articleSupplierId)?.name || '';
-      return compareValues(as, bs, sort.dir);
-    }
-    if (sort.key === 'sponsor') return compareValues(orderSponsorLabel(a), orderSponsorLabel(b), sort.dir);
-    if (sort.key === 'qty') return compareValues((a.lines || []).reduce((s, l) => s + (l.qty || 0), 0), (b.lines || []).reduce((s, l) => s + (l.qty || 0), 0), sort.dir);
-    if (sort.key === 'status') return compareValues(a.status, b.status, sort.dir);
-    return compareValues(a.createdAt, b.createdAt, sort.dir);
-  });
 
   function setStatus(id, status) {
     update('orders', data.orders.map(o => o.id === id ? { ...o, status, updatedAt: new Date().toISOString() } : o));
@@ -4020,7 +3266,6 @@ function OrdersView({ data, update }) {
       notes: `Zusammengeführt aus: ${ordersToMerge.map(o => o.title).join(', ')}`,
       lines: allLines.map((l, idx) => ({ ...l, id: l.id || `l_${Date.now()}_${idx}` })),
       sponsors: ordersToMerge[0]?.sponsors || { brust: '', ruecken: '', aermel: '' },
-      sponsorKey: orderSponsorLabel(ordersToMerge[0]) || '',
       fromReports: allReports,
       mergedFrom: ordersToMerge.map(o => o.id),
       createdAt: new Date().toISOString(),
@@ -4096,17 +3341,16 @@ function OrdersView({ data, update }) {
               <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
                 <tr>
                   {mergeMode && <th className="p-3 w-8"></th>}
-                  <SortHeader label="Bestellung" sortKey="title" sort={sort} setSort={setSort} />
-                  <SortHeader label="Mannschaft" sortKey="team" sort={sort} setSort={setSort} className="text-left p-3 hidden sm:table-cell" />
-                  <SortHeader label="Lieferant" sortKey="supplier" sort={sort} setSort={setSort} className="text-left p-3 hidden md:table-cell" />
-                  <SortHeader label="Sponsor" sortKey="sponsor" sort={sort} setSort={setSort} className="text-left p-3 hidden lg:table-cell" />
-                  <SortHeader label="Teile" sortKey="qty" sort={sort} setSort={setSort} className="text-left p-3 hidden md:table-cell" />
-                  <SortHeader label="Status" sortKey="status" sort={sort} setSort={setSort} />
+                  <th className="text-left p-3">Bestellung</th>
+                  <th className="text-left p-3 hidden sm:table-cell">Mannschaft</th>
+                  <th className="text-left p-3 hidden md:table-cell">Lieferant</th>
+                  <th className="text-left p-3 hidden md:table-cell">Teile</th>
+                  <th className="text-left p-3">Status</th>
                   <th className="p-3"></th>
                 </tr>
               </thead>
               <tbody>
-                {sortedOrders.map(o => {
+                {[...data.orders].reverse().map(o => {
                   const articleSupplier = (data.suppliers || []).find(s => s.id === o.articleSupplierId);
                   return (
                     <tr key={o.id} className="border-t border-stone-100">
@@ -4126,9 +3370,6 @@ function OrdersView({ data, update }) {
                       <td className="p-3 hidden sm:table-cell">{o.team || 'div.'}</td>
                       <td className="p-3 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>
                         {articleSupplier?.name || '–'}
-                      </td>
-                      <td className="p-3 hidden lg:table-cell text-xs" style={{ color: 'var(--vereinsblau)' }}>
-                        {orderSponsorLabel(o) || '–'}
                       </td>
                       <td className="p-3 hidden md:table-cell">{o.lines.reduce((s, l) => s + l.qty, 0)}</td>
                       <td className="p-3">
@@ -4162,7 +3403,6 @@ function OrderForm({ data, onSave, onCancel }) {
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([]);
   const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '' });
-  const [sponsorKey, setSponsorKey] = useState('');
   const [showPersonPicker, setShowPersonPicker] = useState(false);
   const [distributingLineId, setDistributingLineId] = useState(null);
 
@@ -4355,7 +3595,7 @@ function OrderForm({ data, onSave, onCancel }) {
       title, type,
       team: team || null,
       articleSupplierId, flockSupplierId, flockBy,
-      notes, lines, sponsors, sponsorKey,
+      notes, lines, sponsors,
       fromReports: [],
     });
   }
@@ -4451,13 +3691,6 @@ function OrderForm({ data, onSave, onCancel }) {
             <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={sponsors.aermel}
               onChange={e => setSponsors({ ...sponsors, aermel: e.target.value })} placeholder="z. B. Stadtwerke" />
           </Field>
-          <div className="sm:col-span-3">
-            <Field label="Sponsor-Kennung / Trikotsatz-ID">
-              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={sponsorKey}
-                onChange={e => setSponsorKey(e.target.value)}
-                placeholder="z. B. Heimtrikot Brabus 2026 oder Satz Sparkasse A-Jugend" />
-            </Field>
-          </div>
         </div>
       </div>
 
@@ -5335,14 +4568,12 @@ function SettingsView({ data, update }) {
   const [settings, setSettings] = useState({
     defaultDeposit: 100,
     clubName: 'FC Frohlinde 1949 e.V.',
-    depositMode: 'pauschal',
     seasonDepreciation: DEFAULT_SEASON_DEPRECIATION,
     conditionFactors: DEFAULT_CONDITION_FACTORS,
     weeklyReportEnabled: false,
     weeklyReportEmail: '',
     weeklyReportFrom: '',
     standardSets: [],
-    teamDepositRules: {},
     ...(data.settings || {}),
     // conditionFactors absichern: jedes Feld muss label und factor haben
     conditionFactors: Object.fromEntries(
@@ -5426,17 +4657,6 @@ function SettingsView({ data, update }) {
       ...settings,
       defaultDeposit: 70,
       depositMode: 'pauschal',
-    });
-  }
-
-  function updateTeamDepositRule(team, patch) {
-    const current = settings.teamDepositRules || {};
-    setSettings({
-      ...settings,
-      teamDepositRules: {
-        ...current,
-        [team]: { ...(current[team] || {}), ...patch },
-      },
     });
   }
 
@@ -5617,47 +4837,9 @@ function SettingsView({ data, update }) {
         <h2 className="font-display text-2xl mb-2">PFANDREGELN</h2>
         <p className="text-xs text-stone-500 mb-4">Wie wird bei der Rückgabe abgerechnet? Wähle das Modell, das zur Pfandordnung des Vereins passt.</p>
 
-        {data.teams.length > 0 && (
-          <div className="mb-5 p-4" style={{ background: 'var(--paper)', border: '1px solid var(--rule)' }}>
-            <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>JE MANNSCHAFT</div>
-            <p className="text-xs text-stone-500 mb-3">Standard ist immer Pauschal. Pro Mannschaft kann davon auf Saison-Abschreibung oder ohne Pfand abgewichen werden.</p>
-            <div className="space-y-2">
-              {data.teams.map(teamName => {
-                const rule = (settings.teamDepositRules || {})[teamName] || {};
-                const teamMode = rule.depositMode || 'pauschal';
-                return (
-                  <div key={teamName} className="grid grid-cols-12 gap-2 items-center">
-                    <div className="col-span-12 sm:col-span-4 text-sm font-medium">{teamName}</div>
-                    <select
-                      className="col-span-7 sm:col-span-5 border border-stone-300 px-2 py-2 text-sm"
-                      value={teamMode}
-                      onChange={e => updateTeamDepositRule(teamName, { depositMode: e.target.value })}
-                    >
-                      <option value="pauschal">Pauschal</option>
-                      <option value="saison">Saison-Abschreibung</option>
-                      <option value="ohne_pfand">Ohne Pfand</option>
-                    </select>
-                    <input
-                      type="number"
-                      step="0.01"
-                      disabled={teamMode === 'ohne_pfand'}
-                      className="col-span-5 sm:col-span-3 border border-stone-300 px-2 py-2 text-sm text-right disabled:opacity-60"
-                      value={teamMode === 'ohne_pfand' ? 0 : (Number.isFinite(rule.defaultDeposit) ? rule.defaultDeposit : '')}
-                      placeholder={teamMode === 'ohne_pfand' ? '0 €' : `${settings.defaultDeposit ?? DEFAULT_DEPOSIT_AMOUNT} €`}
-                      onChange={e => updateTeamDepositRule(teamName, {
-                        defaultDeposit: e.target.value === '' ? undefined : (parseFloat(e.target.value) || 0),
-                      })}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
           <label className="flex items-start gap-3 p-4 cursor-pointer"
-            style={{ border: (settings.depositMode === 'pauschal' || !settings.depositMode) ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: (settings.depositMode === 'pauschal' || !settings.depositMode) ? '#F1ECDF' : 'white' }}>
+            style={{ border: settings.depositMode === 'pauschal' ? '2px solid var(--vereinsblau)' : '1px solid var(--rule)', background: settings.depositMode === 'pauschal' ? '#F1ECDF' : 'white' }}>
             <input type="radio" name="depositMode" value="pauschal" checked={settings.depositMode === 'pauschal' || !settings.depositMode}
               onChange={e => setSettings({ ...settings, depositMode: 'pauschal' })} className="mt-1" />
             <div>
