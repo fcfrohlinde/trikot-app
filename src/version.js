@@ -1,8 +1,51 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.8.2';
+export const APP_VERSION = '1.11.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.11.0',
+    date: '2026-05-18',
+    changes: [
+      'Spieler-/Trainerlisten, Materiallisten und Bestelllisten sind jetzt per Klick auf die Spaltenüberschrift sortierbar',
+      'Sortierrichtung wechselt pro Klick zwischen aufsteigend und absteigend',
+      'Spaltenüberschriften zeigen Sortierhinweise mit Pfeilsymbolen',
+      'Standard-Sets können jetzt nicht nur je Spieler/Trainer, sondern auch teamweit verarbeitet werden',
+      'Team-Grundbestückung erzeugt Vorschläge aus Lagerbestand, Korrekturbuchungen und Umbeflockungsbedarf für die gesamte Mannschaft',
+      'Teamweite Umbeflockungsliste kann als CSV exportiert werden',
+    ],
+  },
+  {
+    version: '1.10.0',
+    date: '2026-05-18',
+    changes: [
+      'Neue Grundbestückung direkt an Spieler/Trainer: Standard-Set prüfen und fehlende Erstausstattung nachträglich einpflegen',
+      'Korrekturmodus für Ausgabemengen ergänzt: bereits ausgegebene Teile können ohne vorherigen Lagerbestand als Inventar-Korrektur angelegt werden',
+      'Materialvorschläge nutzen Lagerbestand mit passender Nummer/Initialen und schlagen alternativ größenpassende Teile mit abweichender Beflockung vor',
+      'Bereits ausgegebene Teile werden bei der Erstausstattungsprüfung auch über Nummer/Initialen berücksichtigt',
+      'Umbeflockungsliste als CSV erzeugbar, wenn Lagerteile von alter auf neue Nummer/Initialen geändert werden müssen',
+      'Umbeflockung kann beim Ausgeben von Material direkt als Alt-zu-Neu-Wechsel am Materialteil erfasst werden',
+      'Materiallisten zeigen Umbeflockungsbedarf als Hinweis am betroffenen Artikel',
+    ],
+  },
+  {
+    version: '1.9.0',
+    date: '2026-05-18',
+    changes: [
+      'Login- und Setup-Flow robuster gemacht: Auth-Status wird sauber ausgewertet und Fehler werden im Frontend verständlich angezeigt',
+      'API-Fehlerlogging mit Fehler-ID ergänzt, ohne Passwörter oder Tokens in Logs zu schreiben',
+      'JWT_SECRET ist jetzt Pflicht und muss in Vercel mindestens 32 Zeichen lang gesetzt sein',
+      'Material-Wareneingang schützt bestehenden Bestand vor Überschreiben: neue Inventarteile werden per ID in den Bestand gemergt',
+      'Materialübersicht zeigt Nummern/Initialen jetzt auch für eingebuchte Lagerartikel mit vorerfasster Beflockung',
+      'Eingebuchte Artikel behalten Nummer/Initialen, Flockname, Sponsor-Kennung und Bestellbezug im Inventar',
+      'Gruppierte und einzelne Materiallisten zeigen Nr./Init. als eigene Spalte',
+      'PDF-Bestandsliste enthält Nr./Init. ebenfalls als eigene Spalte',
+      'Bestellungen können über eine Sponsor-Kennung / Trikotsatz-ID identifiziert werden',
+      'Wareneingang zeigt Sponsor-Kennung in der Bestellauswahl an',
+      'Pfandregeln können je Mannschaft individuell überschrieben werden',
+      'Lokale optimistische Anzeige nach Material-Merge hält den vollständigen Bestand sichtbar',
+    ],
+  },
   {
     version: '1.8.2',
     date: '2026-05-08',
