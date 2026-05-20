@@ -1,8 +1,18 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.4';
+export const APP_VERSION = '1.14.5';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.5',
+    date: '2026-05-20',
+    changes: [
+      'Normales Bestellformular wertet Standard-Sets jetzt ebenfalls gegen Saison-Umverteilung aus',
+      'Set anwenden erzeugt keine Bestellzeilen mehr, wenn passende Teile ausscheidender Personen gleicher Mannschaft und Größe vorhanden sind',
+      'Set-Auswertung zeigt sichtbar an, welche Positionen durch Umverteilung gedeckt sind und wo Umbeflockung/Nummernwechsel zu prüfen ist',
+      'Fall Emre Hamut/Felipe Alves Nr. 11 wird im normalen Bestellformular nicht mehr als Bestellung erzeugt, wenn die passenden Felipe-Teile ausgegeben sind',
+    ],
+  },
   {
     version: '1.14.4',
     date: '2026-05-20',

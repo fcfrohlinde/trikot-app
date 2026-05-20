@@ -4803,6 +4803,7 @@ function OrderForm({ data, onSave, onCancel }) {
   const [sponsorKey, setSponsorKey] = useState('');
   const [showPersonPicker, setShowPersonPicker] = useState(false);
   const [distributingLineId, setDistributingLineId] = useState(null);
+  const [setSuggestionInfo, setSetSuggestionInfo] = useState(null);
 
   const suppliers = data.suppliers || [];
   const articleSuppliers = suppliers.filter(s => s.type === 'artikel' || s.type === 'beides');
@@ -4938,6 +4939,11 @@ function OrderForm({ data, onSave, onCancel }) {
     if (!set) return;
     const newLines = [];
     const seen = new Set(lines.map(l => `${l.playerId}__${l.itemType}__${l.size}`));
+    const usedTransfers = new Set();
+    const transferRows = [];
+    const reprintRows = [];
+    let skippedExisting = 0;
+    let skippedDuplicate = 0;
 
     // Welche Personen bekommen das Set?
     const candidates = [];
@@ -4962,9 +4968,33 @@ function OrderForm({ data, onSave, onCancel }) {
         const item = data.items.find(i => i.id === entry.itemId);
         if (!item) return;
         // Filter: Nur Personen, die diesen Artikel noch nicht haben
-        if (hasItemAssigned(person.id, item.id)) return;
+        if (hasItemAssigned(person.id, item.id)) {
+          skippedExisting++;
+          return;
+        }
         const key = `${person.id}__${item.id}__${size}`;
-        if (seen.has(key)) return;
+        if (seen.has(key)) {
+          skippedDuplicate++;
+          return;
+        }
+        const transfer = findSeasonTransferCandidate(data, item.id, { ...person, _kind: kind }, usedTransfers);
+        if (transfer) {
+          usedTransfers.add(transfer.id);
+          const sourcePerson = findPerson(data, transfer.assignedTo);
+          const targetPerson = { ...person, _kind: kind };
+          const transferRow = {
+            itemName: item.name,
+            size: transfer.size || size,
+            sourceName: sourcePerson ? `${sourcePerson.firstName} ${sourcePerson.lastName}` : 'Austritt',
+            targetName: `${person.firstName} ${person.lastName}`,
+            oldNumber: inventoryEffectiveNumber(data, transfer),
+            newNumber: personNumberValue(targetPerson),
+            needsReprint: !inventoryMatchesPersonNumberInData(data, transfer, targetPerson),
+          };
+          if (transferRow.needsReprint) reprintRows.push(transferRow);
+          else transferRows.push(transferRow);
+          return;
+        }
         seen.add(key);
         newLines.push({
           id: `l_${Date.now()}_${idxP}_${idxItem}_${Math.random().toString(36).slice(2, 5)}`,
@@ -4981,8 +5011,9 @@ function OrderForm({ data, onSave, onCancel }) {
       if (addedForPerson === 0) skippedFully++;
     });
 
+    setSetSuggestionInfo({ transfers: transferRows, reprints: reprintRows, skippedExisting, skippedDuplicate, ordered: newLines.length });
     if (newLines.length === 0) {
-      alert(`Keine neuen Bestellzeilen erzeugt — alle ${candidates.length} Personen sind bereits mit diesem Set ausgestattet.`);
+      alert(`Keine neuen Bestellzeilen erzeugt. ${transferRows.length + reprintRows.length} Position(en) sind durch Umverteilung gedeckt.`);
       return;
     }
     const personsAdded = candidates.length - skippedFully;
@@ -5146,6 +5177,24 @@ function OrderForm({ data, onSave, onCancel }) {
           </div>
         )}
       </div>
+
+      {setSuggestionInfo && (
+        <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
+          <div className="font-medium mb-1" style={{ color: 'var(--vereinsblau)' }}>
+            Set-Auswertung: {setSuggestionInfo.ordered} Bestellzeile(n), {(setSuggestionInfo.transfers.length + setSuggestionInfo.reprints.length)} Umverteilung(en), {setSuggestionInfo.skippedExisting} bereits vorhandene Position(en).
+          </div>
+          {setSuggestionInfo.transfers.length > 0 && (
+            <div className="mb-1">
+              <strong>Umverteilung ohne Bestellung:</strong> {setSuggestionInfo.transfers.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} -> ${r.targetName}`).join('; ')}
+            </div>
+          )}
+          {setSuggestionInfo.reprints.length > 0 && (
+            <div>
+              <strong>Umbeflockung/Nummernwechsel prüfen:</strong> {setSuggestionInfo.reprints.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} ${r.oldNumber || '-'} -> ${r.targetName} ${r.newNumber || '-'}`).join('; ')}
+            </div>
+          )}
+        </div>
+      )}
 
       {showPersonPicker && (
         <PersonPicker
