@@ -105,10 +105,19 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock) {
     const owner = findPerson(data, inv.assignedTo);
     return owner
       && owner.id !== person.id
+      && owner._kind === person._kind
       && owner.team === person.team
       && owner.seasonExit
       && !owner.seasonEntry;
   });
+}
+
+function personHasIssuedEquipment(data, personId) {
+  return (data.inventory || []).some(inv => inv.status === 'ausgegeben' && inv.assignedTo === personId);
+}
+
+function isUnmarkedActiveWithEquipment(data, person) {
+  return !person?.seasonEntry && !person?.seasonExit && personHasIssuedEquipment(data, person?.id);
 }
 
 // Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
@@ -983,6 +992,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
   const [setId, setSetId] = useState(allSets[0]?.id || '');
   const [correctionMode, setCorrectionMode] = useState(true);
   const [orderReprints, setOrderReprints] = useState({});
+  const [includeUnmarkedEquipped, setIncludeUnmarkedEquipped] = useState(false);
   const selectedSet = allSets.find(s => s.id === setId);
   const targetNumber = personNumberValue(person);
   const targetName = (person.lastName || '').toUpperCase();
@@ -1001,6 +1011,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
   function buildSuggestions() {
     if (!selectedSet) return [];
     if (!shouldReceiveSeasonEquipment(person)) return [];
+    if (!includeUnmarkedEquipped && isUnmarkedActiveWithEquipment(data, person)) return [];
     const usedStock = new Set();
     const suggestions = [];
     (selectedSet.items || []).forEach(entry => {
@@ -1017,8 +1028,10 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
           !usedStock.has(inv.id)
         );
         const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-        const transfer = (!correctionMode && !exact) ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
-        const sized = correctionMode ? (exact || null) : (exact || stock.find(inv => inv.reservedFor === person.id) || stock[0] || transfer || null);
+        const transfer = !exact ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
+        const reserved = stock.find(inv => inv.reservedFor === person.id);
+        const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumber(transfer, person)) ? transfer : null;
+        const sized = correctionMode ? (exact || safeTransfer || null) : (exact || reserved || transfer || stock[0] || null);
         if (sized) usedStock.add(sized.id);
         const oldNumber = sized?.assignedNumber ? String(sized.assignedNumber) : '';
         const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonNumber(sized, person));
@@ -1211,6 +1224,13 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
                 <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Fehlende Teile direkt als ausgegeben einpflegen, auch ohne vorherigen Lagerbestand.</div>
               </div>
             </label>
+            <label className="flex items-start gap-3 p-3 cursor-pointer md:col-span-2" style={{ border: '1px solid var(--rule)', background: includeUnmarkedEquipped ? '#F1ECDF' : 'white' }}>
+              <input type="checkbox" checked={includeUnmarkedEquipped} onChange={e => setIncludeUnmarkedEquipped(e.target.checked)} className="mt-1" />
+              <div>
+                <div className="text-sm font-medium">Bestands-Person ohne Saisonmarkierung einbeziehen</div>
+                <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Standard: Personen mit ausgegebenem Material und ohne Eintritt/Austritt werden aus dem Bestellvorschlag herausgenommen.</div>
+              </div>
+            </label>
           </div>
 
           {correctionMode && (
@@ -1300,8 +1320,10 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
 }
 
 function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCreateOrder, onCancel }) {
+  const [includeUnmarkedEquipped, setIncludeUnmarkedEquipped] = useState(false);
   const persons = (kind === 'coach' ? (data.coaches || []) : (data.players || []))
     .filter(p => p.team === team && shouldReceiveSeasonEquipment(p))
+    .filter(p => includeUnmarkedEquipped || !isUnmarkedActiveWithEquipment(data, p))
     .map(p => ({ ...p, _kind: kind }));
   const allSets = migrateStandardSets(data.settings).filter(set =>
     set.target === 'both' || (kind === 'coach' ? set.target === 'coach' : set.target === 'player')
@@ -1340,8 +1362,10 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
             !usedStock.has(inv.id)
           );
           const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-          const transfer = (!correctionMode && !exact) ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
-          const sized = correctionMode ? (exact || null) : (exact || stock.find(inv => inv.reservedFor === person.id) || stock[0] || transfer || null);
+          const transfer = !exact ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
+          const reserved = stock.find(inv => inv.reservedFor === person.id);
+          const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumber(transfer, person)) ? transfer : null;
+          const sized = correctionMode ? (exact || safeTransfer || null) : (exact || reserved || transfer || stock[0] || null);
           if (sized) usedStock.add(sized.id);
           const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
           out.push({
@@ -1527,6 +1551,13 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           <div>
             <div className="text-sm font-medium">Korrektur Ausgabemengen</div>
             <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Fehlende Teile ohne Lagerbestand einpflegen.</div>
+          </div>
+        </label>
+        <label className="flex items-start gap-3 p-3 cursor-pointer md:col-span-3" style={{ border: '1px solid var(--rule)', background: includeUnmarkedEquipped ? '#F1ECDF' : 'white' }}>
+          <input type="checkbox" checked={includeUnmarkedEquipped} onChange={e => setIncludeUnmarkedEquipped(e.target.checked)} className="mt-1" />
+          <div>
+            <div className="text-sm font-medium">Bestands-Spieler/Trainer ohne Saisonmarkierung einbeziehen</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Standard: Personen mit bereits ausgegebenem Material und ohne Eintritt/Austritt werden aus dem Bestellvorschlag ausgeschlossen.</div>
           </div>
         </label>
       </div>

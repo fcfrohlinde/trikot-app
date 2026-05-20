@@ -1,8 +1,18 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.2';
+export const APP_VERSION = '1.14.3';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.3',
+    date: '2026-05-20',
+    changes: [
+      'Bestellvorschläge schließen Bestands-Spieler/Trainer ohne Saisonmarkierung standardmäßig aus; per Checkbox können sie wieder einbezogen werden',
+      'Umverteilung aus Material ausscheidender Personen wird jetzt auch im Korrekturmodus geprüft, sofern keine Umbeflockung nötig ist',
+      'Umverteilungsvorschläge beschränken sich auf gleiche Personenart, Mannschaft, Artikel und Größe',
+      'Saisonwechsel-Fall mit gleicher Nummer, z. B. Nr. 11 Hamut/Alves in der Ersten, wird dadurch als Umverteilung statt Bestellung vorgeschlagen',
+    ],
+  },
   {
     version: '1.14.2',
     date: '2026-05-20',
