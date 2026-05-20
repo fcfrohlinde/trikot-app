@@ -122,6 +122,15 @@ function getPersonStandardSets(settings, personOrKind) {
   return defaults.length > 0 ? defaults : matching;
 }
 
+function shouldPlanStandardSetInMaterial(data, person) {
+  if (!person || !shouldReceiveSeasonEquipment(person)) return false;
+  const sets = getPersonStandardSets(data.settings, person);
+  if (sets.length === 0) return false;
+  if (seasonFlag(person.seasonEntry)) return true;
+  if (person.standardSetId) return true;
+  return !personHasIssuedEquipment(data, person.id);
+}
+
 function inventoryEffectiveNumber(data, inv) {
   if (inv?.assignedNumber !== undefined && inv.assignedNumber !== null && inv.assignedNumber !== '') {
     return String(inv.assignedNumber).trim().toUpperCase();
@@ -2754,6 +2763,12 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
 
 function SeasonMaterialWorkArea({ data, update }) {
   const [open, setOpen] = useState(true);
+  const [filterPersonKind, setFilterPersonKind] = useState('alle'); // alle | player | coach
+  const [filterTeam, setFilterTeam] = useState('');
+  const [filterPersonId, setFilterPersonId] = useState('');
+  const [filterItemId, setFilterItemId] = useState('');
+  const [filterSize, setFilterSize] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
   const standardSets = migrateStandardSets(data.settings);
   const persons = allPersons(data);
   const openOrders = (data.orders || []).filter(orderCoversNeed);
@@ -2804,7 +2819,7 @@ function SeasonMaterialWorkArea({ data, update }) {
       });
     });
 
-    persons.filter(p => seasonFlag(p.seasonEntry) && shouldReceiveSeasonEquipment(p)).forEach(person => {
+    persons.filter(p => shouldPlanStandardSetInMaterial(data, p)).forEach(person => {
       const sets = getPersonStandardSets(data.settings, person);
       sets.forEach(set => {
         (set.items || []).forEach(entry => {
@@ -2820,7 +2835,12 @@ function SeasonMaterialWorkArea({ data, update }) {
             - openOrderedQtyForPersonItem(data, person, item.id, size)
           );
           for (let idx = 0; idx < remaining; idx++) {
-            addRow({ person, item, size, sourceHint: `Saisonstatus: Eintritt (${set.name})` });
+            const basis = seasonFlag(person.seasonEntry)
+              ? `Saisonstatus: Eintritt (${set.name})`
+              : person.standardSetId
+                ? `Standard-Set zugeordnet (${set.name})`
+                : `Standard-Set offen (${set.name})`;
+            addRow({ person, item, size, sourceHint: basis });
           }
         });
       });
@@ -2829,9 +2849,41 @@ function SeasonMaterialWorkArea({ data, update }) {
     return result;
   }, [data, persons, standardSets, openOrders]);
 
-  const transfers = rows.filter(r => r.category === 'umverteilung');
-  const issues = rows.filter(r => r.category === 'ausgabe');
-  const reprints = rows.filter(r => r.category === 'umbeflockung');
+  const filterPersons = persons.filter(p => {
+    if (filterTeam && p.team !== filterTeam) return false;
+    if (filterPersonKind !== 'alle' && p._kind !== filterPersonKind) return false;
+    return true;
+  });
+  const sizeOptions = [...new Set(rows.map(r => r.size).filter(Boolean))].sort((a, b) => compareValues(a, b, 'asc'));
+  const filteredRows = rows.filter(row => {
+    if (filterPersonKind !== 'alle' && row.target._kind !== filterPersonKind) return false;
+    if (filterTeam && row.target.team !== filterTeam) return false;
+    if (filterPersonId && row.target.id !== filterPersonId) return false;
+    if (filterItemId && row.item.id !== filterItemId) return false;
+    if (filterSize && row.size !== filterSize) return false;
+    const q = filterSearch.trim().toLowerCase();
+    if (q) {
+      const haystack = [
+        row.item.name,
+        row.item.articleNumber,
+        row.size,
+        row.sourceLabel,
+        row.oldNumber,
+        row.newNumber,
+        row.target.firstName,
+        row.target.lastName,
+        row.target.team,
+        row.target._kind === 'coach' ? 'trainer' : 'spieler',
+        row.sourceHint,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const transfers = filteredRows.filter(r => r.category === 'umverteilung');
+  const issues = filteredRows.filter(r => r.category === 'ausgabe');
+  const reprints = filteredRows.filter(r => r.category === 'umbeflockung');
 
   function reserveSource(row) {
     if (row.source.status !== 'lager') return;
@@ -2868,7 +2920,7 @@ function SeasonMaterialWorkArea({ data, update }) {
         `${row.item.articleNumber ? `[${row.item.articleNumber}] ` : ''}${row.item.name}`,
         row.size || '',
         `${row.sourceLabel} ${row.oldNumber || '-'}`,
-        `${row.target.firstName} ${row.target.lastName} ${row.newNumber || '-'}`,
+        `${row.target.firstName} ${row.target.lastName}${row.target._kind === 'coach' ? ' (Trainer)' : ''} ${row.newNumber || '-'}`,
         row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ruecklauf ${row.source.id}`,
         row.sourceHint || '',
       ]),
@@ -2900,7 +2952,12 @@ function SeasonMaterialWorkArea({ data, update }) {
                 <td className="p-2 font-medium">{row.item.articleNumber ? `[${row.item.articleNumber}] ` : ''}{row.item.name}</td>
                 <td className="p-2">{row.size}</td>
                 <td className="p-2">{row.sourceLabel} {row.oldNumber || '-'}</td>
-                <td className="p-2">{row.target.firstName} {row.target.lastName} {row.newNumber || '-'}</td>
+                <td className="p-2">
+                  {row.target.firstName} {row.target.lastName} {row.newNumber || '-'}
+                  {row.target._kind === 'coach' && (
+                    <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
+                  )}
+                </td>
                 <td className="p-2 font-mono">{row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`}</td>
                 <td className="p-2">{row.sourceHint}</td>
                 <td className="p-2 text-right">
@@ -2935,6 +2992,57 @@ function SeasonMaterialWorkArea({ data, update }) {
       </button>
       {open && (
         <div className="border-t border-stone-200">
+          <div className="p-4 border-b border-stone-100" style={{ background: 'var(--paper)' }}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              <Field label="Personenkreis">
+                <select value={filterPersonKind} onChange={e => { setFilterPersonKind(e.target.value); setFilterPersonId(''); }} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="alle">Alle</option>
+                  <option value="player">Nur Spieler</option>
+                  <option value="coach">Nur Trainer</option>
+                </select>
+              </Field>
+              <Field label="Mannschaft">
+                <select value={filterTeam} onChange={e => { setFilterTeam(e.target.value); setFilterPersonId(''); }} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Mannschaften</option>
+                  {(data.teams || []).map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </Field>
+              <Field label="Person">
+                <select value={filterPersonId} onChange={e => setFilterPersonId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Personen</option>
+                  {filterPersons.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p._kind === 'coach' ? personNumberValue(p) : `#${personNumberValue(p) || '-'}`} {p.firstName} {p.lastName}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Artikel">
+                <select value={filterItemId} onChange={e => setFilterItemId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Artikel</option>
+                  {(data.items || []).map(item => <option key={item.id} value={item.id}>{item.articleNumber ? `[${item.articleNumber}] ` : ''}{item.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Größe">
+                <select value={filterSize} onChange={e => setFilterSize(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Größen</option>
+                  {sizeOptions.map(size => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </Field>
+              <Field label="Suche">
+                <input value={filterSearch} onChange={e => setFilterSearch(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white" placeholder="Name, Nr., Artikel..." />
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-3 text-xs" style={{ color: 'var(--ink-mute)' }}>
+              <span>{filteredRows.length} von {rows.length} Vorschlag/Vorschlägen sichtbar</span>
+              <button
+                onClick={() => { setFilterPersonKind('alle'); setFilterTeam(''); setFilterPersonId(''); setFilterItemId(''); setFilterSize(''); setFilterSearch(''); }}
+                className="px-3 py-1.5 border border-stone-300 bg-white"
+              >
+                Filter zurücksetzen
+              </button>
+            </div>
+          </div>
           <div className="p-4 border-b border-stone-100 flex flex-wrap gap-2 justify-end">
             <button onClick={() => printRowsPdf(transfers, 'Umverteilung alt - neu', 'umverteilung_alt_neu.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
               Umverteilung PDF

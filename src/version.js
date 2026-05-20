@@ -1,8 +1,26 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.15';
+export const APP_VERSION = '1.14.17';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.17',
+    date: '2026-05-20',
+    changes: [
+      'Die Materiallisten fuer Umverteilung, Ausgabe aus Lager und Umbeflockung haben jetzt Filter wie der Lagerbestand',
+      'Filter nach Personenkreis, Mannschaft, Person, Artikel, Groesse und Freitextsuche ergaenzt',
+      'PDF-Exporte der Vorschlagslisten verwenden die aktuell gefilterte Ansicht',
+    ],
+  },
+  {
+    version: '1.14.16',
+    date: '2026-05-20',
+    changes: [
+      'Material-Vorschlagslisten beruecksichtigen jetzt Standard-Sets fuer Spieler und Trainer',
+      'Trainer mit Saison-Eintritt, zugeordnetem Standard-Set oder noch fehlender Ausstattung erscheinen in Umverteilung, Ausgabe aus Lager und Umbeflockung',
+      'Trainer werden in den Material-Vorschlagslisten und PDF-Ausgaben als Trainer gekennzeichnet',
+    ],
+  },
   {
     version: '1.14.15',
     date: '2026-05-20',
