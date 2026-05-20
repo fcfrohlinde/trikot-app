@@ -177,7 +177,7 @@ function stockReservedForOther(inv, person) {
 function stockUsableForPerson(inv, person) {
   if (!inv || inv.status !== 'lager') return false;
   if (stockReservedForOther(inv, person)) return false;
-  if (inv.team && person?.team && inv.team !== person.team) return false;
+  if (inv.team && person?.team && inv.team !== person.team && person?._kind !== 'coach') return false;
   return true;
 }
 
@@ -223,7 +223,7 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock, options = 
     const valid = owner
       && owner.id !== person.id
       && owner._kind === person._kind
-      && owner.team === person.team
+      && (owner.team === person.team || person._kind === 'coach')
       && seasonFlag(owner.seasonExit)
       && !seasonFlag(owner.seasonEntry);
     if (!valid) return false;
@@ -2796,10 +2796,10 @@ function SeasonMaterialWorkArea({ data, update }) {
         size: source.size || wantedSize,
         source,
         sourceLabel: sourcePerson
-          ? `${sourcePerson.firstName} ${sourcePerson.lastName}`
+          ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson._kind === 'coach' && sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
           : source.reservedFor
             ? 'Reservierter Lagerbestand'
-            : 'Lagerbestand',
+            : source.team ? `Lagerbestand ${source.team}` : 'Lagerbestand',
         target,
         oldNumber: inventoryEffectiveNumber(data, source),
         newNumber: personNumberValue(target),

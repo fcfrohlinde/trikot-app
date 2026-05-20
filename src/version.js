@@ -1,8 +1,17 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.17';
+export const APP_VERSION = '1.14.18';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.18',
+    date: '2026-05-20',
+    changes: [
+      'Trainer-Material darf bei Umverteilung und Umbeflockung jetzt mannschaftsuebergreifend vorgeschlagen werden',
+      'Spieler-Material bleibt bei Umverteilung und Lagerausgabe weiterhin an die Mannschaft gebunden',
+      'Quellen aus anderen Trainer-Mannschaften werden in den Materialvorschlagslisten mit Mannschaftshinweis angezeigt',
+    ],
+  },
   {
     version: '1.14.17',
     date: '2026-05-20',
