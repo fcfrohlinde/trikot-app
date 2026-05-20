@@ -82,8 +82,29 @@ function inventoryMatchesPersonNumber(inv, person) {
   return invKind === person._kind;
 }
 
+function seasonFlag(value) {
+  return value === true || value === 1 || value === 'true' || value === '1' || value === 'ja' || value === 'yes';
+}
+
 function shouldReceiveSeasonEquipment(person) {
-  return !person?.seasonExit || !!person?.seasonEntry;
+  return !seasonFlag(person?.seasonExit) || seasonFlag(person?.seasonEntry);
+}
+
+function inventoryEffectiveNumber(data, inv) {
+  if (inv?.assignedNumber !== undefined && inv.assignedNumber !== null && inv.assignedNumber !== '') {
+    return String(inv.assignedNumber).trim().toUpperCase();
+  }
+  const owner = findPerson(data, inv?.assignedTo);
+  return personNumberValue(owner).toUpperCase();
+}
+
+function inventoryMatchesPersonNumberInData(data, inv, person) {
+  const invNumber = inventoryEffectiveNumber(data, inv);
+  const personNumber = personNumberValue(person).toUpperCase();
+  if (!invNumber || !personNumber || invNumber !== personNumber) return false;
+  const owner = findPerson(data, inv?.assignedTo);
+  const invKind = inv?.personKind || owner?._kind || person?._kind;
+  return invKind === person?._kind;
 }
 
 function stockReservedForOther(inv, person) {
@@ -107,8 +128,8 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock) {
       && owner.id !== person.id
       && owner._kind === person._kind
       && owner.team === person.team
-      && owner.seasonExit
-      && !owner.seasonEntry;
+      && seasonFlag(owner.seasonExit)
+      && !seasonFlag(owner.seasonEntry);
   });
 }
 
@@ -117,7 +138,7 @@ function personHasIssuedEquipment(data, personId) {
 }
 
 function isUnmarkedActiveWithEquipment(data, person) {
-  return !person?.seasonEntry && !person?.seasonExit && personHasIssuedEquipment(data, person?.id);
+  return !seasonFlag(person?.seasonEntry) && !seasonFlag(person?.seasonExit) && personHasIssuedEquipment(data, person?.id);
 }
 
 // Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
@@ -1030,19 +1051,22 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
         const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
         const transfer = !exact ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
         const reserved = stock.find(inv => inv.reservedFor === person.id);
-        const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumber(transfer, person)) ? transfer : null;
+        const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumberInData(data, transfer, person)) ? transfer : null;
         const sized = correctionMode ? (exact || safeTransfer || null) : (exact || reserved || transfer || stock[0] || null);
         if (sized) usedStock.add(sized.id);
-        const oldNumber = sized?.assignedNumber ? String(sized.assignedNumber) : '';
-        const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonNumber(sized, person));
+        const oldNumber = sized ? inventoryEffectiveNumber(data, sized) : '';
+        const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonNumberInData(data, sized, person));
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
+        const action = fromPerson
+          ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
+          : exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur';
         suggestions.push({
           id: `${item.id}_${idx}`,
           item,
           size: person.size || sized?.size || 'L',
           alreadyIssued,
           stock: sized,
-          action: exact ? 'passend' : fromPerson ? 'umverteilung' : sized ? 'umbeflocken' : 'korrektur',
+          action,
           needsReprint,
           oldNumber,
           newNumber: targetNumber,
@@ -1236,6 +1260,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
           {correctionMode && (
             <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
               Korrekturmodus: Fehlende Teile werden mit der aktuell hinterlegten Nummer/Initiale {targetNumber || '–'} eingepflegt. Abweichend beflockte Lagerteile werden dabei nicht verwendet.
+              Umbeflockungsvorschläge mit abweichender Nummer erscheinen, wenn der Korrekturmodus deaktiviert ist.
             </div>
           )}
 
@@ -1263,6 +1288,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
                       {s.action === 'passend' && <span className="text-emerald-700">Passend aus Lager</span>}
                       {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Aus Lager, Umbeflockung nötig</span>}
                       {s.action === 'umverteilung' && <span className="text-emerald-700">Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}</span>}
+                      {s.action === 'umverteilung_umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}, Umbeflockung nÃ¶tig</span>}
                       {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur-Ausgabe' : 'Kein Lagerbestand'}</span>}
                     </td>
                     <td className="p-2">{s.oldNumber || '–'}</td>
@@ -1364,20 +1390,24 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
           const transfer = !exact ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
           const reserved = stock.find(inv => inv.reservedFor === person.id);
-          const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumber(transfer, person)) ? transfer : null;
+          const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumberInData(data, transfer, person)) ? transfer : null;
           const sized = correctionMode ? (exact || safeTransfer || null) : (exact || reserved || transfer || stock[0] || null);
           if (sized) usedStock.add(sized.id);
           const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
+          const needsReprint = !correctionMode && !!sized && !inventoryMatchesPersonNumberInData(data, sized, person);
+          const action = fromPerson
+            ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
+            : exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur';
           out.push({
             id: `${person.id}_${item.id}_${idx}`,
             person,
             item,
             stock: sized,
             size: person.size || sized?.size || 'L',
-            oldNumber: sized?.assignedNumber ? String(sized.assignedNumber) : '',
+            oldNumber: sized ? inventoryEffectiveNumber(data, sized) : '',
             newNumber: targetNumber,
-            needsReprint: !correctionMode && !!sized && !inventoryMatchesPersonNumber(sized, person),
-            action: exact ? 'passend' : fromPerson ? 'umverteilung' : sized ? 'umbeflocken' : 'korrektur',
+            needsReprint,
+            action,
             sourcePerson: fromPerson,
           });
         }
@@ -1564,6 +1594,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
       {correctionMode && (
         <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
           Korrekturmodus: fehlende Teile werden je Person mit der im Kader hinterlegten Nummer/Initiale eingepflegt. Abweichend beflockte Lagerteile werden nicht verwendet und erzeugen keine Umbeflockung.
+          Umbeflockungsvorschläge mit abweichender Nummer erscheinen, wenn der Korrekturmodus deaktiviert ist.
         </div>
       )}
       <div className="border border-stone-200 overflow-x-auto mb-3 max-h-80">
@@ -1589,6 +1620,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
                   {s.action === 'passend' && <span className="text-emerald-700">Passend</span>}
                   {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umbeflockung</span>}
                   {s.action === 'umverteilung' && <span className="text-emerald-700">Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}</span>}
+                  {s.action === 'umverteilung_umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}, Umbeflockung</span>}
                   {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur' : 'Kein Lager'}</span>}
                 </td>
                 <td className="p-2">{s.oldNumber || '–'}</td>
@@ -4910,10 +4942,16 @@ function OrderForm({ data, onSave, onCancel }) {
     // Welche Personen bekommen das Set?
     const candidates = [];
     if (set.target === 'player' || set.target === 'both') {
-      teamPlayers.forEach(p => candidates.push({ person: p, kind: 'player' }));
+      teamPlayers
+        .filter(p => shouldReceiveSeasonEquipment(p))
+        .filter(p => !isUnmarkedActiveWithEquipment(data, p))
+        .forEach(p => candidates.push({ person: p, kind: 'player' }));
     }
     if (set.target === 'coach' || set.target === 'both') {
-      teamCoaches.forEach(c => candidates.push({ person: c, kind: 'coach' }));
+      teamCoaches
+        .filter(c => shouldReceiveSeasonEquipment(c))
+        .filter(c => !isUnmarkedActiveWithEquipment(data, c))
+        .forEach(c => candidates.push({ person: c, kind: 'coach' }));
     }
 
     let skippedFully = 0;
@@ -5092,9 +5130,10 @@ function OrderForm({ data, onSave, onCancel }) {
                 // Anzeigen: wieviele Personen würden was bekommen
                 const target = set.target;
                 const candidates =
-                  target === 'player' ? teamPlayers.length :
-                  target === 'coach' ? teamCoaches.length :
-                  teamPlayers.length + teamCoaches.length;
+                  target === 'player' ? teamPlayers.filter(p => shouldReceiveSeasonEquipment(p) && !isUnmarkedActiveWithEquipment(data, p)).length :
+                  target === 'coach' ? teamCoaches.filter(c => shouldReceiveSeasonEquipment(c) && !isUnmarkedActiveWithEquipment(data, c)).length :
+                  teamPlayers.filter(p => shouldReceiveSeasonEquipment(p) && !isUnmarkedActiveWithEquipment(data, p)).length
+                    + teamCoaches.filter(c => shouldReceiveSeasonEquipment(c) && !isUnmarkedActiveWithEquipment(data, c)).length;
                 if (candidates === 0) return null;
                 const targetLabel = target === 'player' ? 'Spieler' : target === 'coach' ? 'Trainer' : 'Sp.+Tr.';
                 return (

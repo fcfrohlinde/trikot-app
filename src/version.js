@@ -1,8 +1,19 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.3';
+export const APP_VERSION = '1.14.4';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.4',
+    date: '2026-05-20',
+    changes: [
+      'Bestelllogik erneut gehärtet: Normale Standard-Set-Bestellungen berücksichtigen Saison-Eintritt/-Austritt jetzt ebenfalls',
+      'Austritte werden aus Set-Bestellungen und Grundbestückungsvorschlägen ausgeschlossen, sofern sie nicht zusätzlich als Eintritt markiert sind',
+      'Umverteilung vergleicht jetzt die effektive Nummer des Materials, also notfalls die Nummer des bisherigen Besitzers',
+      'Saisonwechsel-Fall Emre Hamut/Felipe Alves mit Nummer 11 wird dadurch auch dann als Umverteilung erkannt, wenn am Material selbst keine assignedNumber gespeichert ist',
+      'Umbeflockungshinweis ergänzt: Abweichende Nummern werden vorgeschlagen, wenn Korrektur Ausgabemengen deaktiviert ist',
+    ],
+  },
   {
     version: '1.14.3',
     date: '2026-05-20',
