@@ -90,6 +90,38 @@ function shouldReceiveSeasonEquipment(person) {
   return !seasonFlag(person?.seasonExit) || seasonFlag(person?.seasonEntry);
 }
 
+function setSortValue(set, idx = 0) {
+  const raw = set?.setNumber ?? set?.number ?? set?.sortOrder;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : idx + 1;
+}
+
+function sortStandardSets(sets) {
+  return [...(sets || [])].sort((a, b) =>
+    setSortValue(a) - setSortValue(b) || String(a.name || '').localeCompare(String(b.name || ''), 'de', { numeric: true, sensitivity: 'base' })
+  );
+}
+
+function setSupportsPerson(set, personOrKind) {
+  const kind = typeof personOrKind === 'string' ? personOrKind : personOrKind?._kind;
+  const isGoalkeeper = typeof personOrKind === 'string' ? false : !!personOrKind?.isGoalkeeper;
+  if (set?.target === 'both') return true;
+  if (set?.target === 'coach') return kind === 'coach';
+  if (set?.target === 'goalkeeper') return kind === 'player' && isGoalkeeper;
+  if (set?.target === 'player') return kind === 'player' && !isGoalkeeper;
+  return false;
+}
+
+function getPersonStandardSets(settings, personOrKind) {
+  const sets = sortStandardSets(migrateStandardSets(settings));
+  const assignedId = typeof personOrKind === 'string' ? null : personOrKind?.standardSetId;
+  const assigned = assignedId ? sets.find(set => set.id === assignedId) : null;
+  if (assigned) return [assigned];
+  const matching = sets.filter(set => setSupportsPerson(set, personOrKind));
+  const defaults = matching.filter(set => !!set.isDefault);
+  return defaults.length > 0 ? defaults : matching;
+}
+
 function inventoryEffectiveNumber(data, inv) {
   if (inv?.assignedNumber !== undefined && inv.assignedNumber !== null && inv.assignedNumber !== '') {
     return String(inv.assignedNumber).trim().toUpperCase();
@@ -969,7 +1001,7 @@ function PersonsView({ data, update, kind }) {
         ))}
       </div>
 
-      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
+      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} standardSets={migrateStandardSets(data.settings)} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
       {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} kind={kind} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
       {equipmentPerson && (
         <BasicEquipmentDialog
@@ -1030,6 +1062,11 @@ function PersonsView({ data, update, kind }) {
                       <td className="p-3 font-medium">
                         {p.firstName} {p.lastName}
                         <div className="text-xs text-stone-500 md:hidden">{p.team}</div>
+                        {isPlayer && p.isGoalkeeper && (
+                          <div className="text-xs mt-1">
+                            <span className="mr-1 px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)' }}>Torwart</span>
+                          </div>
+                        )}
                         {(p.seasonEntry || p.seasonExit) && (
                           <div className="text-xs mt-1">
                             {p.seasonEntry && <span className="mr-1 px-1.5 py-0.5 bg-emerald-50 text-emerald-700">Eintritt Saison</span>}
@@ -1095,10 +1132,7 @@ function PersonsView({ data, update, kind }) {
 }
 
 function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel }) {
-  const allSets = migrateStandardSets(data.settings).filter(set =>
-    set.target === 'both' ||
-    (person._kind === 'coach' ? set.target === 'coach' : set.target === 'player')
-  );
+  const allSets = getPersonStandardSets(data.settings, person);
   const [setId, setSetId] = useState(allSets[0]?.id || '');
   const [correctionMode, setCorrectionMode] = useState(true);
   const [orderReprints, setOrderReprints] = useState({});
@@ -1433,8 +1467,8 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
     .filter(p => p.team === team && shouldReceiveSeasonEquipment(p))
     .filter(p => includeUnmarkedEquipped || !isUnmarkedActiveWithEquipment(data, p))
     .map(p => ({ ...p, _kind: kind }));
-  const allSets = migrateStandardSets(data.settings).filter(set =>
-    set.target === 'both' || (kind === 'coach' ? set.target === 'coach' : set.target === 'player')
+  const allSets = sortStandardSets(migrateStandardSets(data.settings)).filter(set =>
+    set.target === 'both' || set.target === kind || (kind === 'player' && set.target === 'goalkeeper')
   );
   const [setId, setSetId] = useState(allSets[0]?.id || '');
   const [correctionMode, setCorrectionMode] = useState(true);
@@ -1457,6 +1491,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
     const usedStock = new Set();
     const out = [];
     persons.forEach(person => {
+      if (!setSupportsPerson(selectedSet, person) && person.standardSetId !== selectedSet.id) return;
       const targetNumber = personNumberValue(person);
       (selectedSet.items || []).forEach(entry => {
         const item = (data.items || []).find(i => i.id === entry.itemId);
@@ -1742,12 +1777,15 @@ function CoachesView({ data, update }) {
   return <PersonsView data={data} update={update} kind="coach" />;
 }
 
-function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) {
+function PlayerForm({ player, players, teams, labels, kind, standardSets, onSave, onCancel }) {
   const isCoach = kind === 'coach';
   const numberLabel = isCoach ? 'Initialen (max. 3 Zeichen)' : 'Rückennummer';
   const numberPlaceholder = isCoach ? 'z.B. DW' : '';
   const L = labels || { addNew: 'Spieler anlegen', editNew: 'Spieler bearbeiten', singular: 'Spieler' };
-  const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '', seasonEntry: false, seasonExit: false });
+  const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '', isGoalkeeper: false, standardSetId: '', seasonEntry: false, seasonExit: false });
+  const formSetOptions = sortStandardSets(standardSets || []).filter(set =>
+    setSupportsPerson(set, { _kind: kind, isGoalkeeper: !!form.isGoalkeeper }) || form.standardSetId === set.id
+  );
 
   // Konflikt-Check funktioniert für Spieler (Nummer) wie Trainer (Initialen) gleich:
   // Pro Mannschaft darf der gleiche Wert nicht doppelt vergeben sein.
@@ -1783,7 +1821,7 @@ function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) 
       ? (form.number ? String(form.number).trim().toUpperCase() : null)
       : (form.number ? parseInt(form.number) : null);
 
-    onSave({ ...form, number: numberValue });
+    onSave({ ...form, number: numberValue, isGoalkeeper: isCoach ? false : !!form.isGoalkeeper, standardSetId: form.standardSetId || '' });
   }
 
   return (
@@ -1823,6 +1861,26 @@ function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) 
           <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.size} onChange={e => setForm({ ...form, size: e.target.value })}>
             {['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => <option key={s}>{s}</option>)}
           </select>
+        </Field>
+        {!isCoach && (
+          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.isGoalkeeper ? '#F1ECDF' : 'white' }}>
+            <input type="checkbox" checked={!!form.isGoalkeeper} onChange={e => setForm({ ...form, isGoalkeeper: e.target.checked, standardSetId: '' })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium">Torwart</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Verwendet Torwart-Sets statt normaler Spieler-Sets.</div>
+            </div>
+          </label>
+        )}
+        <Field label="Standard-Set">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.standardSetId || ''} onChange={e => setForm({ ...form, standardSetId: e.target.value })}>
+            <option value="">Automatisch nach Standard</option>
+            {formSetOptions.map((set, idx) => (
+              <option key={set.id} value={set.id}>{setSortValue(set, idx)} - {set.name}</option>
+            ))}
+          </select>
+          {formSetOptions.length === 0 && (
+            <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>Noch kein passendes Set in den Einstellungen angelegt.</p>
+          )}
         </Field>
         <Field label="Notizen"><input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></Field>
         <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -2739,9 +2797,7 @@ function SeasonMaterialWorkArea({ data, update }) {
     });
 
     persons.filter(p => seasonFlag(p.seasonEntry) && shouldReceiveSeasonEquipment(p)).forEach(person => {
-      const sets = standardSets.filter(set =>
-        set.target === 'both' || (person._kind === 'coach' ? set.target === 'coach' : set.target === 'player')
-      );
+      const sets = getPersonStandardSets(data.settings, person);
       sets.forEach(set => {
         (set.items || []).forEach(entry => {
           const item = (data.items || []).find(i => i.id === entry.itemId);
@@ -5201,20 +5257,7 @@ function OrderForm({ data, onSave, onCancel }) {
     setLines(lines.flatMap(l => l.id === lineId ? newLines : [l]));
   }
 
-  // Standard-Sets aus den Settings holen — neue flexible Liste (settings.standardSets)
-  // mit Migration von alten standardSetPlayer/-Coach-Feldern.
-  const settings = data.settings || {};
-  const allSets = (() => {
-    const list = Array.isArray(settings.standardSets) ? [...settings.standardSets] : [];
-    // Backward-compat: alte Felder bei Bedarf einlesen
-    if (Array.isArray(settings.standardSetPlayer) && settings.standardSetPlayer.length > 0 && !list.some(s => s.id === 'set_player_default')) {
-      list.push({ id: 'set_player_default', name: 'Spieler-Set (Erstausstattung)', target: 'player', items: settings.standardSetPlayer });
-    }
-    if (Array.isArray(settings.standardSetCoach) && settings.standardSetCoach.length > 0 && !list.some(s => s.id === 'set_coach_default')) {
-      list.push({ id: 'set_coach_default', name: 'Trainer-Set (Erstausstattung)', target: 'coach', items: settings.standardSetCoach });
-    }
-    return list.filter(s => Array.isArray(s.items) && s.items.length > 0);
-  })();
+  const allSets = migrateStandardSets(data.settings).filter(s => Array.isArray(s.items) && s.items.length > 0);
 
   // Wer hat schon was? Wir prüfen das aktuelle Inventar — wenn eine Person bereits
   // ein Item desselben Typs (Artikel) ausgegeben hat, gilt sie für dieses Item als ausgestattet.
@@ -5242,10 +5285,11 @@ function OrderForm({ data, onSave, onCancel }) {
 
     // Welche Personen bekommen das Set?
     const candidates = [];
-    if (set.target === 'player' || set.target === 'both') {
+    if (set.target === 'player' || set.target === 'goalkeeper' || set.target === 'both') {
       teamPlayers
         .filter(p => shouldReceiveSeasonEquipment(p))
         .filter(p => !isUnmarkedActiveWithEquipment(data, p))
+        .filter(p => setSupportsPerson(set, { ...p, _kind: 'player' }) || p.standardSetId === set.id)
         .forEach(p => candidates.push({ person: p, kind: 'player' }));
     }
     if (set.target === 'coach' || set.target === 'both') {
@@ -5460,19 +5504,20 @@ function OrderForm({ data, onSave, onCancel }) {
               defaultValue=""
             >
               <option value="">– Standard-Set anwenden –</option>
-              {allSets.map(set => {
+              {sortStandardSets(allSets).map((set, idx) => {
                 // Anzeigen: wieviele Personen würden was bekommen
-                const target = set.target;
-                const candidates =
-                  target === 'player' ? teamPlayers.filter(p => shouldReceiveSeasonEquipment(p) && !isUnmarkedActiveWithEquipment(data, p)).length :
-                  target === 'coach' ? teamCoaches.filter(c => shouldReceiveSeasonEquipment(c) && !isUnmarkedActiveWithEquipment(data, c)).length :
-                  teamPlayers.filter(p => shouldReceiveSeasonEquipment(p) && !isUnmarkedActiveWithEquipment(data, p)).length
-                    + teamCoaches.filter(c => shouldReceiveSeasonEquipment(c) && !isUnmarkedActiveWithEquipment(data, c)).length;
+                const playerCandidates = teamPlayers
+                  .filter(p => shouldReceiveSeasonEquipment(p) && !isUnmarkedActiveWithEquipment(data, p))
+                  .filter(p => setSupportsPerson(set, { ...p, _kind: 'player' }) || p.standardSetId === set.id).length;
+                const coachCandidates = teamCoaches
+                  .filter(c => shouldReceiveSeasonEquipment(c) && !isUnmarkedActiveWithEquipment(data, c))
+                  .filter(c => setSupportsPerson(set, { ...c, _kind: 'coach' }) || c.standardSetId === set.id).length;
+                const candidates = playerCandidates + coachCandidates;
                 if (candidates === 0) return null;
-                const targetLabel = target === 'player' ? 'Spieler' : target === 'coach' ? 'Trainer' : 'Sp.+Tr.';
+                const targetLabel = set.target === 'player' ? 'Spieler' : set.target === 'goalkeeper' ? 'Torwart' : set.target === 'coach' ? 'Trainer' : 'Sp.+Tr.';
                 return (
                   <option key={set.id} value={set.id}>
-                    {set.name} ({targetLabel}, max. {candidates} Personen)
+                    {setSortValue(set, idx)} - {set.name} ({targetLabel}, max. {candidates} Personen)
                   </option>
                 );
               })}
@@ -6306,7 +6351,12 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 // Migrations-Helper: Wandelt alte standardSetPlayer/-Coach in die neue Liste um
 function migrateStandardSets(rawSettings) {
   const existing = Array.isArray(rawSettings?.standardSets) ? rawSettings.standardSets : null;
-  if (existing) return existing;
+  if (existing) return sortStandardSets(existing.map((set, idx) => ({
+    ...set,
+    setNumber: setSortValue(set, idx),
+    target: set.target || 'player',
+    isDefault: !!set.isDefault,
+  })));
 
   const migrated = [];
   if (Array.isArray(rawSettings?.standardSetPlayer) && rawSettings.standardSetPlayer.length > 0) {
@@ -6314,6 +6364,8 @@ function migrateStandardSets(rawSettings) {
       id: `set_player_default`,
       name: 'Spieler-Set (Erstausstattung)',
       target: 'player',
+      setNumber: 1,
+      isDefault: true,
       items: rawSettings.standardSetPlayer,
     });
   }
@@ -6322,10 +6374,12 @@ function migrateStandardSets(rawSettings) {
       id: `set_coach_default`,
       name: 'Trainer-Set (Erstausstattung)',
       target: 'coach',
+      setNumber: 10,
+      isDefault: true,
       items: rawSettings.standardSetCoach,
     });
   }
-  return migrated;
+  return sortStandardSets(migrated);
 }
 
 function SettingsView({ data, update }) {
@@ -6913,13 +6967,13 @@ function StandardSetsManager({ items, sets, onChange }) {
 
   function addSet() {
     const id = `set_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-    const newSet = { id, name: 'Neues Set', target: 'player', items: [] };
+    const newSet = { id, setNumber: sets.length + 1, name: 'Neues Set', target: 'player', isDefault: false, items: [] };
     onChange([...sets, newSet]);
     setOpenSetId(id);
   }
 
   function updateSet(id, updates) {
-    onChange(sets.map(s => s.id === id ? { ...s, ...updates } : s));
+    onChange(sortStandardSets(sets.map(s => s.id === id ? { ...s, ...updates } : s)));
   }
 
   function removeSet(id) {
@@ -6934,13 +6988,14 @@ function StandardSetsManager({ items, sets, onChange }) {
     const original = sets.find(s => s.id === id);
     if (!original) return;
     const newId = `set_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-    const copy = { ...original, id: newId, name: `${original.name} (Kopie)` };
+    const copy = { ...original, id: newId, setNumber: sets.length + 1, name: `${original.name} (Kopie)`, isDefault: false };
     onChange([...sets, copy]);
     setOpenSetId(newId);
   }
 
   function targetLabel(target) {
     if (target === 'player') return 'Nur Spieler';
+    if (target === 'goalkeeper') return 'Nur Torwart';
     if (target === 'coach') return 'Nur Trainer';
     return 'Spieler + Trainer';
   }
@@ -6960,7 +7015,7 @@ function StandardSetsManager({ items, sets, onChange }) {
         </div>
       ) : (
         <div className="space-y-2">
-          {sets.map(set => {
+          {sortStandardSets(sets).map((set, idx) => {
             const totalPieces = (set.items || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
             const isOpen = openSetId === set.id;
             return (
@@ -6972,9 +7027,9 @@ function StandardSetsManager({ items, sets, onChange }) {
                   >
                     <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{isOpen ? '▾' : '▸'}</span>
                     <div>
-                      <div className="font-medium">{set.name}</div>
+                      <div className="font-medium">{setSortValue(set, idx)} - {set.name}</div>
                       <div className="text-xs mt-0.5" style={{ color: 'var(--ink-mute)' }}>
-                        {targetLabel(set.target)} · {(set.items || []).length} Artikel · {totalPieces} Teile
+                        {targetLabel(set.target)} · {(set.items || []).length} Artikel · {totalPieces} Teile{set.isDefault ? ' · Standard' : ''}
                       </div>
                     </div>
                   </button>
@@ -6991,6 +7046,15 @@ function StandardSetsManager({ items, sets, onChange }) {
                 {isOpen && (
                   <div className="p-4 border-t border-stone-200" style={{ background: 'var(--paper)' }}>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                      <Field label="Set-Nr.">
+                        <input
+                          type="number"
+                          min="1"
+                          className="w-full border border-stone-300 px-3 py-2 text-sm"
+                          value={setSortValue(set, idx)}
+                          onChange={e => updateSet(set.id, { setNumber: parseInt(e.target.value) || 1 })}
+                        />
+                      </Field>
                       <Field label="Set-Name">
                         <input
                           className="w-full border border-stone-300 px-3 py-2 text-sm"
@@ -7006,10 +7070,18 @@ function StandardSetsManager({ items, sets, onChange }) {
                           onChange={e => updateSet(set.id, { target: e.target.value })}
                         >
                           <option value="player">Nur Spieler</option>
+                          <option value="goalkeeper">Nur Torwart</option>
                           <option value="coach">Nur Trainer</option>
                           <option value="both">Spieler und Trainer</option>
                         </select>
                       </Field>
+                      <label className="flex items-start gap-3 p-3 sm:col-span-2 cursor-pointer" style={{ border: '1px solid var(--rule)', background: set.isDefault ? '#F1ECDF' : 'white' }}>
+                        <input type="checkbox" checked={!!set.isDefault} onChange={e => updateSet(set.id, { isDefault: e.target.checked })} className="mt-1" />
+                        <div>
+                          <div className="text-sm font-medium">Als Standard verwenden</div>
+                          <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Wird automatisch vorgeschlagen, wenn keine Person ein eigenes Set zugeordnet hat.</div>
+                        </div>
+                      </label>
                     </div>
 
                     <SetItemsEditor

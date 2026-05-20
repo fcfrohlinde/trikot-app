@@ -1,8 +1,19 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.11';
+export const APP_VERSION = '1.14.12';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.12',
+    date: '2026-05-20',
+    changes: [
+      'Spieler koennen jetzt per Checkbox als Torwart markiert werden',
+      'Standard-Sets unterstuetzen die neue Zielgruppe Nur Torwart',
+      'Standard-Sets haben eine Set-Nummer und koennen als Standard markiert werden',
+      'Spielern und Trainern kann ein konkretes Standard-Set zugeordnet werden; sonst greift die passende Standardauswahl',
+      'Grundbestueckung, Team-Sets, Bestellvorschlaege und Materialvorschlaege beruecksichtigen Torwart-Sets getrennt von normalen Spieler-Sets',
+    ],
+  },
   {
     version: '1.14.11',
     date: '2026-05-20',
