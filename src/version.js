@@ -1,8 +1,18 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.7';
+export const APP_VERSION = '1.14.8';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.8',
+    date: '2026-05-20',
+    changes: [
+      'Material hat jetzt einen eigenen Bereich fuer Umverteilung und Umbeflockung angelehnt an die Materialliste',
+      'Vorschlaege aktualisieren sich aus offenen Bestellungen, Saisonstatus, Standard-Sets und aktuellem Bestand',
+      'Umverteilung und Umbeflockung werden getrennt als Alt-zu-Neu-Listen angezeigt',
+      'Lagerbestand kann direkt aus dem Vorschlag heraus fuer einen Spieler oder Trainer reserviert werden',
+    ],
+  },
   {
     version: '1.14.7',
     date: '2026-05-20',

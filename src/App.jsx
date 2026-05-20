@@ -1304,7 +1304,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
               <thead className="bg-stone-50 uppercase tracking-wider">
                 <tr>
                   <th className="text-left p-2">Artikel</th>
-                  <th className="text-left p-2">Größe</th>
+              <th className="text-left p-2">Groesse</th>
                   <th className="text-left p-2">Vorschlag</th>
                   <th className="text-left p-2">Nr./Init. alt</th>
                   <th className="text-left p-2">Nr./Init. neu</th>
@@ -2665,6 +2665,180 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
   );
 }
 
+function SeasonMaterialWorkArea({ data, update }) {
+  const [open, setOpen] = useState(true);
+  const standardSets = migrateStandardSets(data.settings);
+  const persons = allPersons(data);
+  const openOrders = (data.orders || []).filter(orderCoversNeed);
+
+  const rows = useMemo(() => {
+    const result = [];
+    const usedSources = new Set();
+    const needKeys = new Set();
+
+    function addRow({ person, item, size, sourceHint, orderId }) {
+      if (!person || !item) return;
+      const target = { ...person, _kind: person._kind };
+      const stock = (data.inventory || []).find(inv =>
+        stockUsableForPerson(inv, target) &&
+        inv.itemType === item.id &&
+        (inv.size || size || target.size || 'L') === (size || target.size || inv.size || 'L') &&
+        !usedSources.has(inv.id)
+      );
+      const transfer = stock ? null : findSeasonTransferCandidate(data, item.id, target, usedSources);
+      const source = stock || transfer;
+      if (!source) return;
+
+      usedSources.add(source.id);
+      const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
+      const needsReprint = !inventoryMatchesPersonNumberInData(data, source, target);
+      result.push({
+        id: `${source.id}_${target.id}_${item.id}_${result.length}`,
+        category: needsReprint ? 'umbeflockung' : 'umverteilung',
+        item,
+        size: source.size || size || target.size || 'L',
+        source,
+        sourceLabel: sourcePerson
+          ? `${sourcePerson.firstName} ${sourcePerson.lastName}`
+          : source.reservedFor
+            ? 'Reservierter Lagerbestand'
+            : 'Lagerbestand',
+        target,
+        oldNumber: inventoryEffectiveNumber(data, source),
+        newNumber: personNumberValue(target),
+        sourceHint,
+        orderId,
+      });
+    }
+
+    openOrders.forEach(order => {
+      (order.lines || []).forEach(line => {
+        const person = findPerson(data, line.playerId);
+        const item = (data.items || []).find(i => i.id === line.itemType);
+        const qty = Number(line.qty) || 1;
+        for (let idx = 0; idx < qty; idx++) {
+          addRow({ person, item, size: line.size || person?.size || 'L', sourceHint: `Bestellung: ${order.title}`, orderId: order.id });
+        }
+      });
+    });
+
+    persons.filter(p => seasonFlag(p.seasonEntry) && shouldReceiveSeasonEquipment(p)).forEach(person => {
+      const sets = standardSets.filter(set =>
+        set.target === 'both' || (person._kind === 'coach' ? set.target === 'coach' : set.target === 'player')
+      );
+      sets.forEach(set => {
+        (set.items || []).forEach(entry => {
+          const item = (data.items || []).find(i => i.id === entry.itemId);
+          if (!item) return;
+          const size = person.size || 'L';
+          const key = `${person.id}_${item.id}_${size}`;
+          if (needKeys.has(key)) return;
+          needKeys.add(key);
+          const remaining = Math.max(0,
+            (Number(entry.qty) || 1)
+            - issuedQtyForPersonItem(data, person, item.id, size)
+            - openOrderedQtyForPersonItem(data, person, item.id, size)
+          );
+          for (let idx = 0; idx < remaining; idx++) {
+            addRow({ person, item, size, sourceHint: `Saisonstatus: Eintritt (${set.name})` });
+          }
+        });
+      });
+    });
+
+    return result;
+  }, [data, persons, standardSets, openOrders]);
+
+  const transfers = rows.filter(r => r.category === 'umverteilung');
+  const reprints = rows.filter(r => r.category === 'umbeflockung');
+
+  function reserveSource(row) {
+    if (row.source.status !== 'lager') return;
+    const now = new Date().toISOString();
+    update('inventory', (data.inventory || []).map(inv => inv.id === row.source.id ? {
+      ...inv,
+      reservedFor: row.target.id,
+      reservedAt: now,
+      assignedNumber: row.newNumber || inv.assignedNumber || null,
+      personKind: row.target._kind,
+      needsReprint: row.category === 'umbeflockung',
+      reprintFromNumber: row.category === 'umbeflockung' ? (row.oldNumber || null) : null,
+      reprintToNumber: row.category === 'umbeflockung' ? (row.newNumber || null) : null,
+      reprintRequestedAt: row.category === 'umbeflockung' ? now : null,
+    } : inv), { mode: 'replace' });
+  }
+
+  function renderRows(list, emptyText) {
+    if (list.length === 0) return <div className="p-4 text-sm text-stone-500">{emptyText}</div>;
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-stone-50 uppercase tracking-wider text-stone-500">
+            <tr>
+              <th className="text-left p-2">Artikel</th>
+              <th className="text-left p-2">GrÃ¶ÃŸe</th>
+              <th className="text-left p-2">Alt</th>
+              <th className="text-left p-2">Neu</th>
+              <th className="text-left p-2">Quelle</th>
+              <th className="text-left p-2">Basis</th>
+              <th className="text-right p-2">Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map(row => (
+              <tr key={row.id} className="border-t border-stone-100">
+                <td className="p-2 font-medium">{row.item.articleNumber ? `[${row.item.articleNumber}] ` : ''}{row.item.name}</td>
+                <td className="p-2">{row.size}</td>
+                <td className="p-2">{row.sourceLabel} {row.oldNumber || '-'}</td>
+                <td className="p-2">{row.target.firstName} {row.target.lastName} {row.newNumber || '-'}</td>
+                <td className="p-2 font-mono">{row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`}</td>
+                <td className="p-2">{row.sourceHint}</td>
+                <td className="p-2 text-right">
+                  {row.source.status === 'lager' ? (
+                    row.source.reservedFor === row.target.id ? (
+                      <span className="text-emerald-700">reserviert</span>
+                    ) : (
+                      <button onClick={() => reserveSource(row)} className="text-xs bg-stone-900 text-white px-2 py-1">Reservieren</button>
+                    )
+                  ) : (
+                    <span className="text-stone-500">RÃ¼cklauf</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border border-stone-200 mb-4">
+      <button onClick={() => setOpen(!open)} className="w-full p-4 text-left flex justify-between items-center">
+        <div>
+          <div className="font-display text-xl">UMVERTEILUNG & UMBEFLOCKUNG</div>
+          <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+            {transfers.length} Umverteilung(en) Â· {reprints.length} Umbeflockung(en) aus offenen Bestellungen, Saisonstatus und aktuellem Bestand
+          </div>
+        </div>
+        <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{open ? 'zuklappen' : 'aufklappen'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-stone-200">
+          <div className="p-4 border-b border-stone-100">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>UMVERTEILUNG: ALT - NEU</div>
+            {renderRows(transfers, 'Aktuell keine UmverteilungsvorschlÃ¤ge.')}
+          </div>
+          <div className="p-4">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--warn)', letterSpacing: '0.18em' }}>UMBEFLOCKUNG: ALT - NEU</div>
+            {renderRows(reprints, 'Aktuell keine UmbeflockungsvorschlÃ¤ge.')}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InventoryView({ data, update }) {
   const [filter, setFilter] = useState('alle');
   const [showForm, setShowForm] = useState(false);
@@ -2998,6 +3172,8 @@ function InventoryView({ data, update }) {
       </div>
 
       <ArticleLocationSearch data={data} title="ARTIKELSUCHE MATERIAL" />
+
+      <SeasonMaterialWorkArea data={data} update={update} />
 
       <div className="flex flex-wrap gap-2 mb-4 items-center justify-between">
         <div className="flex gap-2 overflow-x-auto pb-1">
