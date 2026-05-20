@@ -1,8 +1,15 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.14';
+export const APP_VERSION = '1.14.15';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.15',
+    date: '2026-05-20',
+    changes: [
+      'Die Liste Ausgabe aus Lager kann jetzt ebenfalls als PDF gedruckt werden',
+    ],
+  },
   {
     version: '1.14.14',
     date: '2026-05-20',

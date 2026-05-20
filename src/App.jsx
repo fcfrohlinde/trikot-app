@@ -2942,6 +2942,9 @@ function SeasonMaterialWorkArea({ data, update }) {
             <button onClick={() => printRowsPdf(reprints, 'Umbeflockung alt - neu', 'umbeflockung_alt_neu.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
               Umbeflockung PDF
             </button>
+            <button onClick={() => printRowsPdf(issues, 'Ausgabe aus Lager', 'ausgabe_aus_lager.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Ausgabe Lager PDF
+            </button>
           </div>
           <div className="p-4 border-b border-stone-100">
             <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>UMVERTEILUNG: ALT - NEU</div>
