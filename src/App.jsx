@@ -82,6 +82,35 @@ function inventoryMatchesPersonNumber(inv, person) {
   return invKind === person._kind;
 }
 
+function shouldReceiveSeasonEquipment(person) {
+  return !person?.seasonExit || !!person?.seasonEntry;
+}
+
+function stockReservedForOther(inv, person) {
+  return inv?.reservedFor && inv.reservedFor !== person?.id;
+}
+
+function stockUsableForPerson(inv, person) {
+  if (!inv || inv.status !== 'lager') return false;
+  if (stockReservedForOther(inv, person)) return false;
+  if (inv.team && person?.team && inv.team !== person.team) return false;
+  return true;
+}
+
+function findSeasonTransferCandidate(data, itemId, person, usedStock) {
+  return (data.inventory || []).find(inv => {
+    if (usedStock.has(inv.id)) return false;
+    if (inv.status !== 'ausgegeben' || inv.itemType !== itemId) return false;
+    if ((inv.size || person.size || 'L') !== (person.size || inv.size || 'L')) return false;
+    const owner = findPerson(data, inv.assignedTo);
+    return owner
+      && owner.id !== person.id
+      && owner.team === person.team
+      && owner.seasonExit
+      && !owner.seasonEntry;
+  });
+}
+
 // Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
 function compressRanges(numbers) {
   if (!numbers || numbers.length === 0) return '';
@@ -971,6 +1000,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
 
   function buildSuggestions() {
     if (!selectedSet) return [];
+    if (!shouldReceiveSeasonEquipment(person)) return [];
     const usedStock = new Set();
     const suggestions = [];
     (selectedSet.items || []).forEach(entry => {
@@ -981,26 +1011,29 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
       const missing = Math.max(0, qty - alreadyIssued);
       for (let idx = 0; idx < missing; idx++) {
         const stock = (data.inventory || []).filter(inv =>
-          inv.status === 'lager' &&
+          stockUsableForPerson(inv, person) &&
           inv.itemType === item.id &&
           (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
           !usedStock.has(inv.id)
         );
         const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-        const sized = correctionMode ? (exact || null) : (exact || stock[0] || null);
+        const transfer = (!correctionMode && !exact) ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
+        const sized = correctionMode ? (exact || null) : (exact || stock.find(inv => inv.reservedFor === person.id) || stock[0] || transfer || null);
         if (sized) usedStock.add(sized.id);
         const oldNumber = sized?.assignedNumber ? String(sized.assignedNumber) : '';
         const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonNumber(sized, person));
+        const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
         suggestions.push({
           id: `${item.id}_${idx}`,
           item,
           size: person.size || sized?.size || 'L',
           alreadyIssued,
           stock: sized,
-          action: exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur',
+          action: exact ? 'passend' : fromPerson ? 'umverteilung' : sized ? 'umbeflocken' : 'korrektur',
           needsReprint,
           oldNumber,
           newNumber: targetNumber,
+          sourcePerson: fromPerson,
         });
       }
     });
@@ -1029,6 +1062,10 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
           personKind: person._kind,
           team: person.team || s.stock.team || null,
           assignedAt: now,
+          reservedFor: null,
+          reservedAt: null,
+          transferredFrom: s.sourcePerson?.id || null,
+          transferredAt: s.sourcePerson ? now : null,
           needsReprint: s.needsReprint,
           reprintFromNumber: s.needsReprint ? oldNumber : null,
           reprintToNumber: s.needsReprint ? (targetNumber || null) : null,
@@ -1130,6 +1167,8 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
       reprintFromNumber: s.needsReprint ? (s.oldNumber || '') : '',
       reprintToNumber: s.needsReprint ? (s.newNumber || targetNumber || '') : '',
       orderReason: s.stock ? 'umbeflockung' : 'kein_bestand',
+      sourceInventoryId: s.stock?.id || null,
+      sourcePersonId: s.sourcePerson?.id || null,
     }));
     onCreateOrder({
       title: `Grundbestueckung ${person.firstName} ${person.lastName}`.trim(),
@@ -1203,6 +1242,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
                     <td className="p-2">
                       {s.action === 'passend' && <span className="text-emerald-700">Passend aus Lager</span>}
                       {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Aus Lager, Umbeflockung nötig</span>}
+                      {s.action === 'umverteilung' && <span className="text-emerald-700">Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}</span>}
                       {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur-Ausgabe' : 'Kein Lagerbestand'}</span>}
                     </td>
                     <td className="p-2">{s.oldNumber || '–'}</td>
@@ -1260,7 +1300,9 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
 }
 
 function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCreateOrder, onCancel }) {
-  const persons = (kind === 'coach' ? (data.coaches || []) : (data.players || [])).filter(p => p.team === team).map(p => ({ ...p, _kind: kind }));
+  const persons = (kind === 'coach' ? (data.coaches || []) : (data.players || []))
+    .filter(p => p.team === team && shouldReceiveSeasonEquipment(p))
+    .map(p => ({ ...p, _kind: kind }));
   const allSets = migrateStandardSets(data.settings).filter(set =>
     set.target === 'both' || (kind === 'coach' ? set.target === 'coach' : set.target === 'player')
   );
@@ -1292,14 +1334,16 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
         const missing = Math.max(0, (Number(entry.qty) || 1) - issuedCountForPersonItem(person, item.id));
         for (let idx = 0; idx < missing; idx++) {
           const stock = (data.inventory || []).filter(inv =>
-            inv.status === 'lager' &&
+            stockUsableForPerson(inv, person) &&
             inv.itemType === item.id &&
             (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
             !usedStock.has(inv.id)
           );
           const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-          const sized = correctionMode ? (exact || null) : (exact || stock[0] || null);
+          const transfer = (!correctionMode && !exact) ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
+          const sized = correctionMode ? (exact || null) : (exact || stock.find(inv => inv.reservedFor === person.id) || stock[0] || transfer || null);
           if (sized) usedStock.add(sized.id);
+          const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
           out.push({
             id: `${person.id}_${item.id}_${idx}`,
             person,
@@ -1309,7 +1353,8 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
             oldNumber: sized?.assignedNumber ? String(sized.assignedNumber) : '',
             newNumber: targetNumber,
             needsReprint: !correctionMode && !!sized && !inventoryMatchesPersonNumber(sized, person),
-            action: exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur',
+            action: exact ? 'passend' : fromPerson ? 'umverteilung' : sized ? 'umbeflocken' : 'korrektur',
+            sourcePerson: fromPerson,
           });
         }
       });
@@ -1339,6 +1384,10 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           personKind: person._kind,
           team: person.team || s.stock.team || null,
           assignedAt: now,
+          reservedFor: null,
+          reservedAt: null,
+          transferredFrom: s.sourcePerson?.id || null,
+          transferredAt: s.sourcePerson ? now : null,
           needsReprint: s.needsReprint,
           reprintFromNumber: s.needsReprint ? (s.oldNumber || null) : null,
           reprintToNumber: s.needsReprint ? (targetNumber || null) : null,
@@ -1441,6 +1490,8 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
         reprintFromNumber: s.needsReprint ? (s.oldNumber || '') : '',
         reprintToNumber: s.needsReprint ? (s.newNumber || targetNumber || '') : '',
         orderReason: s.stock ? 'umbeflockung' : 'kein_bestand',
+        sourceInventoryId: s.stock?.id || null,
+        sourcePersonId: s.sourcePerson?.id || null,
       };
     });
     onCreateOrder({
@@ -1506,6 +1557,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
                 <td className="p-2">
                   {s.action === 'passend' && <span className="text-emerald-700">Passend</span>}
                   {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umbeflockung</span>}
+                  {s.action === 'umverteilung' && <span className="text-emerald-700">Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}</span>}
                   {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur' : 'Kein Lager'}</span>}
                 </td>
                 <td className="p-2">{s.oldNumber || '–'}</td>
@@ -2407,6 +2459,23 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
     });
   }
 
+  function reserve() {
+    if (!personId) return;
+    let storedNumber;
+    if (isCoach) {
+      storedNumber = number ? String(number).trim().toUpperCase() : null;
+    } else {
+      storedNumber = number ? parseInt(number) : null;
+    }
+    onAssign(inv.id, personId, storedNumber, {
+      reserveOnly: true,
+      needsReprint,
+      fromNumber: reprintFromNumber || null,
+      toNumber: storedNumber || null,
+      personKind: person?._kind || null,
+    });
+  }
+
   function runSearch() {
     setCriteria({
       team,
@@ -2654,18 +2723,33 @@ function InventoryView({ data, update }) {
 
   function assign(invId, playerId, number, reprint = {}) {
     update('inventory', data.inventory.map(i =>
-      i.id === invId ? {
-        ...i,
-        status: 'ausgegeben',
-        assignedTo: playerId,
-        assignedAt: new Date().toISOString(),
-        assignedNumber: number,
-        personKind: reprint.personKind || i.personKind || null,
-        needsReprint: !!reprint.needsReprint,
-        reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
-        reprintToNumber: reprint.needsReprint ? (reprint.toNumber || number || null) : null,
-        reprintRequestedAt: reprint.needsReprint ? new Date().toISOString() : null,
-      } : i
+      i.id === invId ? (
+        reprint.reserveOnly ? {
+          ...i,
+          status: 'lager',
+          reservedFor: playerId,
+          reservedAt: new Date().toISOString(),
+          assignedNumber: number,
+          personKind: reprint.personKind || i.personKind || null,
+          needsReprint: !!reprint.needsReprint,
+          reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
+          reprintToNumber: reprint.needsReprint ? (reprint.toNumber || number || null) : null,
+          reprintRequestedAt: reprint.needsReprint ? new Date().toISOString() : null,
+        } : {
+          ...i,
+          status: 'ausgegeben',
+          assignedTo: playerId,
+          assignedAt: new Date().toISOString(),
+          reservedFor: null,
+          reservedAt: null,
+          assignedNumber: number,
+          personKind: reprint.personKind || i.personKind || null,
+          needsReprint: !!reprint.needsReprint,
+          reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
+          reprintToNumber: reprint.needsReprint ? (reprint.toNumber || number || null) : null,
+          reprintRequestedAt: reprint.needsReprint ? new Date().toISOString() : null,
+        }
+      ) : i
     ), { mode: 'replace' });
     setShowAssign(null);
   }
@@ -2673,7 +2757,13 @@ function InventoryView({ data, update }) {
   function unassign(invId) {
     if (!confirm('Material zurück ins Lager buchen?')) return;
     update('inventory', data.inventory.map(i =>
-      i.id === invId ? { ...i, status: 'lager', assignedTo: null, assignedAt: null } : i
+      i.id === invId ? { ...i, status: 'lager', assignedTo: null, assignedAt: null, reservedFor: null, reservedAt: null } : i
+    ), { mode: 'replace' });
+  }
+
+  function clearReservation(invId) {
+    update('inventory', data.inventory.map(i =>
+      i.id === invId ? { ...i, reservedFor: null, reservedAt: null } : i
     ), { mode: 'replace' });
   }
 
@@ -2697,6 +2787,14 @@ function InventoryView({ data, update }) {
         title: `${person.firstName} ${person.lastName}`,
         subtitle: person.team,
         isCoach: person._kind === 'coach',
+      };
+    }
+    const reserved = findPerson(data, i.reservedFor);
+    if (reserved) {
+      return {
+        title: `Reserviert: ${reserved.firstName} ${reserved.lastName}`,
+        subtitle: reserved.team,
+        isCoach: reserved._kind === 'coach',
       };
     }
     if (i.assignedName || i.assignedNumber) {
@@ -2765,7 +2863,10 @@ function InventoryView({ data, update }) {
         <td className="p-3 hidden lg:table-cell text-sm" style={{ color: 'var(--ink-soft)' }}>{conditionLabel}</td>
         <td className="p-3 text-right whitespace-nowrap">
           {i.status === 'lager' ? (
-            <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">Ausgeben</button>
+            <>
+              <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">{i.reservedFor ? 'Reservierung' : 'Ausgeben'}</button>
+              {i.reservedFor && <button onClick={() => clearReservation(i.id)} className="text-xs border border-stone-300 px-2 py-1 ml-1">LÃ¶sen</button>}
+            </>
           ) : (
             <button onClick={() => unassign(i.id)} className="text-xs border border-stone-300 px-2 py-1">Zurück</button>
           )}
@@ -3931,6 +4032,8 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
       <div className="flex gap-2 mt-4">
         <button onClick={submit}
           disabled={!personId} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">Ausgeben</button>
+        <button onClick={reserve}
+          disabled={!personId} className="border border-stone-300 px-4 py-2 text-sm disabled:opacity-50">Reservieren</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
       </div>
     </div>

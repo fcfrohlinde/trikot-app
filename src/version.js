@@ -1,8 +1,19 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.1';
+export const APP_VERSION = '1.14.2';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.2',
+    date: '2026-05-20',
+    changes: [
+      'Bestellvorschläge für Grundbestückung berücksichtigen Saison-Eintritt und Saison-Austritt',
+      'Team-Grundbestückung überspringt ausscheidende Personen und nutzt Material ausscheidender Personen gleicher Größe als Umverteilung',
+      'Umverteilungen und passende Lager-/Reservierungsbestände werden nicht als fehlender Bestand bestellt',
+      'Umbeflockungen können weiterhin per Checkbox in eine Bestellung übernommen werden, inklusive Verweis auf das passende Material',
+      'Lagerteile können für neue Spieler oder Trainer reserviert werden und werden dadurch aus fremden Bestellvorschlägen herausgehalten',
+    ],
+  },
   {
     version: '1.14.1',
     date: '2026-05-20',
