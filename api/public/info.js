@@ -1,4 +1,5 @@
 import { kv } from '../_lib/auth.js';
+import { methodNotAllowed, setApiSecurityHeaders } from '../_lib/http.js';
 
 // Liefert Mannschaften, Artikel und einen Person-Lookup für die öffentliche Bedarfsmeldung.
 // Keine sensiblen Daten — nur das, was zur Identifikation und Auflistung gebraucht wird.
@@ -7,7 +8,8 @@ import { kv } from '../_lib/auth.js';
 //  GET /api/public/info               → { teams, items, clubName }
 //  GET /api/public/info?team=X&number=7 → { ...info, person: { name, role } | null }
 export default async function handler(req, res) {
-  if (req.method !== 'GET') return res.status(405).end();
+  setApiSecurityHeaders(res);
+  if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
 
   const teams = (await kv.get('data:teams')) || [];
   const items = (await kv.get('data:items')) || [];
