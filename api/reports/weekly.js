@@ -1,24 +1,19 @@
 import { kv, requireAuth } from '../_lib/auth.js';
 import { sendMail, getSmtpConfig } from '../_lib/mailer.js';
-import { logApiError, methodNotAllowed, requestId, serverError, setApiSecurityHeaders } from '../_lib/http.js';
-import { scopeForUser, userCanApi } from '../_lib/security.js';
 
 export default async function handler(req, res) {
-  const id = requestId();
-  setApiSecurityHeaders(res);
   const user = await requireAuth(req, res);
   if (!user) return;
-  if (!userCanApi(user, 'canManageReports')) return res.status(403).json({ error: 'Keine Berechtigung fuer Bedarfsmeldungen' });
 
   if (req.method === 'GET') {
     // Wochenbericht-Daten zurückliefern (für die Anzeige in der App)
-    const data = await loadReportData(user);
+    const data = await loadReportData();
     const smtp = getSmtpConfig();
     return res.json({ ...data, smtpConfigured: smtp.configured });
   }
 
   if (req.method === 'POST') {
-    const data = await loadReportData(user);
+    const data = await loadReportData();
     const settings = (await kv.get('data:settings')) || {};
     const isTest = req.body?.test === true;
 
@@ -52,21 +47,20 @@ export default async function handler(req, res) {
       }
       return res.json({ ok: true, sentAt, messageId: result.messageId, accepted: result.accepted });
     } catch (e) {
-      logApiError(id, 'Wochenbericht-Versand fehlgeschlagen', e, { test: isTest });
-      return serverError(res, id, 'Wochenbericht konnte nicht versendet werden. Bitte SMTP-Konfiguration und Logs pruefen.');
+      // Detailfehler durchreichen, damit der Nutzer im UI sieht, woran's liegt
+      return res.status(500).json({ error: `SMTP-Fehler: ${e.message}` });
     }
   }
 
-  return methodNotAllowed(res, ['GET', 'POST']);
+  res.status(405).end();
 }
 
-async function loadReportData(user) {
+async function loadReportData() {
   const reports = (await kv.get('data:reports')) || [];
   const players = (await kv.get('data:players')) || [];
   const coaches = (await kv.get('data:coaches')) || [];
   const items = (await kv.get('data:items')) || [];
   const orders = (await kv.get('data:orders')) || [];
-  const scope = scopeForUser({ players, coaches }, user);
 
   // Personen-Suche: erst numerisch (Spieler), dann alphabetisch (Trainer-Initialen)
   function findPersonForReport(team, number) {
@@ -77,10 +71,7 @@ async function loadReportData(user) {
     return coaches.find(c => c.team === team && String(c.number || '').trim().toUpperCase() === initials);
   }
 
-  const openReports = reports.filter(r =>
-    (r.status === 'offen' || r.status === 'gesehen') &&
-    (user.role === 'admin' || scope.teams.has(r.team))
-  );
+  const openReports = reports.filter(r => r.status === 'offen' || r.status === 'gesehen');
   const lastSent = await kv.get('meta:weeklyReportLastSent');
 
   // Aggregation nach Artikel + Team für Bestellempfehlung

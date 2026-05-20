@@ -24,29 +24,9 @@ export function signToken(user) {
   );
 }
 
-function cookieSecureFlag() {
-  return process.env.NODE_ENV === 'production' ? '; Secure' : '';
-}
-
-export function setAuthCookie(res, token) {
-  res.setHeader('Set-Cookie', `session=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${60 * 60 * 24 * 30}; SameSite=Lax${cookieSecureFlag()}`);
-}
-
-export function clearAuthCookie(res) {
-  res.setHeader('Set-Cookie', `session=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${cookieSecureFlag()}`);
-}
-
-function readCookie(req, name) {
-  const cookieHeader = req.headers.cookie || '';
-  const part = cookieHeader.split(';').map(x => x.trim()).find(x => x.startsWith(`${name}=`));
-  if (!part) return '';
-  return decodeURIComponent(part.slice(name.length + 1));
-}
-
 export function verifyToken(req) {
   const auth = req.headers.authorization || '';
-  const match = /^Bearer\s+(.+)$/i.exec(auth);
-  const token = match?.[1]?.trim() || readCookie(req, 'session');
+  const token = auth.replace(/^Bearer /, '');
   if (!token) return null;
   try {
     return jwt.verify(token, getJwtSecret());

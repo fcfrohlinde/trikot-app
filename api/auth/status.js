@@ -1,9 +1,8 @@
 import { kv } from '../_lib/auth.js';
-import { logApiError, methodNotAllowed, requestId, serverError, setApiSecurityHeaders } from '../_lib/http.js';
+import { logApiError, methodNotAllowed, requestId, serverError } from '../_lib/http.js';
 
 export default async function handler(req, res) {
   const id = requestId();
-  setApiSecurityHeaders(res);
   if (req.method !== 'GET') return methodNotAllowed(res, ['GET']);
   try {
     const userCount = (await kv.get('meta:userCount')) || 0;
