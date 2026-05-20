@@ -141,6 +141,40 @@ function isUnmarkedActiveWithEquipment(data, person) {
   return !seasonFlag(person?.seasonEntry) && !seasonFlag(person?.seasonExit) && personHasIssuedEquipment(data, person?.id);
 }
 
+function orderCoversNeed(order) {
+  return !['geliefert', 'storniert', 'cancelled', 'canceled'].includes(String(order?.status || '').toLowerCase());
+}
+
+function openOrderedQtyForPersonItem(data, person, itemId, size) {
+  return (data.orders || []).reduce((sum, order) => {
+    if (!orderCoversNeed(order)) return sum;
+    return sum + (order.lines || []).reduce((lineSum, line) => {
+      if (line.playerId !== person?.id) return lineSum;
+      if (line.itemType !== itemId) return lineSum;
+      if (size && line.size && line.size !== size) return lineSum;
+      return lineSum + (Number(line.qty) || 1);
+    }, 0);
+  }, 0);
+}
+
+function currentDraftQtyForPersonItem(lines, person, itemId, size) {
+  return (lines || []).reduce((sum, line) => {
+    if (line.playerId !== person?.id) return sum;
+    if (line.itemType !== itemId) return sum;
+    if (size && line.size && line.size !== size) return sum;
+    return sum + (Number(line.qty) || 1);
+  }, 0);
+}
+
+function issuedQtyForPersonItem(data, person, itemId, size) {
+  return (data.inventory || []).filter(inv =>
+    inv.itemType === itemId &&
+    inv.status === 'ausgegeben' &&
+    inv.assignedTo === person?.id &&
+    (!size || !inv.size || inv.size === size)
+  ).length;
+}
+
 // Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
 function compressRanges(numbers) {
   if (!numbers || numbers.length === 0) return '';
@@ -1040,7 +1074,8 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
       if (!item) return;
       const qty = Number(entry.qty) || 1;
       const alreadyIssued = issuedCountForItem(item.id);
-      const missing = Math.max(0, qty - alreadyIssued);
+      const alreadyOrdered = openOrderedQtyForPersonItem(data, person, item.id, person.size || 'L');
+      const missing = Math.max(0, qty - alreadyIssued - alreadyOrdered);
       for (let idx = 0; idx < missing; idx++) {
         const stock = (data.inventory || []).filter(inv =>
           stockUsableForPerson(inv, person) &&
@@ -1379,12 +1414,17 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
       (selectedSet.items || []).forEach(entry => {
         const item = (data.items || []).find(i => i.id === entry.itemId);
         if (!item) return;
-        const missing = Math.max(0, (Number(entry.qty) || 1) - issuedCountForPersonItem(person, item.id));
+        const size = person.size || 'L';
+        const missing = Math.max(0,
+          (Number(entry.qty) || 1)
+          - issuedCountForPersonItem(person, item.id)
+          - openOrderedQtyForPersonItem(data, person, item.id, size)
+        );
         for (let idx = 0; idx < missing; idx++) {
           const stock = (data.inventory || []).filter(inv =>
             stockUsableForPerson(inv, person) &&
             inv.itemType === item.id &&
-            (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
+            (inv.size || size) === size &&
             !usedStock.has(inv.id)
           );
           const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
@@ -1403,7 +1443,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
             person,
             item,
             stock: sized,
-            size: person.size || sized?.size || 'L',
+            size: sized?.size || size,
             oldNumber: sized ? inventoryEffectiveNumber(data, sized) : '',
             newNumber: targetNumber,
             needsReprint,
@@ -4967,8 +5007,13 @@ function OrderForm({ data, onSave, onCancel }) {
       set.items.forEach((entry, idxItem) => {
         const item = data.items.find(i => i.id === entry.itemId);
         if (!item) return;
-        // Filter: Nur Personen, die diesen Artikel noch nicht haben
-        if (hasItemAssigned(person.id, item.id)) {
+        const targetPerson = { ...person, _kind: kind };
+        const requestedQty = Number(entry.qty) || 1;
+        const alreadyIssued = issuedQtyForPersonItem(data, targetPerson, item.id, size);
+        const alreadyOrdered = openOrderedQtyForPersonItem(data, targetPerson, item.id, size);
+        const alreadyInDraft = currentDraftQtyForPersonItem([...lines, ...newLines], targetPerson, item.id, size);
+        let remainingQty = Math.max(0, requestedQty - alreadyIssued - alreadyOrdered - alreadyInDraft);
+        if (remainingQty === 0) {
           skippedExisting++;
           return;
         }
@@ -4977,36 +5022,58 @@ function OrderForm({ data, onSave, onCancel }) {
           skippedDuplicate++;
           return;
         }
-        const transfer = findSeasonTransferCandidate(data, item.id, { ...person, _kind: kind }, usedTransfers);
-        if (transfer) {
-          usedTransfers.add(transfer.id);
-          const sourcePerson = findPerson(data, transfer.assignedTo);
-          const targetPerson = { ...person, _kind: kind };
-          const transferRow = {
-            itemName: item.name,
-            size: transfer.size || size,
-            sourceName: sourcePerson ? `${sourcePerson.firstName} ${sourcePerson.lastName}` : 'Austritt',
-            targetName: `${person.firstName} ${person.lastName}`,
-            oldNumber: inventoryEffectiveNumber(data, transfer),
-            newNumber: personNumberValue(targetPerson),
-            needsReprint: !inventoryMatchesPersonNumberInData(data, transfer, targetPerson),
-          };
-          if (transferRow.needsReprint) reprintRows.push(transferRow);
-          else transferRows.push(transferRow);
-          return;
-        }
         seen.add(key);
-        newLines.push({
-          id: `l_${Date.now()}_${idxP}_${idxItem}_${Math.random().toString(36).slice(2, 5)}`,
-          itemType: item.id,
-          size,
-          qty: Number(entry.qty) || 1,
-          playerId: person.id,
-          personKind: kind,
-          number: person.number != null ? String(person.number) : '',
-          name: (person.lastName || '').toUpperCase(),
-        });
-        addedForPerson++;
+        for (let needIdx = 0; needIdx < remainingQty; needIdx++) {
+          const stock = (data.inventory || []).find(inv =>
+            stockUsableForPerson(inv, targetPerson) &&
+            inv.itemType === item.id &&
+            (inv.size || size) === size &&
+            !usedTransfers.has(inv.id)
+          );
+          if (stock) {
+            usedTransfers.add(stock.id);
+            const stockRow = {
+              itemName: item.name,
+              size: stock.size || size,
+              sourceName: stock.reservedFor ? 'Reservierter Lagerbestand' : 'Lagerbestand',
+              targetName: `${person.firstName} ${person.lastName}`,
+              oldNumber: inventoryEffectiveNumber(data, stock),
+              newNumber: personNumberValue(targetPerson),
+              needsReprint: !inventoryMatchesPersonNumberInData(data, stock, targetPerson),
+            };
+            if (stockRow.needsReprint) reprintRows.push(stockRow);
+            else transferRows.push(stockRow);
+            continue;
+          }
+          const transfer = findSeasonTransferCandidate(data, item.id, targetPerson, usedTransfers);
+          if (transfer) {
+            usedTransfers.add(transfer.id);
+            const sourcePerson = findPerson(data, transfer.assignedTo);
+            const transferRow = {
+              itemName: item.name,
+              size: transfer.size || size,
+              sourceName: sourcePerson ? `${sourcePerson.firstName} ${sourcePerson.lastName}` : 'Austritt',
+              targetName: `${person.firstName} ${person.lastName}`,
+              oldNumber: inventoryEffectiveNumber(data, transfer),
+              newNumber: personNumberValue(targetPerson),
+              needsReprint: !inventoryMatchesPersonNumberInData(data, transfer, targetPerson),
+            };
+            if (transferRow.needsReprint) reprintRows.push(transferRow);
+            else transferRows.push(transferRow);
+            continue;
+          }
+          newLines.push({
+            id: `l_${Date.now()}_${idxP}_${idxItem}_${needIdx}_${Math.random().toString(36).slice(2, 5)}`,
+            itemType: item.id,
+            size,
+            qty: 1,
+            playerId: person.id,
+            personKind: kind,
+            number: person.number != null ? String(person.number) : '',
+            name: (person.lastName || '').toUpperCase(),
+          });
+          addedForPerson++;
+        }
       });
       if (addedForPerson === 0) skippedFully++;
     });
@@ -5181,16 +5248,16 @@ function OrderForm({ data, onSave, onCancel }) {
       {setSuggestionInfo && (
         <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
           <div className="font-medium mb-1" style={{ color: 'var(--vereinsblau)' }}>
-            Set-Auswertung: {setSuggestionInfo.ordered} Bestellzeile(n), {(setSuggestionInfo.transfers.length + setSuggestionInfo.reprints.length)} Umverteilung(en), {setSuggestionInfo.skippedExisting} bereits vorhandene Position(en).
+            Set-Auswertung: {setSuggestionInfo.ordered} Bestellzeile(n), {(setSuggestionInfo.transfers.length + setSuggestionInfo.reprints.length)} Umverteilung/Umbeflockung(en), {setSuggestionInfo.skippedExisting} bereits gedeckte Position(en).
           </div>
           {setSuggestionInfo.transfers.length > 0 && (
             <div className="mb-1">
-              <strong>Umverteilung ohne Bestellung:</strong> {setSuggestionInfo.transfers.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} -> ${r.targetName}`).join('; ')}
+              <strong>Umverteilung: alt - neu:</strong> {setSuggestionInfo.transfers.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} ${r.oldNumber || '-'} -> ${r.targetName} ${r.newNumber || '-'}`).join('; ')}
             </div>
           )}
           {setSuggestionInfo.reprints.length > 0 && (
             <div>
-              <strong>Umbeflockung/Nummernwechsel prüfen:</strong> {setSuggestionInfo.reprints.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} ${r.oldNumber || '-'} -> ${r.targetName} ${r.newNumber || '-'}`).join('; ')}
+              <strong>Umbeflockung: alt - neu:</strong> {setSuggestionInfo.reprints.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} ${r.oldNumber || '-'} -> ${r.targetName} ${r.newNumber || '-'}`).join('; ')}
             </div>
           )}
         </div>

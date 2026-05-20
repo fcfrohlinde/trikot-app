@@ -1,8 +1,28 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.5';
+export const APP_VERSION = '1.14.7';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.7',
+    date: '2026-05-20',
+    changes: [
+      'Offene Bestellungen decken den Bedarf und verhindern erneute Bestellzeilen für denselben Spieler/Trainer, Artikel und Größe',
+      'Standard-Set-Bestellungen berücksichtigen bereits im aktuellen Bestellentwurf vorhandene Positionen',
+      'Set-Mengen werden pro Stück gegen ausgegebenes Material, offene Bestellungen, Lagerbestand, Umverteilung und Umbeflockung verrechnet',
+      'Set-Auswertung weist bereits gedeckte Positionen, Umverteilung und Umbeflockung transparenter aus',
+    ],
+  },
+  {
+    version: '1.14.6',
+    date: '2026-05-20',
+    changes: [
+      'Standard-Set-Bestellvorschlag berücksichtigt jetzt auch Lagerbestand vor dem Erzeugen neuer Bestellzeilen',
+      'Passender Lagerbestand verhindert eine Bestellung; abweichend beflockter Lagerbestand erscheint als Umbeflockungsvorschlag',
+      'Set-Auswertung ist klar nach Umverteilung alt-neu und Umbeflockung alt-neu getrennt',
+      'Lagerbestand, reservierter Lagerbestand und Material ausscheidender Personen werden transparent als Quelle ausgewiesen',
+    ],
+  },
   {
     version: '1.14.5',
     date: '2026-05-20',
