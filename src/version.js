@@ -1,8 +1,35 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.12.0';
+export const APP_VERSION = '1.14.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.0',
+    date: '2026-05-20',
+    changes: [
+      'Artikelsuche unter Material, Spieler und Trainer ergänzt: Suche nach Trikotnummer/Initialen mit Mannschaftsfilter',
+      'Suchergebnisse zeigen, ob Artikel im Lager, beim Spieler/Trainer ausgegeben oder bestellt sind',
+      'Optional kann die Suche alle zugeordneten Teile einer gefundenen Person anzeigen',
+      'Artikelkatalog unterstützt Fotos je Artikel; diese erscheinen in Suche und Materialübersichten',
+      'Einstellungen sind in Untermenüs für Allgemein, Mannschaften, Artikel & Sets, Lieferanten sowie Pfandregeln gegliedert',
+      'Übergabeprotokoll für ausgegebene Teile als PDF mit Pfandregel und digitaler Unterschrift ergänzt',
+      'Rückgabeprotokoll als PDF mit Zustand, Pfandabrechnung und digitaler Unterschrift ergänzt',
+      'Spieler und Trainer können für Eintritt oder Ausscheiden zur neuen Saison markiert werden',
+    ],
+  },
+  {
+    version: '1.13.0',
+    date: '2026-05-20',
+    changes: [
+      'Pre-Production Security Review umgesetzt: Auth- und Daten-API gehärtet',
+      'Login und Setup setzen bevorzugt HttpOnly-Session-Cookies statt Client-Token im localStorage',
+      'API-Routen liefern Sicherheitsheader und loggen Fehler mit Request-ID ohne sensible Daten',
+      'Datenzugriffe werden nach Rolle und Mannschaft gefiltert, Schreibzugriffe serverseitig autorisiert',
+      'REST-DB-Service schützt Daten vor unberechtigtem Überschreiben und merge-t Bestände scoped nach ID',
+      'Logout-Route ergänzt und Auth-Client auf Cookie-basierte Requests umgestellt',
+      'Tests für Security-Header, Auth-Cookies und Datenzugriff ergänzt',
+    ],
+  },
   {
     version: '1.12.0',
     date: '2026-05-18',

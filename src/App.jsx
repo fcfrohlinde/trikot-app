@@ -736,6 +736,33 @@ function PersonsView({ data, update, kind }) {
     alert(`Bestellung "${title}" mit ${lines.length} Position(en) angelegt.`);
   }
 
+  function exportHandoverProtocol(person) {
+    const signature = prompt('Digitale Unterschrift / Name der empfangenden Person:');
+    if (!signature) return;
+    const items = (data.inventory || []).filter(i => i.assignedTo === person.id && i.status === 'ausgegeben');
+    const deposit = (data.deposits || []).find(d => d.playerId === person.id && !d.refunded);
+    const mode = getDepositMode(data.settings, person.team);
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    doc.setFontSize(16);
+    doc.text('Uebergabeprotokoll Vereinsmaterial', 14, 18);
+    doc.setFontSize(10);
+    doc.text(`${person.firstName} ${person.lastName} · ${person.team} · ${person._kind === 'coach' ? 'Initialen' : 'Nr.'} ${personNumberValue(person) || '-'}`, 14, 27);
+    doc.text(`Pfandregel: ${mode === 'ohne_pfand' ? 'ohne Pfand' : mode === 'saison' ? 'Saison-Abschreibung' : 'Pauschal'} · Pfand: ${deposit ? `${deposit.amount.toFixed(2)} EUR` : 'nicht hinterlegt'}`, 14, 34);
+    doc.autoTable({
+      startY: 42,
+      head: [['Artikel', 'Groesse', 'Nr./Init.', 'Inventar-ID']],
+      body: items.map(i => [i.itemName, i.size || '', i.assignedNumber || personNumberValue(person) || '', i.id]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [9, 36, 71] },
+    });
+    const y = Math.max(doc.lastAutoTable?.finalY || 55, 70) + 12;
+    doc.text('Die oben aufgefuehrten Teile wurden als Leihgabe erhalten. Die Pfand- und Kleiderordnung wurde anerkannt.', 14, y, { maxWidth: 180 });
+    doc.line(14, y + 24, 95, y + 24);
+    doc.text(`Digitale Unterschrift: ${signature}`, 14, y + 30);
+    doc.text(`Datum: ${new Date().toLocaleDateString('de-DE')}`, 130, y + 30);
+    doc.save(`uebergabe_${person.lastName || person.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  }
+
   function sortPersonList(list) {
     return [...list].sort((a, b) => {
       if (sort.key === 'number') return compareValues(a.number, b.number, sort.dir);
@@ -793,6 +820,8 @@ function PersonsView({ data, update, kind }) {
           </button>
         ))}
       </div>
+
+      <ArticleLocationSearch data={data} title={`ARTIKELSUCHE ${labels.plural.toUpperCase()}`} />
 
       {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
       {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} kind={kind} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
@@ -855,6 +884,12 @@ function PersonsView({ data, update, kind }) {
                       <td className="p-3 font-medium">
                         {p.firstName} {p.lastName}
                         <div className="text-xs text-stone-500 md:hidden">{p.team}</div>
+                        {(p.seasonEntry || p.seasonExit) && (
+                          <div className="text-xs mt-1">
+                            {p.seasonEntry && <span className="mr-1 px-1.5 py-0.5 bg-emerald-50 text-emerald-700">Eintritt Saison</span>}
+                            {p.seasonExit && <span className="mr-1 px-1.5 py-0.5 bg-orange-50 text-orange-700">Ausscheiden Saison</span>}
+                          </div>
+                        )}
                       </td>
                       <td className="p-3 hidden md:table-cell text-stone-600">{p.team}</td>
                       <td className="p-3 hidden sm:table-cell text-stone-600">{p.size || '–'}</td>
@@ -882,6 +917,9 @@ function PersonsView({ data, update, kind }) {
                             <span className="hidden lg:inline text-xs">Set</span>
                           </button>
                         )}
+                        <button onClick={() => exportHandoverProtocol({ ...p, _kind: kind })} className="text-stone-400 hover:text-stone-900 p-1" title="Übergabeprotokoll PDF">
+                          <FileText size={14} />
+                        </button>
                         <button onClick={() => { setEditing(p); setShowForm(true); }} className="text-stone-400 hover:text-stone-900 p-1">
                           <Edit2 size={14} />
                         </button>
@@ -1518,7 +1556,7 @@ function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) 
   const numberLabel = isCoach ? 'Initialen (max. 3 Zeichen)' : 'Rückennummer';
   const numberPlaceholder = isCoach ? 'z.B. DW' : '';
   const L = labels || { addNew: 'Spieler anlegen', editNew: 'Spieler bearbeiten', singular: 'Spieler' };
-  const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '' });
+  const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '', seasonEntry: false, seasonExit: false });
 
   // Konflikt-Check funktioniert für Spieler (Nummer) wie Trainer (Initialen) gleich:
   // Pro Mannschaft darf der gleiche Wert nicht doppelt vergeben sein.
@@ -1587,6 +1625,22 @@ function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) 
           </select>
         </Field>
         <Field label="Notizen"><input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></Field>
+        <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.seasonEntry ? '#F1ECDF' : 'white' }}>
+            <input type="checkbox" checked={!!form.seasonEntry} onChange={e => setForm({ ...form, seasonEntry: e.target.checked })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium">Eintritt neue Saison</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Für Bedarfsermittlung als Neuzugang vormerken.</div>
+            </div>
+          </label>
+          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.seasonExit ? '#F5EBDD' : 'white' }}>
+            <input type="checkbox" checked={!!form.seasonExit} onChange={e => setForm({ ...form, seasonExit: e.target.checked })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium">Ausscheiden neue Saison</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Material bleibt sichtbar, wird aber für Saisonplanung als Rücklauf berücksichtigt.</div>
+            </div>
+          </label>
+        </div>
       </div>
       <div className="flex gap-2 mt-4">
         <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Speichern</button>
@@ -2271,6 +2325,126 @@ function CatalogImport({ existingItems, onImport, onCancel, suppliers = [] }) {
 }
 
 // ============ MATERIAL / INVENTORY ============
+function itemPhoto(item, className = 'w-10 h-10') {
+  if (!item?.photo) return null;
+  return <img src={item.photo} alt={item.name || 'Artikel'} className={`${className} object-cover border border-stone-200`} />;
+}
+
+function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
+  const [team, setTeam] = useState('alle');
+  const [number, setNumber] = useState('');
+  const [itemId, setItemId] = useState('alle');
+  const [scope, setScope] = useState('artikel');
+
+  const persons = allPersons(data);
+  const normalizedNumber = String(number).trim().toLowerCase();
+  const matchedPersons = persons.filter(p => {
+    if (team !== 'alle' && p.team !== team) return false;
+    if (!normalizedNumber) return true;
+    return String(personNumberValue(p) || '').trim().toLowerCase() === normalizedNumber;
+  });
+  const matchedPersonIds = new Set(matchedPersons.map(p => p.id));
+  const rows = [];
+
+  (data.inventory || []).forEach(inv => {
+    const item = (data.items || []).find(x => x.id === inv.itemType) || { id: inv.itemType, name: inv.itemName || inv.itemType };
+    const person = findPerson(data, inv.assignedTo);
+    const invTeam = inv.status === 'ausgegeben' ? person?.team : inv.team;
+    const numberMatch = !normalizedNumber || (person && matchedPersonIds.has(person.id)) || String(inv.assignedNumber || '').trim().toLowerCase() === normalizedNumber;
+    const teamMatch = team === 'alle' || invTeam === team || (!invTeam && inv.status === 'lager');
+    const itemMatch = itemId === 'alle' || inv.itemType === itemId;
+    const personScopeMatch = scope === 'person' && normalizedNumber && person && matchedPersonIds.has(person.id);
+    if (teamMatch && numberMatch && (itemMatch || personScopeMatch)) {
+      rows.push({
+        key: `inv_${inv.id}`,
+        status: inv.status === 'lager' ? 'Im Lager' : inv.status === 'ausgegeben' ? 'Beim Spieler/Trainer' : inv.status,
+        item,
+        size: inv.size || '',
+        number: inv.assignedNumber || personNumberValue(person) || '',
+        team: invTeam || 'global',
+        owner: person ? `${person.firstName} ${person.lastName}` : (inv.assignedName || 'Lager'),
+        detail: inv.id,
+      });
+    }
+  });
+
+  (data.orders || []).forEach(order => {
+    (order.lines || []).forEach(line => {
+      const item = (data.items || []).find(x => x.id === line.itemType) || { id: line.itemType, name: line.itemType };
+      const person = findPerson(data, line.playerId);
+      const lineTeam = person?.team || order.team;
+      const numberMatch = !normalizedNumber || String(line.number || personNumberValue(person) || '').trim().toLowerCase() === normalizedNumber;
+      const teamMatch = team === 'alle' || lineTeam === team || order.team === team;
+      const itemMatch = itemId === 'alle' || line.itemType === itemId;
+      const personScopeMatch = scope === 'person' && normalizedNumber && person && matchedPersonIds.has(person.id);
+      if (teamMatch && numberMatch && (itemMatch || personScopeMatch)) {
+        rows.push({
+          key: `ord_${order.id}_${line.id}`,
+          status: 'Bestellt',
+          item,
+          size: line.size || '',
+          number: line.number || personNumberValue(person) || '',
+          team: lineTeam || 'div.',
+          owner: person ? `${person.firstName} ${person.lastName}` : (line.name || order.title),
+          detail: order.title,
+        });
+      }
+    });
+  });
+
+  return (
+    <div className="bg-white border border-stone-200 p-4 mb-4">
+      <div className="font-display text-xl mb-3">{title}</div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+        <Field label="Mannschaft">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={team} onChange={e => setTeam(e.target.value)}>
+            <option value="alle">Alle Mannschaften</option>
+            {(data.teams || []).map(t => <option key={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Field label="Trikotnummer / Initialen">
+          <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={number} onChange={e => setNumber(e.target.value)} placeholder="z.B. 7 oder DH" />
+        </Field>
+        <Field label="Artikel">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={itemId} onChange={e => setItemId(e.target.value)}>
+            <option value="alle">Alle Artikel</option>
+            {(data.items || []).map(i => <option key={i.id} value={i.id}>{i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Anzeige">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={scope} onChange={e => setScope(e.target.value)}>
+            <option value="artikel">Nur gewählten Artikel</option>
+            <option value="person">Alle Teile der Person</option>
+          </select>
+        </Field>
+      </div>
+      {rows.length === 0 ? (
+        <div className="text-sm text-stone-500 py-3">Keine passenden Lager-, Ausgabe- oder Bestellpositionen gefunden.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
+              <tr><th className="text-left p-2">Status</th><th className="text-left p-2">Artikel</th><th className="text-left p-2">Nr./Init.</th><th className="text-left p-2">Mannschaft</th><th className="text-left p-2">Ort / Person</th><th className="text-left p-2">Detail</th></tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.key} className="border-t border-stone-100">
+                  <td className="p-2 font-medium">{r.status}</td>
+                  <td className="p-2"><div className="flex items-center gap-2">{itemPhoto(r.item)}<span>{r.item.name} {r.size ? `· ${r.size}` : ''}</span></div></td>
+                  <td className="p-2" style={{ color: 'var(--vereinsblau)' }}>{r.number || '–'}</td>
+                  <td className="p-2">{r.team}</td>
+                  <td className="p-2">{r.owner}</td>
+                  <td className="p-2 text-xs text-stone-500">{r.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InventoryView({ data, update }) {
   const [filter, setFilter] = useState('alle');
   const [showForm, setShowForm] = useState(false);
@@ -2570,6 +2744,8 @@ function InventoryView({ data, update }) {
           </button>
         </div>
       </div>
+
+      <ArticleLocationSearch data={data} title="ARTIKELSUCHE MATERIAL" />
 
       <div className="flex flex-wrap gap-2 mb-4 items-center justify-between">
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -3978,6 +4154,39 @@ function ReturnsView({ data, update }) {
     alert('Rückgabe abgeschlossen.');
   }
 
+  function exportReturnProtocol() {
+    if (!player) return;
+    const signature = prompt('Digitale Unterschrift / Name bei Rückgabe:');
+    if (!signature) return;
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    doc.setFontSize(16);
+    doc.text('Rueckgabeprotokoll Vereinsmaterial', 14, 18);
+    doc.setFontSize(10);
+    doc.text(`${player.firstName} ${player.lastName} - ${player.team} - ${player._kind === 'coach' ? 'Initialen' : 'Nr.'} ${personNumberValue(player) || '-'}`, 14, 27);
+    doc.text(`Pfandregel: ${mode === 'ohne_pfand' ? 'ohne Pfand' : mode === 'saison' ? 'Saison-Abschreibung' : 'Pauschal'}`, 14, 34);
+    doc.autoTable({
+      startY: 42,
+      head: [['Artikel', 'Groesse', 'Zustand / Status', 'Abzug EUR']],
+      body: calc.map(({ item, cond, lossValue }) => [
+        item.itemName,
+        item.size || '',
+        conditionFactors[cond]?.label || cond,
+        lossValue.toFixed(2),
+      ]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [9, 36, 71] },
+    });
+    const y = Math.max(doc.lastAutoTable?.finalY || 55, 70) + 10;
+    doc.text(`Pfand: ${deposit ? `${deposit.amount.toFixed(2)} EUR` : 'nicht hinterlegt'}`, 14, y);
+    doc.text(`Einbehalt: ${retained.toFixed(2)} EUR`, 14, y + 7);
+    doc.text(`Auszahlung: ${refund.toFixed(2)} EUR`, 14, y + 14);
+    doc.line(14, y + 34, 95, y + 34);
+    doc.text(`Digitale Unterschrift: ${signature}`, 14, y + 40);
+    doc.text(`Datum: ${new Date().toLocaleDateString('de-DE')}`, 130, y + 40);
+    doc.save(`rueckgabe_${player.lastName || player.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  }
+
   return (
     <div>
       <div className="mb-8">
@@ -4122,6 +4331,11 @@ function ReturnsView({ data, update }) {
           )}
 
           <div className="flex flex-wrap gap-2">
+            <button onClick={exportReturnProtocol}
+              className="px-7 py-3 text-xs font-medium uppercase"
+              style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              Rückgabeprotokoll PDF
+            </button>
             <button onClick={processReturn}
               className="px-7 py-3 text-xs font-medium uppercase text-white"
               style={{
@@ -5570,6 +5784,7 @@ function SettingsView({ data, update }) {
   const [renamingTeam, setRenamingTeam] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [showItemImport, setShowItemImport] = useState(false);
+  const [settingsSection, setSettingsSection] = useState('general');
 
   function saveSettings() {
     // Beim Speichern entfernen wir die alten Felder, falls vorhanden — die neue
@@ -5626,7 +5841,21 @@ function SettingsView({ data, update }) {
   }
 
   function addItem() {
-    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30, replacementValue: 20 }]);
+    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30, replacementValue: 20, photo: '' }]);
+  }
+
+  function updateItemPhoto(idx, file) {
+    if (!file) return;
+    if (file.size > 900_000) {
+      alert('Foto ist zu groß. Bitte ein komprimiertes Bild unter 900 KB verwenden.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setItems(items.map((item, itemIdx) => itemIdx === idx ? { ...item, photo: reader.result } : item));
+    };
+    reader.onerror = () => alert('Foto konnte nicht gelesen werden.');
+    reader.readAsDataURL(file);
   }
 
   function loadFCFDefaults() {
@@ -5674,7 +5903,32 @@ function SettingsView({ data, update }) {
     <div>
       <PageHeader number="09" label="KONFIGURATION" title="Einstellungen" subtitle="Mannschaften, Artikelkatalog, Backup" />
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+        {[
+          { id: 'general', label: 'Allgemein' },
+          { id: 'teams', label: 'Mannschaften' },
+          { id: 'catalog', label: 'Artikel & Sets' },
+          { id: 'suppliers', label: 'Lieferanten' },
+          { id: 'deposit', label: 'Pfandregeln' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setSettingsSection(tab.id)}
+            className="px-4 py-2 text-xs uppercase whitespace-nowrap"
+            style={{
+              background: settingsSection === tab.id ? 'var(--vereinsblau)' : 'white',
+              color: settingsSection === tab.id ? 'white' : 'var(--ink)',
+              border: '1px solid var(--rule)',
+              fontFamily: "'Bebas Neue', sans-serif",
+              letterSpacing: '0.15em',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'general' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-4">ALLGEMEIN</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Vereinsname">
@@ -5686,7 +5940,7 @@ function SettingsView({ data, update }) {
         </div>
       </div>
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'teams' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-4">MANNSCHAFTEN</h2>
         <p className="text-xs text-stone-500 mb-3">Mannschaften anlegen, umbenennen, sortieren oder löschen. Beim Umbenennen ziehen Spieler und Bestellungen automatisch mit.</p>
 
@@ -5751,9 +6005,9 @@ function SettingsView({ data, update }) {
         )}
       </div>
 
-      <SuppliersBlock data={data} update={update} />
+      {settingsSection === 'suppliers' && <SuppliersBlock data={data} update={update} />}
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'catalog' ? undefined : 'none' }}>
         <div className="flex justify-between items-center mb-4">
           <h2 className="font-display text-2xl">ARTIKELKATALOG</h2>
           <div className="flex gap-2">
@@ -5795,8 +6049,11 @@ function SettingsView({ data, update }) {
               <input className="col-span-2 border border-stone-300 px-2 py-2 text-sm font-mono" value={it.articleNumber || ''}
                 placeholder="z.B. T-12345"
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, articleNumber: e.target.value } : i))} />
-              <input className="col-span-3 border border-stone-300 px-3 py-2 text-sm" value={it.name}
-                onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
+              <div className="col-span-3 flex items-center gap-2">
+                {itemPhoto(it, 'w-9 h-9')}
+                <input className="flex-1 min-w-0 border border-stone-300 px-3 py-2 text-sm" value={it.name}
+                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
+              </div>
               <select className="col-span-3 border border-stone-300 px-2 py-2 text-sm" value={it.supplierId || ''}
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, supplierId: e.target.value || null } : i))}>
                 <option value="">– kein Lieferant –</option>
@@ -5809,7 +6066,13 @@ function SettingsView({ data, update }) {
                 value={Number.isFinite(it.replacementValue) ? it.replacementValue : ''}
                 placeholder="–"
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, replacementValue: e.target.value === '' ? null : (parseFloat(e.target.value) || 0) } : i))} />
-              <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="col-span-1 text-stone-400 hover:text-red-600 p-1 justify-self-end"><Trash2 size={14} /></button>
+              <div className="col-span-1 flex justify-end gap-1">
+                <label className="text-stone-400 hover:text-stone-900 p-1 cursor-pointer" title="Foto hinzufügen">
+                  <FileText size={14} />
+                  <input type="file" accept="image/*" className="hidden" onChange={e => updateItemPhoto(idx, e.target.files?.[0])} />
+                </label>
+                <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="text-stone-400 hover:text-red-600 p-1" title="Löschen"><Trash2 size={14} /></button>
+              </div>
             </div>
           ))}
         </div>
@@ -5823,7 +6086,7 @@ function SettingsView({ data, update }) {
         </div>
       </div>
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'deposit' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">PFANDREGELN</h2>
         <p className="text-xs text-stone-500 mb-4">Wie wird bei der Rückgabe abgerechnet? Wähle das Modell, das zur Pfandordnung des Vereins passt.</p>
 
@@ -5949,7 +6212,7 @@ function SettingsView({ data, update }) {
 
       {/* Folgende Block (alter Wochenbericht-Versand) wird unverändert weitergeführt */}
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'deposit' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">PFAND- & KLEIDERORDNUNG (FCF, STAND 2025)</h2>
         <p className="text-xs text-stone-500 mb-4">Diese Regelung ist im aktuellen Pauschal-Modus hinterlegt. Ein Auszug für die Spielersicht — die vollständige Ordnung gibt's als PDF-Anhang.</p>
         <ol className="text-sm space-y-2 pl-5 list-decimal" style={{ color: 'var(--ink-soft)' }}>
@@ -5964,9 +6227,9 @@ function SettingsView({ data, update }) {
         </ol>
       </div>
 
-      <SuppliersBlock data={data} update={update} />
+      {false && <SuppliersBlock data={data} update={update} />}
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'catalog' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">STANDARD-SETS (ERSTAUSSTATTUNG)</h2>
         <p className="text-xs text-stone-500 mb-4">
           Lege beliebig viele Sets an — etwa „Erstausstattung Senioren", „Trainer-Set 1. Mannschaft" oder „Jugend-Basis". Pro Set wählst du, ob es für Spieler, Trainer oder beide gilt. In der Bestellung erscheint ein Auswahlmenü mit allen passenden Sets, das nur Personen ohne diese Ausstattung berücksichtigt.
@@ -5979,7 +6242,7 @@ function SettingsView({ data, update }) {
         />
       </div>
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'general' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">WOCHENBERICHT-VERSAND (SMTP)</h2>
         <p className="text-xs text-stone-500 mb-4">
           Aus den eingegangenen Bedarfsmeldungen wird ein Wochenbericht erzeugt und per E-Mail versendet. SMTP-Zugangsdaten werden als Umgebungsvariablen in Vercel hinterlegt — siehe Anleitung im README oder unten.

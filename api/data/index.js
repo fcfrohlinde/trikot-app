@@ -1,47 +1,72 @@
 import { kv, requireAuth } from '../_lib/auth.js';
-import { logApiError, methodNotAllowed, requestId, serverError } from '../_lib/http.js';
+import { logApiError, methodNotAllowed, requestId, serverError, setApiSecurityHeaders } from '../_lib/http.js';
+import { authorizeDataWrite, DATA_KEYS, filterDataForUser, mergeScopedWriteValue } from '../_lib/security.js';
 
-const DATA_KEYS = ['players', 'coaches', 'inventory', 'items', 'teams', 'deposits', 'orders', 'transactions', 'reports', 'suppliers', 'settings'];
+async function loadAllData() {
+  const result = {};
+  for (const key of DATA_KEYS) {
+    const value = await kv.get(`data:${key}`);
+    result[key] = value !== null && value !== undefined ? value : (key === 'settings' ? {} : []);
+  }
+  return result;
+}
 
 export default async function handler(req, res) {
   const id = requestId();
+  setApiSecurityHeaders(res);
 
   try {
     const user = await requireAuth(req, res);
     if (!user) return;
 
     if (req.method === 'GET') {
-      const result = {};
-      for (const key of DATA_KEYS) {
-        const v = await kv.get(`data:${key}`);
-        if (v !== null && v !== undefined) result[key] = v;
-      }
-      return res.json(result);
+      const result = await loadAllData();
+      return res.json(filterDataForUser(result, user));
     }
 
     if (req.method === 'POST') {
-      // Body: { key, value, mode? }. mode='mergeById' bewahrt vorhandene Einträge mit anderer ID.
       const { key, value, mode = 'replace' } = req.body || {};
       if (!DATA_KEYS.includes(key)) {
-        return res.status(400).json({ error: 'Ungültiger Schlüssel' });
+        return res.status(400).json({ error: 'Ungueltiger Schluessel' });
       }
 
+      const allData = await loadAllData();
+      const currentForKey = allData[key] ?? (key === 'settings' ? {} : []);
       let nextValue = value;
+
       if (mode === 'mergeById') {
         if (!Array.isArray(value)) {
           return res.status(400).json({ error: 'mergeById erwartet eine Liste.' });
         }
-        const current = (await kv.get(`data:${key}`)) || [];
-        if (!Array.isArray(current)) {
-          return res.status(400).json({ error: 'mergeById ist nur für Listen möglich.' });
+        if (!Array.isArray(currentForKey)) {
+          return res.status(400).json({ error: 'mergeById ist nur fuer Listen moeglich.' });
         }
-        const byId = new Map(current.map(entry => [entry?.id, entry]).filter(([entryId]) => entryId));
+        const byId = new Map(currentForKey.map(entry => [entry?.id, entry]).filter(([entryId]) => entryId));
         value.forEach(entry => {
           if (entry?.id) byId.set(entry.id, { ...(byId.get(entry.id) || {}), ...entry });
         });
         nextValue = [...byId.values()];
       } else if (mode !== 'replace') {
-        return res.status(400).json({ error: 'Ungültiger Speichermodus.' });
+        return res.status(400).json({ error: 'Ungueltiger Speichermodus.' });
+      }
+
+      nextValue = mergeScopedWriteValue({
+        user,
+        key,
+        currentValue: currentForKey,
+        nextValue,
+        allData,
+      });
+
+      const authorization = authorizeDataWrite({
+        user,
+        key,
+        currentValue: currentForKey,
+        nextValue,
+        allData,
+      });
+      if (!authorization.ok) {
+        return res.status(authorization.status).json({ error: authorization.error });
       }
 
       await kv.set(`data:${key}`, nextValue);
@@ -58,6 +83,6 @@ export default async function handler(req, res) {
     return methodNotAllowed(res, ['GET', 'POST']);
   } catch (e) {
     logApiError(id, 'Daten-API fehlgeschlagen', e, { method: req.method, key: req.body?.key });
-    return serverError(res, id, 'Daten konnten nicht geladen oder gespeichert werden. Bitte Vercel-Logs prüfen.');
+    return serverError(res, id, 'Daten konnten nicht geladen oder gespeichert werden. Bitte Vercel-Logs pruefen.');
   }
 }
