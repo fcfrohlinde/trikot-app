@@ -1,8 +1,38 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.8';
+export const APP_VERSION = '1.14.11';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.11',
+    date: '2026-05-20',
+    changes: [
+      'Materiallogik erneut geprueft und vereinheitlicht: Umverteilung vor passender Lagerausgabe vor Umbeflockung',
+      'Passender Lagerbestand beruecksichtigt jetzt neben Mannschaft und Nummer/Initialen auch den hinterlegten Flocknamen',
+      'Reservierungen speichern Nummer/Initialen und Namen am Bestand und werden dadurch als gedeckter Bedarf erkannt',
+      'Reservierter oder passend vorbeflockter Bestand verhindert neue Bestellvorschlaege fuer denselben Spieler/Trainer und Artikel',
+    ],
+  },
+  {
+    version: '1.14.10',
+    date: '2026-05-20',
+    changes: [
+      'Materialvorschlaege nutzen jetzt fest die Reihenfolge: Umverteilung Austritt zu Eintritt, passende Lagerausgabe, danach Umbeflockung',
+      'Passender Lagerbestand wird im Materialbereich als eigene Kategorie Ausgabe aus Lager angezeigt',
+      'Umbeflockung wird erst vorgeschlagen, wenn keine passende Umverteilung und keine passende Lagerausgabe verfuegbar ist',
+      'Reservieren in der Material-Ausgabe funktioniert jetzt direkt aus dem Ausgabedialog',
+    ],
+  },
+  {
+    version: '1.14.9',
+    date: '2026-05-20',
+    changes: [
+      'Saison-Umverteilung priorisiert jetzt ausscheidende Personen gleicher Mannschaft, gleicher Groesse und gleicher Nummer/Initialen vor Lagerbestand',
+      'Bestell- und Grundbestueckungsvorschlaege nutzen dieselbe Prioritaet fuer Eintritt/Austritt',
+      'Umverteilung und Umbeflockung koennen jeweils als PDF gedruckt werden',
+      'Zeichensatzfehler im neuen Materialbereich wurden korrigiert',
+    ],
+  },
   {
     version: '1.14.8',
     date: '2026-05-20',

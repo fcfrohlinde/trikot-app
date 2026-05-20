@@ -107,6 +107,20 @@ function inventoryMatchesPersonNumberInData(data, inv, person) {
   return invKind === person?._kind;
 }
 
+function normalizeFlockName(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function inventoryMatchesPersonName(inv, person) {
+  const invName = normalizeFlockName(inv?.assignedName);
+  if (!invName) return true;
+  return invName === normalizeFlockName(person?.lastName);
+}
+
+function inventoryMatchesPersonIdentityInData(data, inv, person) {
+  return inventoryMatchesPersonNumberInData(data, inv, person) && inventoryMatchesPersonName(inv, person);
+}
+
 function stockReservedForOther(inv, person) {
   return inv?.reservedFor && inv.reservedFor !== person?.id;
 }
@@ -118,19 +132,60 @@ function stockUsableForPerson(inv, person) {
   return true;
 }
 
-function findSeasonTransferCandidate(data, itemId, person, usedStock) {
-  return (data.inventory || []).find(inv => {
+function findStockCandidates(data, itemId, person, size, usedStock) {
+  const wantedSize = size || person?.size || 'L';
+  return (data.inventory || []).filter(inv =>
+    stockUsableForPerson(inv, person) &&
+    inv.itemType === itemId &&
+    (inv.size || wantedSize) === wantedSize &&
+    !usedStock.has(inv.id)
+  );
+}
+
+function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock) {
+  const wantedSize = size || person?.size || 'L';
+  const stock = findStockCandidates(data, itemId, person, wantedSize, usedStock);
+  const exactTransfer = findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, exactNumberOnly: true });
+  if (exactTransfer) return exactTransfer;
+
+  const reservedExact = stock.find(inv => inv.reservedFor === person?.id && inventoryMatchesPersonIdentityInData(data, inv, person));
+  if (reservedExact) return reservedExact;
+
+  const exactStock = stock.find(inv => inventoryMatchesPersonIdentityInData(data, inv, person));
+  if (exactStock) return exactStock;
+
+  const reservedStock = stock.find(inv => inv.reservedFor === person?.id);
+  if (reservedStock) return reservedStock;
+
+  const reprintStock = stock.find(inv => !inventoryMatchesPersonIdentityInData(data, inv, person));
+  if (reprintStock) return reprintStock;
+
+  return findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize });
+}
+
+function findSeasonTransferCandidate(data, itemId, person, usedStock, options = {}) {
+  const wantedSize = options.size || person?.size || 'L';
+  const exactNumberOnly = !!options.exactNumberOnly;
+  const candidates = (data.inventory || []).filter(inv => {
     if (usedStock.has(inv.id)) return false;
     if (inv.status !== 'ausgegeben' || inv.itemType !== itemId) return false;
-    if ((inv.size || person.size || 'L') !== (person.size || inv.size || 'L')) return false;
+    if ((inv.size || wantedSize) !== wantedSize) return false;
     const owner = findPerson(data, inv.assignedTo);
-    return owner
+    const valid = owner
       && owner.id !== person.id
       && owner._kind === person._kind
       && owner.team === person.team
       && seasonFlag(owner.seasonExit)
       && !seasonFlag(owner.seasonEntry);
+    if (!valid) return false;
+    if (exactNumberOnly && !inventoryMatchesPersonNumberInData(data, inv, person)) return false;
+    return true;
   });
+  return candidates.sort((a, b) => {
+    const aExact = inventoryMatchesPersonNumberInData(data, a, person) ? 0 : 1;
+    const bExact = inventoryMatchesPersonNumberInData(data, b, person) ? 0 : 1;
+    return aExact - bExact;
+  })[0] || null;
 }
 
 function personHasIssuedEquipment(data, personId) {
@@ -1077,24 +1132,16 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
       const alreadyOrdered = openOrderedQtyForPersonItem(data, person, item.id, person.size || 'L');
       const missing = Math.max(0, qty - alreadyIssued - alreadyOrdered);
       for (let idx = 0; idx < missing; idx++) {
-        const stock = (data.inventory || []).filter(inv =>
-          stockUsableForPerson(inv, person) &&
-          inv.itemType === item.id &&
-          (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
-          !usedStock.has(inv.id)
-        );
-        const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-        const transfer = !exact ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
-        const reserved = stock.find(inv => inv.reservedFor === person.id);
-        const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumberInData(data, transfer, person)) ? transfer : null;
-        const sized = correctionMode ? (exact || safeTransfer || null) : (exact || reserved || transfer || stock[0] || null);
+        const wantedSize = person.size || 'L';
+        const source = chooseMaterialSourceForNeed(data, item.id, person, wantedSize, usedStock);
+        const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
         if (sized) usedStock.add(sized.id);
         const oldNumber = sized ? inventoryEffectiveNumber(data, sized) : '';
-        const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonNumberInData(data, sized, person));
+        const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonIdentityInData(data, sized, person));
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
         const action = fromPerson
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
-          : exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur';
+          : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
         suggestions.push({
           id: `${item.id}_${idx}`,
           item,
@@ -1421,23 +1468,14 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           - openOrderedQtyForPersonItem(data, person, item.id, size)
         );
         for (let idx = 0; idx < missing; idx++) {
-          const stock = (data.inventory || []).filter(inv =>
-            stockUsableForPerson(inv, person) &&
-            inv.itemType === item.id &&
-            (inv.size || size) === size &&
-            !usedStock.has(inv.id)
-          );
-          const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-          const transfer = !exact ? findSeasonTransferCandidate(data, item.id, person, usedStock) : null;
-          const reserved = stock.find(inv => inv.reservedFor === person.id);
-          const safeTransfer = transfer && (!correctionMode || inventoryMatchesPersonNumberInData(data, transfer, person)) ? transfer : null;
-          const sized = correctionMode ? (exact || safeTransfer || null) : (exact || reserved || transfer || stock[0] || null);
+          const source = chooseMaterialSourceForNeed(data, item.id, person, size, usedStock);
+          const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
           if (sized) usedStock.add(sized.id);
           const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
-          const needsReprint = !correctionMode && !!sized && !inventoryMatchesPersonNumberInData(data, sized, person);
+          const needsReprint = !correctionMode && !!sized && !inventoryMatchesPersonIdentityInData(data, sized, person);
           const action = fromPerson
             ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
-            : exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur';
+            : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
           out.push({
             id: `${person.id}_${item.id}_${idx}`,
             person,
@@ -2562,23 +2600,6 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
     });
   }
 
-  function reserve() {
-    if (!personId) return;
-    let storedNumber;
-    if (isCoach) {
-      storedNumber = number ? String(number).trim().toUpperCase() : null;
-    } else {
-      storedNumber = number ? parseInt(number) : null;
-    }
-    onAssign(inv.id, personId, storedNumber, {
-      reserveOnly: true,
-      needsReprint,
-      fromNumber: reprintFromNumber || null,
-      toNumber: storedNumber || null,
-      personKind: person?._kind || null,
-    });
-  }
-
   function runSearch() {
     setCriteria({
       team,
@@ -2679,24 +2700,19 @@ function SeasonMaterialWorkArea({ data, update }) {
     function addRow({ person, item, size, sourceHint, orderId }) {
       if (!person || !item) return;
       const target = { ...person, _kind: person._kind };
-      const stock = (data.inventory || []).find(inv =>
-        stockUsableForPerson(inv, target) &&
-        inv.itemType === item.id &&
-        (inv.size || size || target.size || 'L') === (size || target.size || inv.size || 'L') &&
-        !usedSources.has(inv.id)
-      );
-      const transfer = stock ? null : findSeasonTransferCandidate(data, item.id, target, usedSources);
-      const source = stock || transfer;
+      const wantedSize = size || target.size || 'L';
+      const source = chooseMaterialSourceForNeed(data, item.id, target, wantedSize, usedSources);
       if (!source) return;
 
       usedSources.add(source.id);
       const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
-      const needsReprint = !inventoryMatchesPersonNumberInData(data, source, target);
+      const needsReprint = !inventoryMatchesPersonIdentityInData(data, source, target);
+      const category = needsReprint ? 'umbeflockung' : source.status === 'lager' ? 'ausgabe' : 'umverteilung';
       result.push({
         id: `${source.id}_${target.id}_${item.id}_${result.length}`,
-        category: needsReprint ? 'umbeflockung' : 'umverteilung',
+        category,
         item,
-        size: source.size || size || target.size || 'L',
+        size: source.size || wantedSize,
         source,
         sourceLabel: sourcePerson
           ? `${sourcePerson.firstName} ${sourcePerson.lastName}`
@@ -2750,6 +2766,7 @@ function SeasonMaterialWorkArea({ data, update }) {
   }, [data, persons, standardSets, openOrders]);
 
   const transfers = rows.filter(r => r.category === 'umverteilung');
+  const issues = rows.filter(r => r.category === 'ausgabe');
   const reprints = rows.filter(r => r.category === 'umbeflockung');
 
   function reserveSource(row) {
@@ -2760,12 +2777,41 @@ function SeasonMaterialWorkArea({ data, update }) {
       reservedFor: row.target.id,
       reservedAt: now,
       assignedNumber: row.newNumber || inv.assignedNumber || null,
+      assignedName: (row.target.lastName || '').toUpperCase() || inv.assignedName || null,
       personKind: row.target._kind,
       needsReprint: row.category === 'umbeflockung',
       reprintFromNumber: row.category === 'umbeflockung' ? (row.oldNumber || null) : null,
       reprintToNumber: row.category === 'umbeflockung' ? (row.newNumber || null) : null,
       reprintRequestedAt: row.category === 'umbeflockung' ? now : null,
     } : inv), { mode: 'replace' });
+  }
+
+  function printRowsPdf(list, title, filename) {
+    if (typeof window !== 'undefined' && typeof jsPDF === 'undefined') return;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    if (typeof doc.autoTable !== 'function') {
+      alert('PDF-Export ist nicht verfuegbar.');
+      return;
+    }
+    doc.setFontSize(16);
+    doc.text(title, 14, 16);
+    doc.setFontSize(9);
+    doc.text(`Stand: ${new Date().toLocaleString('de-DE')}`, 14, 23);
+    doc.autoTable({
+      startY: 28,
+      head: [['Artikel', 'Groesse', 'Alt', 'Neu', 'Quelle', 'Basis']],
+      body: list.map(row => [
+        `${row.item.articleNumber ? `[${row.item.articleNumber}] ` : ''}${row.item.name}`,
+        row.size || '',
+        `${row.sourceLabel} ${row.oldNumber || '-'}`,
+        `${row.target.firstName} ${row.target.lastName} ${row.newNumber || '-'}`,
+        row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ruecklauf ${row.source.id}`,
+        row.sourceHint || '',
+      ]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [0, 51, 102] },
+    });
+    doc.save(filename);
   }
 
   function renderRows(list, emptyText) {
@@ -2776,7 +2822,7 @@ function SeasonMaterialWorkArea({ data, update }) {
           <thead className="bg-stone-50 uppercase tracking-wider text-stone-500">
             <tr>
               <th className="text-left p-2">Artikel</th>
-              <th className="text-left p-2">GrÃ¶ÃŸe</th>
+              <th className="text-left p-2">{'Gr\u00f6\u00dfe'}</th>
               <th className="text-left p-2">Alt</th>
               <th className="text-left p-2">Neu</th>
               <th className="text-left p-2">Quelle</th>
@@ -2801,7 +2847,7 @@ function SeasonMaterialWorkArea({ data, update }) {
                       <button onClick={() => reserveSource(row)} className="text-xs bg-stone-900 text-white px-2 py-1">Reservieren</button>
                     )
                   ) : (
-                    <span className="text-stone-500">RÃ¼cklauf</span>
+                    <span className="text-stone-500">{'R\u00fccklauf'}</span>
                   )}
                 </td>
               </tr>
@@ -2818,20 +2864,32 @@ function SeasonMaterialWorkArea({ data, update }) {
         <div>
           <div className="font-display text-xl">UMVERTEILUNG & UMBEFLOCKUNG</div>
           <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
-            {transfers.length} Umverteilung(en) Â· {reprints.length} Umbeflockung(en) aus offenen Bestellungen, Saisonstatus und aktuellem Bestand
+            {transfers.length} Umverteilung(en) / {issues.length} Ausgabe(n) / {reprints.length} Umbeflockung(en) aus offenen Bestellungen, Saisonstatus und aktuellem Bestand
           </div>
         </div>
         <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{open ? 'zuklappen' : 'aufklappen'}</span>
       </button>
       {open && (
         <div className="border-t border-stone-200">
+          <div className="p-4 border-b border-stone-100 flex flex-wrap gap-2 justify-end">
+            <button onClick={() => printRowsPdf(transfers, 'Umverteilung alt - neu', 'umverteilung_alt_neu.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Umverteilung PDF
+            </button>
+            <button onClick={() => printRowsPdf(reprints, 'Umbeflockung alt - neu', 'umbeflockung_alt_neu.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Umbeflockung PDF
+            </button>
+          </div>
           <div className="p-4 border-b border-stone-100">
             <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>UMVERTEILUNG: ALT - NEU</div>
-            {renderRows(transfers, 'Aktuell keine UmverteilungsvorschlÃ¤ge.')}
+            {renderRows(transfers, 'Aktuell keine Umverteilungsvorschl\u00e4ge.')}
+          </div>
+          <div className="p-4 border-b border-stone-100">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--success)', letterSpacing: '0.18em' }}>AUSGABE AUS LAGER</div>
+            {renderRows(issues, 'Aktuell keine passenden Lagerausgaben.')}
           </div>
           <div className="p-4">
             <div className="font-sub text-xs mb-2" style={{ color: 'var(--warn)', letterSpacing: '0.18em' }}>UMBEFLOCKUNG: ALT - NEU</div>
-            {renderRows(reprints, 'Aktuell keine UmbeflockungsvorschlÃ¤ge.')}
+            {renderRows(reprints, 'Aktuell keine Umbeflockungsvorschl\u00e4ge.')}
           </div>
         </div>
       )}
@@ -2999,6 +3057,8 @@ function InventoryView({ data, update }) {
   }
 
   function assign(invId, playerId, number, reprint = {}) {
+    const targetPerson = findPerson(data, playerId);
+    const targetName = (targetPerson?.lastName || '').toUpperCase() || null;
     update('inventory', data.inventory.map(i =>
       i.id === invId ? (
         reprint.reserveOnly ? {
@@ -3007,6 +3067,7 @@ function InventoryView({ data, update }) {
           reservedFor: playerId,
           reservedAt: new Date().toISOString(),
           assignedNumber: number,
+          assignedName: targetName,
           personKind: reprint.personKind || i.personKind || null,
           needsReprint: !!reprint.needsReprint,
           reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
@@ -3020,6 +3081,7 @@ function InventoryView({ data, update }) {
           reservedFor: null,
           reservedAt: null,
           assignedNumber: number,
+          assignedName: targetName,
           personKind: reprint.personKind || i.personKind || null,
           needsReprint: !!reprint.needsReprint,
           reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
@@ -4232,6 +4294,23 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
     }
   }
 
+  function reserve() {
+    if (!personId) return;
+    let storedNumber;
+    if (isCoach) {
+      storedNumber = number ? String(number).trim().toUpperCase() : null;
+    } else {
+      storedNumber = number ? parseInt(number) : null;
+    }
+    onAssign(inv.id, personId, storedNumber, {
+      reserveOnly: true,
+      needsReprint,
+      fromNumber: reprintFromNumber || null,
+      toNumber: storedNumber || null,
+      personKind: person?._kind || null,
+    });
+  }
+
   function submit() {
     if (!personId) return;
     let storedNumber;
@@ -5200,42 +5279,23 @@ function OrderForm({ data, onSave, onCancel }) {
         }
         seen.add(key);
         for (let needIdx = 0; needIdx < remainingQty; needIdx++) {
-          const stock = (data.inventory || []).find(inv =>
-            stockUsableForPerson(inv, targetPerson) &&
-            inv.itemType === item.id &&
-            (inv.size || size) === size &&
-            !usedTransfers.has(inv.id)
-          );
-          if (stock) {
-            usedTransfers.add(stock.id);
-            const stockRow = {
+          const source = chooseMaterialSourceForNeed(data, item.id, targetPerson, size, usedTransfers);
+          if (source) {
+            usedTransfers.add(source.id);
+            const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
+            const sourceRow = {
               itemName: item.name,
-              size: stock.size || size,
-              sourceName: stock.reservedFor ? 'Reservierter Lagerbestand' : 'Lagerbestand',
+              size: source.size || size,
+              sourceName: sourcePerson
+                ? `${sourcePerson.firstName} ${sourcePerson.lastName}`
+                : source.reservedFor ? 'Reservierter Lagerbestand' : 'Lagerbestand',
               targetName: `${person.firstName} ${person.lastName}`,
-              oldNumber: inventoryEffectiveNumber(data, stock),
+              oldNumber: inventoryEffectiveNumber(data, source),
               newNumber: personNumberValue(targetPerson),
-              needsReprint: !inventoryMatchesPersonNumberInData(data, stock, targetPerson),
+              needsReprint: !inventoryMatchesPersonIdentityInData(data, source, targetPerson),
             };
-            if (stockRow.needsReprint) reprintRows.push(stockRow);
-            else transferRows.push(stockRow);
-            continue;
-          }
-          const transfer = findSeasonTransferCandidate(data, item.id, targetPerson, usedTransfers);
-          if (transfer) {
-            usedTransfers.add(transfer.id);
-            const sourcePerson = findPerson(data, transfer.assignedTo);
-            const transferRow = {
-              itemName: item.name,
-              size: transfer.size || size,
-              sourceName: sourcePerson ? `${sourcePerson.firstName} ${sourcePerson.lastName}` : 'Austritt',
-              targetName: `${person.firstName} ${person.lastName}`,
-              oldNumber: inventoryEffectiveNumber(data, transfer),
-              newNumber: personNumberValue(targetPerson),
-              needsReprint: !inventoryMatchesPersonNumberInData(data, transfer, targetPerson),
-            };
-            if (transferRow.needsReprint) reprintRows.push(transferRow);
-            else transferRows.push(transferRow);
+            if (sourceRow.needsReprint) reprintRows.push(sourceRow);
+            else transferRows.push(sourceRow);
             continue;
           }
           newLines.push({
