@@ -2778,12 +2778,28 @@ function SeasonMaterialWorkArea({ data, update }) {
     const usedSources = new Set();
     const needKeys = new Set();
 
-    function addRow({ person, item, size, sourceHint, orderId }) {
+    function addRow({ person, item, size, sourceHint, orderId, allowMissing = false }) {
       if (!person || !item) return;
       const target = { ...person, _kind: person._kind };
       const wantedSize = size || target.size || 'L';
       const source = chooseMaterialSourceForNeed(data, item.id, target, wantedSize, usedSources);
-      if (!source) return;
+      if (!source) {
+        if (!allowMissing) return;
+        result.push({
+          id: `missing_${target.id}_${item.id}_${wantedSize}_${result.length}`,
+          category: 'bestellung',
+          item,
+          size: wantedSize,
+          source: null,
+          sourceLabel: 'Kein Bestand',
+          target,
+          oldNumber: '',
+          newNumber: personNumberValue(target),
+          sourceHint,
+          orderId: null,
+        });
+        return;
+      }
 
       usedSources.add(source.id);
       const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
@@ -2814,7 +2830,7 @@ function SeasonMaterialWorkArea({ data, update }) {
         const item = (data.items || []).find(i => i.id === line.itemType);
         const qty = Number(line.qty) || 1;
         for (let idx = 0; idx < qty; idx++) {
-          addRow({ person, item, size: line.size || person?.size || 'L', sourceHint: `Bestellung: ${order.title}`, orderId: order.id });
+          addRow({ person, item, size: line.size || person?.size || 'L', sourceHint: `Bestellung: ${order.title}`, orderId: order.id, allowMissing: false });
         }
       });
     });
@@ -2840,7 +2856,7 @@ function SeasonMaterialWorkArea({ data, update }) {
               : person.standardSetId
                 ? `Standard-Set zugeordnet (${set.name})`
                 : `Standard-Set offen (${set.name})`;
-            addRow({ person, item, size, sourceHint: basis });
+            addRow({ person, item, size, sourceHint: basis, allowMissing: true });
           }
         });
       });
@@ -2884,9 +2900,10 @@ function SeasonMaterialWorkArea({ data, update }) {
   const transfers = filteredRows.filter(r => r.category === 'umverteilung');
   const issues = filteredRows.filter(r => r.category === 'ausgabe');
   const reprints = filteredRows.filter(r => r.category === 'umbeflockung');
+  const missingOrders = filteredRows.filter(r => r.category === 'bestellung');
 
   function reserveSource(row) {
-    if (row.source.status !== 'lager') return;
+    if (row.source?.status !== 'lager') return;
     const now = new Date().toISOString();
     update('inventory', (data.inventory || []).map(inv => inv.id === row.source.id ? {
       ...inv,
@@ -2900,6 +2917,53 @@ function SeasonMaterialWorkArea({ data, update }) {
       reprintToNumber: row.category === 'umbeflockung' ? (row.newNumber || null) : null,
       reprintRequestedAt: row.category === 'umbeflockung' ? now : null,
     } : inv), { mode: 'replace' });
+  }
+
+  function createMissingOrder(list) {
+    const unique = [];
+    const seen = new Set();
+    list.forEach(row => {
+      const key = `${row.target.id}_${row.item.id}_${row.size}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (issuedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
+      if (openOrderedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
+      unique.push(row);
+    });
+    if (unique.length === 0) {
+      alert('Keine bestellbaren Restpositionen vorhanden. Offene Bestellungen und vorhandene Ausstattung wurden bereits berücksichtigt.');
+      return;
+    }
+    const teams = [...new Set(unique.map(row => row.target.team).filter(Boolean))];
+    const now = new Date().toISOString();
+    const order = {
+      id: `ord_${Date.now()}`,
+      title: `Restbedarf Material ${new Date().toLocaleDateString('de-DE')}`,
+      type: 'restbedarf_material',
+      team: teams.length === 1 ? teams[0] : 'mehrere',
+      articleSupplierId: null,
+      flockSupplierId: null,
+      flockBy: 'haus',
+      notes: 'Aus Materialbereich Umverteilung/Umbeflockung erzeugt. Enthält nur Positionen ohne Umverteilung, Lagerausgabe, Umbeflockung oder offene Bestellung.',
+      lines: unique.map((row, idx) => ({
+        id: `l_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+        itemType: row.item.id,
+        size: row.size,
+        qty: 1,
+        playerId: row.target.id,
+        personKind: row.target._kind,
+        number: row.newNumber || '',
+        name: (row.target.lastName || '').toUpperCase(),
+        orderReason: 'fehlbestand_material',
+      })),
+      sponsors: { brust: '', ruecken: '', aermel: '' },
+      sponsorKey: '',
+      fromReports: [],
+      createdAt: now,
+      status: 'angelegt',
+    };
+    update('orders', [...(data.orders || []), order]);
+    alert(`Bestellung "${order.title}" mit ${unique.length} Restposition(en) angelegt.`);
   }
 
   function printRowsPdf(list, title, filename) {
@@ -2921,7 +2985,7 @@ function SeasonMaterialWorkArea({ data, update }) {
         row.size || '',
         `${row.sourceLabel} ${row.oldNumber || '-'}`,
         `${row.target.firstName} ${row.target.lastName}${row.target._kind === 'coach' ? ' (Trainer)' : ''} ${row.newNumber || '-'}`,
-        row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ruecklauf ${row.source.id}`,
+        row.source ? (row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ruecklauf ${row.source.id}`) : 'Bestellung',
         row.sourceHint || '',
       ]),
       styles: { fontSize: 8, cellPadding: 2 },
@@ -2958,10 +3022,12 @@ function SeasonMaterialWorkArea({ data, update }) {
                     <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
                   )}
                 </td>
-                <td className="p-2 font-mono">{row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`}</td>
+                <td className="p-2 font-mono">{row.source ? (row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`) : 'Bestellung'}</td>
                 <td className="p-2">{row.sourceHint}</td>
                 <td className="p-2 text-right">
-                  {row.source.status === 'lager' ? (
+                  {!row.source ? (
+                    <span className="text-stone-500">Restbedarf</span>
+                  ) : row.source.status === 'lager' ? (
                     row.source.reservedFor === row.target.id ? (
                       <span className="text-emerald-700">reserviert</span>
                     ) : (
@@ -2985,7 +3051,7 @@ function SeasonMaterialWorkArea({ data, update }) {
         <div>
           <div className="font-display text-xl">UMVERTEILUNG & UMBEFLOCKUNG</div>
           <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
-            {transfers.length} Umverteilung(en) / {issues.length} Ausgabe(n) / {reprints.length} Umbeflockung(en) aus offenen Bestellungen, Saisonstatus und aktuellem Bestand
+            {transfers.length} Umverteilung(en) / {issues.length} Ausgabe(n) / {reprints.length} Umbeflockung(en) / {missingOrders.length} Restbedarf aus offenen Bestellungen, Saisonstatus und aktuellem Bestand
           </div>
         </div>
         <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{open ? 'zuklappen' : 'aufklappen'}</span>
@@ -3053,6 +3119,12 @@ function SeasonMaterialWorkArea({ data, update }) {
             <button onClick={() => printRowsPdf(issues, 'Ausgabe aus Lager', 'ausgabe_aus_lager.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
               Ausgabe Lager PDF
             </button>
+            <button onClick={() => printRowsPdf(missingOrders, 'Restbedarf Bestellung', 'restbedarf_bestellung.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Restbedarf PDF
+            </button>
+            <button onClick={() => createMissingOrder(missingOrders)} disabled={missingOrders.length === 0} className="px-3 py-1.5 text-xs text-white disabled:opacity-50" style={{ background: 'var(--vereinsblau)' }}>
+              Restbedarf bestellen ({missingOrders.length})
+            </button>
           </div>
           <div className="p-4 border-b border-stone-100">
             <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>UMVERTEILUNG: ALT - NEU</div>
@@ -3065,6 +3137,10 @@ function SeasonMaterialWorkArea({ data, update }) {
           <div className="p-4">
             <div className="font-sub text-xs mb-2" style={{ color: 'var(--warn)', letterSpacing: '0.18em' }}>UMBEFLOCKUNG: ALT - NEU</div>
             {renderRows(reprints, 'Aktuell keine Umbeflockungsvorschl\u00e4ge.')}
+          </div>
+          <div className="p-4 border-t border-stone-100">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--danger)', letterSpacing: '0.18em' }}>RESTBEDARF BESTELLUNG</div>
+            {renderRows(missingOrders, 'Aktuell kein offener Restbedarf ohne Bestand oder offene Bestellung.')}
           </div>
         </div>
       )}

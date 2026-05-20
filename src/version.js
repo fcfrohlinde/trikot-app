@@ -1,8 +1,18 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.18';
+export const APP_VERSION = '1.14.19';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.19',
+    date: '2026-05-20',
+    changes: [
+      'Materialbereich zeigt jetzt einen eigenen Restbedarf fuer noch nicht gedeckte Standard-Set-Positionen',
+      'Aus dem Restbedarf kann direkt eine Bestellung erzeugt werden',
+      'Beim Erzeugen der Restbedarf-Bestellung werden vorhandene Ausgabe, offene Bestellungen, Umverteilung, Lagerausgabe und Umbeflockung erneut geprueft',
+      'Restbedarf kann auch als PDF exportiert werden',
+    ],
+  },
   {
     version: '1.14.18',
     date: '2026-05-20',
