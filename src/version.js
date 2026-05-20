@@ -1,8 +1,33 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.19';
+export const APP_VERSION = '1.14.22';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.22',
+    date: '2026-05-20',
+    changes: [
+      'Artikel koennen im Artikelkatalog unter Einstellungen grundsaetzlich von Umflockung ausgeschlossen werden',
+      'Der katalogweite Ausschluss verhindert Umbeflockungsvorschlaege fuer alle Bestandsstuecke dieses Artikels',
+      'Umbeflockungszeilen zeigen an, wenn der Ausschluss aus dem Artikelkatalog stammt',
+    ],
+  },
+  {
+    version: '1.14.21',
+    date: '2026-05-20',
+    changes: [
+      'Artikel in der Umbeflockungsliste koennen jetzt per Checkbox von der Umflockung ausgeschlossen werden',
+      'Ausgeschlossene Artikel werden nicht mehr als Umbeflockungsquelle vorgeschlagen',
+      'Wenn durch den Ausschluss kein anderes Material passt, wandert der Bedarf in den Restbedarf fuer Bestellung',
+    ],
+  },
+  {
+    version: '1.14.20',
+    date: '2026-05-20',
+    changes: [
+      'Textfehler im Suchbereich korrigiert: Zuruecksetzen wird wieder sauber angezeigt',
+    ],
+  },
   {
     version: '1.14.19',
     date: '2026-05-20',

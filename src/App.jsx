@@ -170,6 +170,14 @@ function materialSourceNeedsReprint(data, inv, person) {
   return !inventoryMatchesPersonIdentityInData(data, inv, person);
 }
 
+function itemReprintExcluded(data, itemId) {
+  return !!(data.items || []).find(item => item.id === itemId)?.reprintExcluded;
+}
+
+function sourceReprintExcluded(data, inv, person) {
+  return !!inv?.reprintExcluded || (itemReprintExcluded(data, inv?.itemType) && materialSourceNeedsReprint(data, inv, person));
+}
+
 function stockReservedForOther(inv, person) {
   return inv?.reservedFor && inv.reservedFor !== person?.id;
 }
@@ -203,18 +211,19 @@ function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock) {
   const exactStock = stock.find(inv => inventoryMatchesPersonIdentityInData(data, inv, person));
   if (exactStock) return exactStock;
 
-  const reservedStock = stock.find(inv => inv.reservedFor === person?.id);
+  const reservedStock = stock.find(inv => inv.reservedFor === person?.id && !sourceReprintExcluded(data, inv, person));
   if (reservedStock) return reservedStock;
 
-  const reprintStock = stock.find(inv => !inventoryMatchesPersonIdentityInData(data, inv, person));
+  const reprintStock = stock.find(inv => !sourceReprintExcluded(data, inv, person) && !inventoryMatchesPersonIdentityInData(data, inv, person));
   if (reprintStock) return reprintStock;
 
-  return findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize });
+  return findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, excludeReprintBlocked: true });
 }
 
 function findSeasonTransferCandidate(data, itemId, person, usedStock, options = {}) {
   const wantedSize = options.size || person?.size || 'L';
   const exactNumberOnly = !!options.exactNumberOnly;
+  const excludeReprintBlocked = !!options.excludeReprintBlocked;
   const candidates = (data.inventory || []).filter(inv => {
     if (usedStock.has(inv.id)) return false;
     if (inv.status !== 'ausgegeben' || inv.itemType !== itemId) return false;
@@ -228,6 +237,7 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock, options = 
       && !seasonFlag(owner.seasonEntry);
     if (!valid) return false;
     if (exactNumberOnly && !inventoryMatchesPersonNumberInData(data, inv, person)) return false;
+    if (excludeReprintBlocked && sourceReprintExcluded(data, inv, person)) return false;
     return true;
   });
   return candidates.sort((a, b) => {
@@ -2728,7 +2738,7 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
           <button onClick={resetSearch}
             className="px-5 py-2 text-xs uppercase"
             style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-            ZurÃ¼cksetzen
+            {'Zur\u00fccksetzen'}
           </button>
         )}
       </div>
@@ -2919,6 +2929,16 @@ function SeasonMaterialWorkArea({ data, update }) {
     } : inv), { mode: 'replace' });
   }
 
+  function toggleReprintExcluded(row, checked) {
+    if (!row.source?.id) return;
+    update('inventory', (data.inventory || []).map(inv => inv.id === row.source.id ? {
+      ...inv,
+      reprintExcluded: checked,
+      reprintExcludedAt: checked ? new Date().toISOString() : null,
+      needsReprint: checked ? false : inv.needsReprint,
+    } : inv), { mode: 'replace' });
+  }
+
   function createMissingOrder(list) {
     const unique = [];
     const seen = new Set();
@@ -3007,6 +3027,7 @@ function SeasonMaterialWorkArea({ data, update }) {
               <th className="text-left p-2">Neu</th>
               <th className="text-left p-2">Quelle</th>
               <th className="text-left p-2">Basis</th>
+              <th className="text-left p-2">Umflockung</th>
               <th className="text-right p-2">Aktion</th>
             </tr>
           </thead>
@@ -3024,6 +3045,21 @@ function SeasonMaterialWorkArea({ data, update }) {
                 </td>
                 <td className="p-2 font-mono">{row.source ? (row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`) : 'Bestellung'}</td>
                 <td className="p-2">{row.sourceHint}</td>
+                <td className="p-2">
+                  {row.category === 'umbeflockung' && row.source ? (
+                    <label className="inline-flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={!!row.source.reprintExcluded || itemReprintExcluded(data, row.item.id)}
+                        disabled={itemReprintExcluded(data, row.item.id)}
+                        onChange={e => toggleReprintExcluded(row, e.target.checked)}
+                      />
+                      {itemReprintExcluded(data, row.item.id) ? 'Artikel gesperrt' : 'ausschließen'}
+                    </label>
+                  ) : (
+                    <span className="text-stone-400">-</span>
+                  )}
+                </td>
                 <td className="p-2 text-right">
                   {!row.source ? (
                     <span className="text-stone-500">Restbedarf</span>
@@ -6682,7 +6718,7 @@ function SettingsView({ data, update }) {
   }
 
   function addItem() {
-    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30, replacementValue: 20, photo: '' }]);
+    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30, replacementValue: 20, photo: '', reprintExcluded: false }]);
   }
 
   function updateItemPhoto(idx, file) {
@@ -6880,8 +6916,9 @@ function SettingsView({ data, update }) {
           <div className="col-span-2">Art.-Nr.</div>
           <div className="col-span-3">Artikel</div>
           <div className="col-span-3">Lieferant</div>
-          <div className="col-span-2 text-right">Preis €</div>
+          <div className="col-span-1 text-right">Preis €</div>
           <div className="col-span-1 text-right">Ersatz €</div>
+          <div className="col-span-1 text-center">Flock</div>
           <div className="col-span-1"></div>
         </div>
         <div className="space-y-2">
@@ -6900,13 +6937,21 @@ function SettingsView({ data, update }) {
                 <option value="">– kein Lieferant –</option>
                 {(data.suppliers || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
-              <input type="number" step="0.01" className="col-span-2 border border-stone-300 px-2 py-2 text-sm text-right"
+              <input type="number" step="0.01" className="col-span-1 border border-stone-300 px-2 py-2 text-sm text-right"
                 value={Number.isFinite(it.price) ? it.price : 0}
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, price: parseFloat(e.target.value) || 0 } : i))} />
               <input type="number" step="0.01" className="col-span-1 border border-stone-300 px-2 py-2 text-sm text-right"
                 value={Number.isFinite(it.replacementValue) ? it.replacementValue : ''}
                 placeholder="–"
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, replacementValue: e.target.value === '' ? null : (parseFloat(e.target.value) || 0) } : i))} />
+              <label className="col-span-1 flex items-center justify-center gap-1 text-[10px] cursor-pointer" title="Artikel nicht für Umflockung verwenden">
+                <input
+                  type="checkbox"
+                  checked={!!it.reprintExcluded}
+                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, reprintExcluded: e.target.checked } : i))}
+                />
+                aus
+              </label>
               <div className="col-span-1 flex justify-end gap-1">
                 <label className="text-stone-400 hover:text-stone-900 p-1 cursor-pointer" title="Foto hinzufügen">
                   <FileText size={14} />
