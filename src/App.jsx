@@ -153,6 +153,14 @@ function inventoryMatchesPersonIdentityInData(data, inv, person) {
   return inventoryMatchesPersonNumberInData(data, inv, person) && inventoryMatchesPersonName(inv, person);
 }
 
+function materialSourceNeedsReprint(data, inv, person) {
+  if (!inv) return false;
+  if (inv.status === 'ausgegeben') {
+    return !inventoryMatchesPersonNumberInData(data, inv, person);
+  }
+  return !inventoryMatchesPersonIdentityInData(data, inv, person);
+}
+
 function stockReservedForOther(inv, person) {
   return inv?.reservedFor && inv.reservedFor !== person?.id;
 }
@@ -1171,7 +1179,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
         const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
         if (sized) usedStock.add(sized.id);
         const oldNumber = sized ? inventoryEffectiveNumber(data, sized) : '';
-        const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonIdentityInData(data, sized, person));
+        const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
         const action = fromPerson
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
@@ -1507,7 +1515,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
           if (sized) usedStock.add(sized.id);
           const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
-          const needsReprint = !correctionMode && !!sized && !inventoryMatchesPersonIdentityInData(data, sized, person);
+          const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
           const action = fromPerson
             ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
             : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
@@ -2764,7 +2772,7 @@ function SeasonMaterialWorkArea({ data, update }) {
 
       usedSources.add(source.id);
       const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
-      const needsReprint = !inventoryMatchesPersonIdentityInData(data, source, target);
+      const needsReprint = materialSourceNeedsReprint(data, source, target);
       const category = needsReprint ? 'umbeflockung' : source.status === 'lager' ? 'ausgabe' : 'umverteilung';
       result.push({
         id: `${source.id}_${target.id}_${item.id}_${result.length}`,
@@ -4921,12 +4929,22 @@ function ReturnsView({ data, update }) {
 // ============ BESTELLUNGEN + FLOCK-LISTE ============
 function OrdersView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
+  const [editingOrder, setEditingOrder] = useState(null);
   const [viewing, setViewing] = useState(null);
   const [selected, setSelected] = useState([]);
   const [mergeMode, setMergeMode] = useState(false);
   const [sort, setSort] = useState({ key: 'createdAt', dir: 'desc' });
 
   function saveOrder(order) {
+    if (order.id) {
+      const updatedOrder = { ...order, updatedAt: new Date().toISOString() };
+      update('orders', data.orders.map(o => o.id === order.id ? updatedOrder : o));
+      if (viewing?.id === order.id) setViewing(updatedOrder);
+      setShowForm(false);
+      setEditingOrder(null);
+      return;
+    }
+
     const newOrder = { ...order, id: `ord_${Date.now()}`, createdAt: new Date().toISOString(), status: 'angelegt' };
     update('orders', [...data.orders, newOrder]);
 
@@ -4940,6 +4958,7 @@ function OrdersView({ data, update }) {
       update('reports', updatedReports);
     }
     setShowForm(false);
+    setEditingOrder(null);
   }
 
   function orderSponsorLabel(order) {
@@ -5031,7 +5050,7 @@ function OrdersView({ data, update }) {
     setMergeMode(false);
   }
 
-  if (viewing) return <OrderDetail order={viewing} data={data} onBack={() => setViewing(null)} onStatus={setStatus} />;
+  if (viewing) return <OrderDetail order={viewing} data={data} onBack={() => setViewing(null)} onStatus={setStatus} onEdit={(order) => { setViewing(null); setEditingOrder(order); setShowForm(true); }} />;
 
   return (
     <div>
@@ -5045,7 +5064,7 @@ function OrdersView({ data, update }) {
                 style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
                 Zusammenführen
               </button>
-              <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+              <button onClick={() => { setEditingOrder(null); setShowForm(true); }} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
                 style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
                 <Plus size={14} /> Neue Bestellung
               </button>
@@ -5074,7 +5093,7 @@ function OrdersView({ data, update }) {
         </div>
       )}
 
-      {showForm && <OrderForm data={data} onSave={saveOrder} onCancel={() => setShowForm(false)} />}
+      {showForm && <OrderForm data={data} order={editingOrder} onSave={saveOrder} onCancel={() => { setShowForm(false); setEditingOrder(null); }} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {data.orders.length === 0 ? (
@@ -5127,6 +5146,7 @@ function OrdersView({ data, update }) {
                       </td>
                       <td className="p-3 text-right whitespace-nowrap">
                         <button onClick={() => setViewing(o)} className="text-xs bg-stone-900 text-white px-2 py-1">Details</button>
+                        <button onClick={() => { setEditingOrder(o); setShowForm(true); }} className="text-xs border border-stone-300 px-2 py-1 ml-1">Bearbeiten</button>
                         <button onClick={() => remove(o.id)} className="text-stone-400 hover:text-red-600 p-1 ml-1"><Trash2 size={14} /></button>
                       </td>
                     </tr>
@@ -5141,17 +5161,18 @@ function OrdersView({ data, update }) {
   );
 }
 
-function OrderForm({ data, onSave, onCancel }) {
-  const [type, setType] = useState('komplett');
-  const [team, setTeam] = useState(data.teams[0] || '');
-  const [title, setTitle] = useState('');
-  const [articleSupplierId, setArticleSupplierId] = useState('');
-  const [flockSupplierId, setFlockSupplierId] = useState('');
-  const [flockBy, setFlockBy] = useState('haus'); // 'haus' | 'lieferant' | 'extern'
-  const [notes, setNotes] = useState('');
-  const [lines, setLines] = useState([]);
-  const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '' });
-  const [sponsorKey, setSponsorKey] = useState('');
+function OrderForm({ data, order, onSave, onCancel }) {
+  const isEditing = !!order?.id;
+  const [type, setType] = useState(order?.type || 'komplett');
+  const [team, setTeam] = useState(order?.team && data.teams.includes(order.team) ? order.team : (isEditing ? '' : (data.teams[0] || '')));
+  const [title, setTitle] = useState(order?.title || '');
+  const [articleSupplierId, setArticleSupplierId] = useState(order?.articleSupplierId || '');
+  const [flockSupplierId, setFlockSupplierId] = useState(order?.flockSupplierId || '');
+  const [flockBy, setFlockBy] = useState(order?.flockBy || 'haus'); // 'haus' | 'lieferant' | 'extern'
+  const [notes, setNotes] = useState(order?.notes || '');
+  const [lines, setLines] = useState((order?.lines || []).map((line, idx) => ({ ...line, id: line.id || `l_${Date.now()}_${idx}` })));
+  const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '', ...(order?.sponsors || {}) });
+  const [sponsorKey, setSponsorKey] = useState(order?.sponsorKey || '');
   const [showPersonPicker, setShowPersonPicker] = useState(false);
   const [distributingLineId, setDistributingLineId] = useState(null);
   const [setSuggestionInfo, setSetSuggestionInfo] = useState(null);
@@ -5336,7 +5357,7 @@ function OrderForm({ data, onSave, onCancel }) {
               targetName: `${person.firstName} ${person.lastName}`,
               oldNumber: inventoryEffectiveNumber(data, source),
               newNumber: personNumberValue(targetPerson),
-              needsReprint: !inventoryMatchesPersonIdentityInData(data, source, targetPerson),
+              needsReprint: materialSourceNeedsReprint(data, source, targetPerson),
             };
             if (sourceRow.needsReprint) reprintRows.push(sourceRow);
             else transferRows.push(sourceRow);
@@ -5374,17 +5395,18 @@ function OrderForm({ data, onSave, onCancel }) {
     if (!title) return alert('Titel fehlt');
     if (lines.length === 0) return alert('Keine Positionen');
     onSave({
+      ...(order || {}),
       title, type,
       team: team || null,
       articleSupplierId, flockSupplierId, flockBy,
       notes, lines, sponsors, sponsorKey,
-      fromReports: [],
+      fromReports: order?.fromReports || [],
     });
   }
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
-      <h2 className="font-display text-2xl mb-4">NEUE BESTELLUNG</h2>
+      <h2 className="font-display text-2xl mb-4">{isEditing ? 'BESTELLUNG BEARBEITEN' : 'NEUE BESTELLUNG'}</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <Field label="Titel">
           <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={title} onChange={e => setTitle(e.target.value)} placeholder="z.B. Saison 2026/27 1. Mannschaft" />
@@ -5670,7 +5692,7 @@ function OrderForm({ data, onSave, onCancel }) {
       )}
 
       <div className="flex gap-2">
-        <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Bestellung anlegen</button>
+        <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">{isEditing ? 'Änderungen speichern' : 'Bestellung anlegen'}</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
       </div>
     </div>
@@ -5886,7 +5908,7 @@ function PersonPicker({ data, team, mode = 'add', preselectQty, preselectSize, p
   );
 }
 
-function OrderDetail({ order, data, onBack, onStatus }) {
+function OrderDetail({ order, data, onBack, onStatus, onEdit }) {
   function downloadCSV(rows, filename) {
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -6179,7 +6201,12 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 
   return (
     <div>
-      <button onClick={onBack} className="text-sm mb-6 flex items-center gap-1 hover:underline" style={{ color: 'var(--vereinsblau)' }}><ArrowLeft size={14} /> Zurück zu Bestellungen</button>
+      <div className="flex flex-wrap gap-2 mb-6">
+        <button onClick={onBack} className="text-sm flex items-center gap-1 hover:underline" style={{ color: 'var(--vereinsblau)' }}><ArrowLeft size={14} /> Zurück zu Bestellungen</button>
+        {onEdit && (
+          <button onClick={() => onEdit(order)} className="text-xs border border-stone-300 px-3 py-1.5">Bestellung bearbeiten</button>
+        )}
+      </div>
       <div className="bg-white p-7 mb-4" style={{ border: '1px solid var(--rule)' }}>
         <div className="flex flex-wrap justify-between items-start gap-4">
           <div>

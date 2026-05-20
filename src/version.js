@@ -1,8 +1,27 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.12';
+export const APP_VERSION = '1.14.14';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.14',
+    date: '2026-05-20',
+    changes: [
+      'Umverteilung aus Material ausscheidender Spieler/Trainer wird wieder nach gleicher Mannschaft, Groesse und Nummer/Initialen bewertet',
+      'Abweichender Flockname beim bisherigen Besitzer verschiebt passende Austritt-zu-Eintritt-Teile nicht mehr faelschlich in Umbeflockung',
+      'Die strengere Namenspruefung bleibt fuer Lagerbestand und Reservierungen erhalten',
+    ],
+  },
+  {
+    version: '1.14.13',
+    date: '2026-05-20',
+    changes: [
+      'Bestellungen koennen nachtraeglich bearbeitet werden',
+      'Lieferant, Beflockung, Sponsorplatzierungen, Sponsor-Kennung, Notizen und Positionen lassen sich nach dem Anlegen anpassen',
+      'Bearbeiten ist aus der Bestelluebersicht und aus der Detailansicht moeglich',
+      'Beim Bearbeiten bleiben Status, ID, Wareneingangsbezug und verknuepfte Bedarfsmeldungen erhalten',
+    ],
+  },
   {
     version: '1.14.12',
     date: '2026-05-20',
