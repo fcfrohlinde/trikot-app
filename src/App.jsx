@@ -2610,9 +2610,37 @@ function CatalogImport({ existingItems, onImport, onCancel, suppliers = [] }) {
 }
 
 // ============ MATERIAL / INVENTORY ============
-function itemPhoto(item, className = 'w-10 h-10') {
+function ImageLightbox({ title, subtitle, url, onClose }) {
+  if (!url) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6" style={{ background: 'rgba(0,0,0,0.72)' }}>
+      <div className="bg-white border border-stone-200 w-full max-w-5xl max-h-[92vh] overflow-auto">
+        <div className="flex items-center justify-between gap-3 p-3 border-b border-stone-200">
+          <div>
+            <div className="font-display text-xl">{title || 'Foto'}</div>
+            {subtitle && <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>{subtitle}</span>}
+          </div>
+          <button onClick={onClose} className="px-3 py-1.5 text-xs uppercase" style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            Zurück
+          </button>
+        </div>
+        <div className="p-3 sm:p-4">
+          <img src={url} alt={title || 'Foto'} style={{ width: '100%', maxHeight: '80vh', objectFit: 'contain', display: 'block' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function itemPhoto(item, className = 'w-10 h-10', onOpen = null) {
   if (!item?.photo) return null;
-  return <img src={item.photo} alt={item.name || 'Artikel'} className={`${className} object-cover border border-stone-200`} />;
+  const img = <img src={item.photo} alt={item.name || 'Artikel'} className={`${className} object-cover border border-stone-200`} />;
+  if (!onOpen) return img;
+  return (
+    <button type="button" onClick={() => onOpen(item)} className="shrink-0" title="Foto vergrößern">
+      {img}
+    </button>
+  );
 }
 
 function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
@@ -3189,6 +3217,7 @@ function InventoryView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
   const [showAssign, setShowAssign] = useState(null);
   const [showPrintDialog, setShowPrintDialog] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState(null);
   const [view, setView] = useState('aggregiert'); // 'aggregiert' | 'einzeln'
   const [groupBy, setGroupBy] = useState('article'); // 'article' | 'team' | 'person'
   const [openGroups, setOpenGroups] = useState({}); // {groupKey: true}
@@ -3447,10 +3476,15 @@ function InventoryView({ data, update }) {
     const assignment = assignedPersonLabel(i);
     const numberLabel = assignedNumberLabel(i);
     const conditionLabel = getConditionFactors(data.settings)[i.condition]?.label || i.condition;
+    const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
     return (
       <tr key={i.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
         <td className="p-3 pl-10 text-sm" style={{ color: 'var(--ink-mute)' }}>
-          <span className="text-xs">↳</span> {i.itemName}
+          <div className="flex items-center gap-2">
+            <span className="text-xs">↳</span>
+            {itemPhoto(item, 'w-9 h-9', setPhotoPreview)}
+            <span>{i.itemName}</span>
+          </div>
         </td>
         <td className="p-3 text-sm font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
           {numberLabel || '–'}
@@ -3667,9 +3701,15 @@ function InventoryView({ data, update }) {
                 {sortedItems.map(i => {
                   const assignment = assignedPersonLabel(i);
                   const numberLabel = assignedNumberLabel(i);
+                  const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
                   return (
                     <tr key={i.id} className="border-t border-stone-100">
-                      <td className="p-3 font-medium">{i.itemName}</td>
+                      <td className="p-3 font-medium">
+                        <div className="flex items-center gap-2">
+                          {itemPhoto(item, 'w-9 h-9', setPhotoPreview)}
+                          <span>{i.itemName}</span>
+                        </div>
+                      </td>
                       <td className="p-3 font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
                         {numberLabel || '–'}
                       </td>
@@ -6662,6 +6702,7 @@ function SettingsView({ data, update }) {
   const [renameValue, setRenameValue] = useState('');
   const [showItemImport, setShowItemImport] = useState(false);
   const [settingsSection, setSettingsSection] = useState('general');
+  const [photoPreview, setPhotoPreview] = useState(null);
 
   function saveSettings() {
     // Beim Speichern entfernen wir die alten Felder, falls vorhanden — die neue
@@ -6885,9 +6926,9 @@ function SettingsView({ data, update }) {
       {settingsSection === 'suppliers' && <SuppliersBlock data={data} update={update} />}
 
       <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'catalog' ? undefined : 'none' }}>
-        <div className="flex justify-between items-center mb-4">
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
           <h2 className="font-display text-2xl">ARTIKELKATALOG</h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button onClick={() => setShowItemImport(true)} className="text-xs px-3 py-1.5 flex items-center gap-1"
               style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>
               <Download size={12} style={{ transform: 'rotate(180deg)' }} /> CSV importieren
@@ -6912,6 +6953,8 @@ function SettingsView({ data, update }) {
           />
         )}
 
+        <div className="overflow-x-auto">
+          <div className="min-w-[980px]">
         <div className="grid grid-cols-12 gap-2 text-xs uppercase tracking-wider mb-2" style={{ color: 'var(--ink-mute)' }}>
           <div className="col-span-2">Art.-Nr.</div>
           <div className="col-span-3">Artikel</div>
@@ -6928,7 +6971,7 @@ function SettingsView({ data, update }) {
                 placeholder="z.B. T-12345"
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, articleNumber: e.target.value } : i))} />
               <div className="col-span-3 flex items-center gap-2">
-                {itemPhoto(it, 'w-9 h-9')}
+                {itemPhoto(it, 'w-9 h-9', setPhotoPreview)}
                 <input className="flex-1 min-w-0 border border-stone-300 px-3 py-2 text-sm" value={it.name}
                   onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
               </div>
@@ -6953,8 +6996,8 @@ function SettingsView({ data, update }) {
                 aus
               </label>
               <div className="col-span-1 flex justify-end gap-1">
-                <label className="text-stone-400 hover:text-stone-900 p-1 cursor-pointer" title="Foto hinzufügen">
-                  <FileText size={14} />
+                <label className="inline-flex items-center gap-1 px-2 py-1 text-xs cursor-pointer hover:underline" style={{ color: 'var(--vereinsblau)' }} title={it.photo ? 'Foto ersetzen' : 'Foto hinzufügen'}>
+                  <FileText size={13} /> Foto
                   <input type="file" accept="image/*" className="hidden" onChange={e => updateItemPhoto(idx, e.target.files?.[0])} />
                 </label>
                 <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="text-stone-400 hover:text-red-600 p-1" title="Löschen"><Trash2 size={14} /></button>
@@ -6962,7 +7005,9 @@ function SettingsView({ data, update }) {
             </div>
           ))}
         </div>
-        <div className="mt-3 text-xs flex justify-between items-center" style={{ color: 'var(--ink-mute)' }}>
+          </div>
+        </div>
+        <div className="mt-3 text-xs flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3" style={{ color: 'var(--ink-mute)' }}>
           <span>Summe aktueller Artikelwerte (Neupreis): {items.reduce((s, i) => s + (i.price || 0), 0).toFixed(2)} €</span>
           <button onClick={loadFCFDefaults}
             className="px-3 py-1.5 text-xs uppercase"
@@ -7213,6 +7258,14 @@ function SettingsView({ data, update }) {
           ))}
         </div>
       </div>
+      {photoPreview && (
+        <ImageLightbox
+          title={photoPreview.name || 'Artikel-Foto'}
+          subtitle={photoPreview.articleNumber ? `[${photoPreview.articleNumber}]` : 'Artikelkatalog'}
+          url={photoPreview.photo}
+          onClose={() => setPhotoPreview(null)}
+        />
+      )}
     </div>
   );
 }

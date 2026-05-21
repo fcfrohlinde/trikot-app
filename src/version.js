@@ -1,8 +1,18 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.22';
+export const APP_VERSION = '1.14.23';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.23',
+    date: '2026-05-21',
+    changes: [
+      'Artikel-Fotos im Artikelkatalog nutzen die gleiche Bedienlogik wie die Bedarfsmeldung',
+      'Fotos koennen in Einstellungen und Material per Klick vergroessert und mit Zurueck geschlossen werden',
+      'Materialliste und Lagerbestand zeigen Artikel-Fotos direkt am Artikel',
+      'Artikelkatalog und Fotodarstellung wurden fuer PC, Tablet und Smartphone responsiver aufgebaut',
+    ],
+  },
   {
     version: '1.14.22',
     date: '2026-05-20',
