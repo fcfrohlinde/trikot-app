@@ -25,6 +25,8 @@ getPersonStandardSets = function(settings) {
   inventoryNumberForTarget,
   materialSourceNeedsReprint,
   returnedStockMatchesTarget,
+  buildRestbedarfOrderCandidates,
+  decideMaterialNeed,
 });
 `, {});
 
@@ -140,5 +142,130 @@ const staleSource = helpers.chooseMaterialSourceForNeed(
 
 assert.equal(staleSource?.id, 'inv_stale_returned_29');
 assert.equal(helpers.returnedStockMatchesTarget({ ...data, inventory: [staleReturnedNumberedStock] }, staleSource, jonah, 'heim-trikot-new', 'M'), true);
+
+const restbedarfRows = Array.from({ length: 10 }, (_, idx) => ({
+  id: `missing_${idx}`,
+  target: {
+    id: idx < 5 ? 'coach_xl' : 'coach_l',
+    firstName: idx < 5 ? 'Carsten' : 'Sebastian',
+    lastName: idx < 5 ? 'Cwik' : 'Rothner',
+    team: 'ERSTE',
+    number: idx < 5 ? 'CC' : 'SR',
+    _kind: 'coach',
+  },
+  item: {
+    id: `missing_item_${idx % 5}`,
+    name: `Artikel ${idx % 5}`,
+  },
+  size: idx < 5 ? 'XL' : 'L',
+}));
+
+const restbedarfCandidates = helpers.buildRestbedarfOrderCandidates(
+  { players: [], coaches: [], inventory: [], items: [], orders: [], settings: {} },
+  restbedarfRows
+);
+
+assert.equal(restbedarfCandidates.length, 10, 'Alle sichtbaren Restbedarfszeilen muessen in die Bestellung uebergehen');
+
+const matrixBase = {
+  players: [
+    { id: 'active', firstName: 'Aktiv', lastName: 'Spieler', number: 7, team: 'ERSTE', size: 'M', _kind: 'player' },
+    { id: 'entry', firstName: 'Neu', lastName: 'Spieler', number: 9, team: 'ERSTE', size: 'M', seasonEntry: true, _kind: 'player' },
+    { id: 'leave', firstName: 'Alt', lastName: 'Spieler', number: 9, team: 'ERSTE', size: 'M', seasonExit: true, _kind: 'player' },
+    { id: 'no_number', firstName: 'Ohne', lastName: 'Nummer', team: 'ERSTE', size: 'M', _kind: 'player' },
+  ],
+  coaches: [
+    { id: 'coach', firstName: 'Co', lastName: 'Ach', number: 'CA', team: 'ERSTE', size: 'L', _kind: 'coach' },
+  ],
+  items: [{ id: 'shirt', articleNumber: '1000-01', name: 'Shirt' }],
+  inventory: [],
+  orders: [],
+  settings: {},
+};
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    inventory: [{ id: 'issued_active', status: 'ausgegeben', itemType: 'shirt', size: 'M', assignedTo: 'active', team: 'ERSTE' }],
+  }, matrixBase.players[0], 'shirt', 'M').action,
+  'covered_issued',
+  'Aktive Person mit ausgegebenem Artikel darf keine Bestellung erzeugen'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    inventory: [{ id: 'stock_active', status: 'lager', itemType: 'shirt', size: 'M', team: 'ERSTE' }],
+  }, matrixBase.players[0], 'shirt', 'M').action,
+  'reserve_or_issue',
+  'Passender Lagerbestand wird vor Bestellung vorgeschlagen'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    orders: [{ id: 'ord_active', status: 'angelegt', lines: [{ id: 'l1', itemType: 'shirt', size: 'M', qty: 1, playerId: 'active' }] }],
+  }, matrixBase.players[0], 'shirt', 'M').action,
+  'covered_ordered',
+  'Offene Bestellung deckt den Bedarf'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed(matrixBase, matrixBase.players[1], 'shirt', 'M').action,
+  'order',
+  'Eintritt ohne Lager und ohne Bestellung erzeugt Restbedarf'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    inventory: [{ id: 'issued_leave', status: 'ausgegeben', itemType: 'shirt', size: 'M', assignedTo: 'leave', team: 'ERSTE' }],
+  }, matrixBase.players[2], 'shirt', 'M').action,
+  'not_needed_leaving',
+  'Austritt erzeugt keinen neuen Bestellbedarf'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    inventory: [{ id: 'transfer_from_leave', status: 'ausgegeben', itemType: 'shirt', size: 'M', assignedTo: 'leave', team: 'ERSTE' }],
+  }, matrixBase.players[1], 'shirt', 'M').action,
+  'redistribute',
+  'Eintritt uebernimmt gleichen Artikel gleicher Groesse und Nummer vom Austritt'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    inventory: [{ id: 'reprint_from_leave', status: 'ausgegeben', itemType: 'shirt', size: 'M', assignedTo: 'leave', team: 'ERSTE', assignedNumber: 9 }],
+    players: matrixBase.players.map(p => p.id === 'entry' ? { ...p, number: 10 } : p),
+  }, { ...matrixBase.players[1], number: 10 }, 'shirt', 'M').action,
+  'redistribute_reprint',
+  'Abweichende Nummer gleicher Groesse wird als Umflockung/Umverteilung erkannt'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    inventory: [{ id: 'coach_stock', status: 'lager', itemType: 'shirt', size: 'L', team: 'ERSTE' }],
+  }, matrixBase.coaches[0], 'shirt', 'L').action,
+  'reserve_or_issue',
+  'Trainer werden mit Initialen statt Spielernummer verarbeitet'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed(matrixBase, matrixBase.players[3], 'shirt', 'M').reason,
+  'missing_player_number',
+  'Personalisierter Spielerartikel ohne Nummer ist ungueltig'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
+    inventory: [{ id: 'reserved_other', status: 'lager', itemType: 'shirt', size: 'M', team: 'ERSTE', reservedFor: 'other_person' }],
+  }, matrixBase.players[0], 'shirt', 'M').action,
+  'order',
+  'Fuer andere reservierter Bestand wird nicht erneut verplant'
+);
 
 console.log('season material matching ok');

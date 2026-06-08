@@ -584,6 +584,95 @@ function issuedQtyForPersonItem(data, person, itemId, size) {
 }
 
 // Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
+function buildRestbedarfOrderCandidates(data, rows, options = {}) {
+  const unique = [];
+  const seenRows = new Set();
+  const usedSources = new Set();
+  (rows || []).forEach((row, idx) => {
+    if (!row?.target || !row?.item) return;
+    const key = row.id || `${row.target.id || 'person'}_${row.item.id || 'item'}_${row.size || ''}_${idx}`;
+    if (seenRows.has(key)) return;
+    seenRows.add(key);
+
+    // Die sichtbare Restbedarfsliste hat offene Bestellungen und bereits ausgegebene Mengen
+    // beim Aufbau schon abgezogen. Hier wird nur noch verhindert, dass inzwischen doch
+    // verfuegbarer Bestand bestellt wird.
+    const source = chooseMaterialSourceForNeed(data, row.item.id, row.target, row.size, usedSources, {
+      allowCrossTeam: !!options.allowCrossTeam,
+    });
+    if (source) {
+      usedSources.add(source.id);
+      return;
+    }
+    unique.push(row);
+  });
+  return unique;
+}
+
+function validateMaterialNeedTarget(data, person, item) {
+  if (!person) return { ok: false, action: 'invalid', reason: 'person_missing' };
+  if (!item) return { ok: false, action: 'invalid', reason: 'item_missing' };
+  if (!shouldReceiveSeasonEquipment(person)) {
+    return { ok: false, action: 'not_needed_leaving', reason: 'person_leaves' };
+  }
+  if (!personNumberValue(person) && !itemReprintExcluded(data, item.id)) {
+    return {
+      ok: false,
+      action: 'invalid',
+      reason: person._kind === 'coach' ? 'missing_trainer_initials' : 'missing_player_number',
+    };
+  }
+  return { ok: true };
+}
+
+function decideMaterialNeed(data, person, itemId, size, options = {}) {
+  const item = findItem(data, itemId);
+  const wantedSize = size || getPersonItemSize(person, itemId);
+  const issuedQty = person && item ? issuedQtyForPersonItem(data, person, item.id, wantedSize) : 0;
+  const orderedQty = person && item ? openOrderedQtyForPersonItem(data, person, item.id, wantedSize) : 0;
+  const base = {
+    item,
+    person,
+    size: wantedSize,
+    issuedQty,
+    orderedQty,
+    source: null,
+    needsReprint: false,
+  };
+
+  const validation = validateMaterialNeedTarget(data, person, item);
+  if (!validation.ok) return { ...base, ...validation };
+  if (issuedQty > 0) return { ...base, ok: true, action: 'covered_issued', reason: 'already_issued' };
+  if (orderedQty > 0) return { ...base, ok: true, action: 'covered_ordered', reason: 'already_ordered' };
+
+  const usedStock = options.usedStock || new Set();
+  const source = chooseMaterialSourceForNeed(data, item.id, person, wantedSize, usedStock, {
+    allowCrossTeam: !!options.allowCrossTeam,
+  });
+  if (!source) return { ...base, ok: true, action: 'order', reason: 'no_stock_or_order' };
+
+  const needsReprint = materialSourceNeedsReprint(data, source, person, {
+    itemId: item.id,
+    size: wantedSize,
+    allowCrossTeam: !!options.allowCrossTeam,
+  });
+  const redistribution = materialSourceIsRedistribution(data, source, person, item.id, wantedSize, {
+    allowCrossTeam: !!options.allowCrossTeam,
+  });
+  const action = redistribution
+    ? (needsReprint ? 'redistribute_reprint' : 'redistribute')
+    : (needsReprint ? 'reprint' : 'reserve_or_issue');
+
+  return {
+    ...base,
+    ok: true,
+    action,
+    reason: action,
+    source,
+    needsReprint,
+  };
+}
+
 function compressRanges(numbers) {
   if (!numbers || numbers.length === 0) return '';
   const sorted = [...numbers].sort((a, b) => a - b);
@@ -3727,22 +3816,7 @@ function SeasonMaterialWorkArea({ data, update }) {
   }
 
   function createMissingOrder(list) {
-    const unique = [];
-    const seen = new Set();
-    const usedSources = new Set();
-    list.forEach(row => {
-      const key = `${row.target.id}_${row.item.id}_${row.size}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      if (issuedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
-      if (openOrderedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
-      const source = chooseMaterialSourceForNeed(data, row.item.id, row.target, row.size, usedSources, { allowCrossTeam: allowCrossTeamRedistribution });
-      if (source) {
-        usedSources.add(source.id);
-        return;
-      }
-      unique.push(row);
-    });
+    const unique = buildRestbedarfOrderCandidates(data, list, { allowCrossTeam: allowCrossTeamRedistribution });
     if (unique.length === 0) {
       alert('Keine bestellbaren Restpositionen vorhanden. Offene Bestellungen und vorhandene Ausstattung wurden bereits berücksichtigt.');
       return;

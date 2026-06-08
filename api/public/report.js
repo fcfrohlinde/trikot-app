@@ -1,4 +1,5 @@
 import { kv } from '../_lib/auth.js';
+import { validateBusinessRules } from '../_lib/businessRules.js';
 import { clientIp, methodNotAllowed, setApiSecurityHeaders } from '../_lib/http.js';
 
 const REASONS = ['verloren', 'verschlissen', 'flock_kaputt', 'beschaedigt'];
@@ -111,6 +112,15 @@ export default async function handler(req, res) {
         return i;
       });
       if (materialMarked > 0) {
+        const inventoryRules = validateBusinessRules({
+          key: 'inventory',
+          currentValue: inventory,
+          nextValue: updatedInventory,
+          allData: { teams, items, players, coaches, inventory },
+        });
+        if (!inventoryRules.ok) {
+          return res.status(inventoryRules.status).json({ error: inventoryRules.error, code: inventoryRules.code });
+        }
         await kv.set('data:inventory', updatedInventory);
       }
     }
@@ -154,8 +164,17 @@ export default async function handler(req, res) {
     };
 
     const all = (await kv.get('data:reports')) || [];
-    all.push(report);
-    await kv.set('data:reports', all);
+    const nextReports = [...all, report];
+    const reportRules = validateBusinessRules({
+      key: 'reports',
+      currentValue: all,
+      nextValue: nextReports,
+      allData: { teams, items, players, coaches, reports: all },
+    });
+    if (!reportRules.ok) {
+      return res.status(reportRules.status).json({ error: reportRules.error, code: reportRules.code });
+    }
+    await kv.set('data:reports', nextReports);
 
     return res.json({ ok: true, id: report.id, identified: !!identifiedPersonId, materialMarked });
   }

@@ -1,4 +1,5 @@
 import { kv, requireAuth } from '../_lib/auth.js';
+import { validateBusinessRules } from '../_lib/businessRules.js';
 import { logApiError, methodNotAllowed, requestId, serverError, setApiSecurityHeaders } from '../_lib/http.js';
 import { authorizeDataWrite, DATA_KEYS, filterDataForUser, mergeScopedWriteValue } from '../_lib/security.js';
 
@@ -67,6 +68,20 @@ export default async function handler(req, res) {
       });
       if (!authorization.ok) {
         return res.status(authorization.status).json({ error: authorization.error });
+      }
+
+      const businessRules = validateBusinessRules({
+        key,
+        currentValue: currentForKey,
+        nextValue,
+        allData,
+      });
+      if (!businessRules.ok) {
+        return res.status(businessRules.status).json({
+          error: businessRules.error,
+          code: businessRules.code,
+          path: businessRules.path,
+        });
       }
 
       await kv.set(`data:${key}`, nextValue);

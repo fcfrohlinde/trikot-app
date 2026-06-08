@@ -74,6 +74,7 @@ export function useData() {
 
   async function update(key, value, options = {}) {
     const nextValue = typeof value === 'function' ? value(data[key]) : value;
+    const previousSnapshot = data;
     setData(prev => {
       const optimisticValue = typeof value === 'function' ? value(prev[key]) : value;
       if (options.mode === 'mergeById' && Array.isArray(prev[key]) && Array.isArray(optimisticValue)) {
@@ -93,6 +94,7 @@ export function useData() {
       await readJsonResponse(r, 'Speichern fehlgeschlagen');
       setSaveError(null);
     } catch (e) {
+      setData(previousSnapshot);
       setSaveError(e.message);
       console.error(e);
     }
