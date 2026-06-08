@@ -167,6 +167,31 @@ const restbedarfCandidates = helpers.buildRestbedarfOrderCandidates(
 
 assert.equal(restbedarfCandidates.length, 10, 'Alle sichtbaren Restbedarfszeilen muessen in die Bestellung uebergehen');
 
+const restbedarfFiveRows = Array.from({ length: 5 }, (_, idx) => ({
+  id: `rest_${idx}`,
+  target: { id: 'target_kt', firstName: 'Konstantinos', lastName: 'Tsakiridis', team: 'ERSTE', number: 'KT', _kind: 'coach', size: 'L' },
+  item: { id: `rest_item_${idx}`, name: `Rest Artikel ${idx}` },
+  size: 'L',
+}));
+const restbedarfFiveData = {
+  players: [],
+  coaches: [{ id: 'target_kt', firstName: 'Konstantinos', lastName: 'Tsakiridis', team: 'ERSTE', number: 'KT', _kind: 'coach', size: 'L' }],
+  items: restbedarfFiveRows.map(row => row.item),
+  inventory: [{ id: 'already_planned_source', status: 'lager', itemType: 'rest_item_0', size: 'L', team: 'ERSTE' }],
+  orders: [],
+  settings: {},
+};
+assert.equal(
+  helpers.buildRestbedarfOrderCandidates(restbedarfFiveData, restbedarfFiveRows).length,
+  4,
+  'Ohne reservierte Vorschlagsquelle wuerde der Recheck eine sichtbare Restposition herausfiltern'
+);
+assert.equal(
+  helpers.buildRestbedarfOrderCandidates(restbedarfFiveData, restbedarfFiveRows, { reservedSourceIds: ['already_planned_source'] }).length,
+  5,
+  'Bereits anderweitig verplante Quellen duerfen sichtbaren Restbedarf nicht aus der Bestellung entfernen'
+);
+
 const matrixBase = {
   players: [
     { id: 'active', firstName: 'Aktiv', lastName: 'Spieler', number: 7, team: 'ERSTE', size: 'M', _kind: 'player' },

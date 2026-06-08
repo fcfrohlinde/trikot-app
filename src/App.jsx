@@ -621,7 +621,7 @@ function issuedQtyForPersonItem(data, person, itemId, size) {
 function buildRestbedarfOrderCandidates(data, rows, options = {}) {
   const unique = [];
   const seenRows = new Set();
-  const usedSources = new Set();
+  const usedSources = new Set(options.reservedSourceIds || []);
   (rows || []).forEach((row, idx) => {
     if (!row?.target || !row?.item) return;
     const key = row.id || `${row.target.id || 'person'}_${row.item.id || 'item'}_${row.size || ''}_${idx}`;
@@ -630,7 +630,7 @@ function buildRestbedarfOrderCandidates(data, rows, options = {}) {
 
     // Die sichtbare Restbedarfsliste hat offene Bestellungen und bereits ausgegebene Mengen
     // beim Aufbau schon abgezogen. Hier wird nur noch verhindert, dass inzwischen doch
-    // verfuegbarer Bestand bestellt wird.
+    // verfuegbarer, noch nicht anderweitig verplanter Bestand bestellt wird.
     const source = chooseMaterialSourceForNeed(data, row.item.id, row.target, row.size, usedSources, {
       allowCrossTeam: !!options.allowCrossTeam,
     });
@@ -3821,6 +3821,13 @@ function SeasonMaterialWorkArea({ data, update }) {
   const issues = filteredRows.filter(r => r.category === 'ausgabe');
   const reprints = filteredRows.filter(r => r.category === 'umbeflockung');
   const missingOrders = filteredRows.filter(r => r.category === 'bestellung');
+  const reservedProposalSourceIds = useMemo(() => rows
+    .filter(row => row.category !== 'bestellung' && row.source?.id)
+    .map(row => row.source.id), [rows]);
+  const missingOrderCandidates = useMemo(() => buildRestbedarfOrderCandidates(data, missingOrders, {
+    allowCrossTeam: allowCrossTeamRedistribution,
+    reservedSourceIds: reservedProposalSourceIds,
+  }), [data, missingOrders, allowCrossTeamRedistribution, reservedProposalSourceIds]);
 
   function reserveSource(row) {
     if (!row.source || !inventoryIsInStock(data, row.source)) return;
@@ -3850,7 +3857,10 @@ function SeasonMaterialWorkArea({ data, update }) {
   }
 
   function createMissingOrder(list) {
-    const unique = buildRestbedarfOrderCandidates(data, list, { allowCrossTeam: allowCrossTeamRedistribution });
+    const unique = buildRestbedarfOrderCandidates(data, list, {
+      allowCrossTeam: allowCrossTeamRedistribution,
+      reservedSourceIds: reservedProposalSourceIds,
+    });
     if (unique.length === 0) {
       alert('Keine bestellbaren Restpositionen vorhanden. Offene Bestellungen und vorhandene Ausstattung wurden bereits berücksichtigt.');
       return;
@@ -4073,8 +4083,8 @@ function SeasonMaterialWorkArea({ data, update }) {
             <button onClick={() => printRowsPdf(missingOrders, 'Restbedarf Bestellung', 'restbedarf_bestellung.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
               Restbedarf PDF
             </button>
-            <button onClick={() => createMissingOrder(missingOrders)} disabled={missingOrders.length === 0} className="px-3 py-1.5 text-xs text-white disabled:opacity-50" style={{ background: 'var(--vereinsblau)' }}>
-              Restbedarf bestellen ({missingOrders.length})
+            <button onClick={() => createMissingOrder(missingOrders)} disabled={missingOrderCandidates.length === 0} className="px-3 py-1.5 text-xs text-white disabled:opacity-50" style={{ background: 'var(--vereinsblau)' }}>
+              Restbedarf bestellen ({missingOrderCandidates.length})
             </button>
           </div>
           <div className="p-4 border-b border-stone-100">

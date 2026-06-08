@@ -1,8 +1,15 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.2';
+export const APP_VERSION = '1.2.3';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.3',
+    date: '2026-06-08',
+    changes: [
+      'Restbedarf-Bestellungen nutzen beim finalen Recheck bereits in Umverteilung, Lagerausgabe oder Umbeflockung verplante Quellen und uebergeben dadurch dieselbe Positionszahl wie im Button angezeigt',
+    ],
+  },
   {
     version: '1.2.2',
     date: '2026-06-08',
