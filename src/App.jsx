@@ -10,6 +10,7 @@ import { ErrorBoundary } from './ErrorBoundary.jsx';
 
 const DEFAULT_TEAMS = ['1. Mannschaft', '2. Mannschaft', '3. Mannschaft'];
 const DEFAULT_ITEMS = [];
+const SIZE_OPTIONS = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL'];
 
 // FCF-Standardausstattung gemäß Pfandordnung (Stand 2025)
 const FCF_DEFAULT_ITEMS = [
@@ -80,6 +81,227 @@ function inventoryMatchesPersonNumber(inv, person) {
   if (!invNumber || !personNumber || invNumber !== personNumber) return false;
   const invKind = inv.personKind || person._kind;
   return invKind === person._kind;
+}
+
+function seasonFlag(value) {
+  return value === true || value === 1 || value === 'true' || value === '1' || value === 'ja' || value === 'yes';
+}
+
+function shouldReceiveSeasonEquipment(person) {
+  return !seasonFlag(person?.seasonExit) || seasonFlag(person?.seasonEntry);
+}
+
+function setSortValue(set, idx = 0) {
+  const raw = set?.setNumber ?? set?.number ?? set?.sortOrder;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : idx + 1;
+}
+
+function sortStandardSets(sets) {
+  return [...(sets || [])].sort((a, b) =>
+    setSortValue(a) - setSortValue(b) || String(a.name || '').localeCompare(String(b.name || ''), 'de', { numeric: true, sensitivity: 'base' })
+  );
+}
+
+function setSupportsPerson(set, personOrKind) {
+  const kind = typeof personOrKind === 'string' ? personOrKind : personOrKind?._kind;
+  const isGoalkeeper = typeof personOrKind === 'string' ? false : !!personOrKind?.isGoalkeeper;
+  if (set?.target === 'both') return true;
+  if (set?.target === 'coach') return kind === 'coach';
+  if (set?.target === 'goalkeeper') return kind === 'player' && isGoalkeeper;
+  if (set?.target === 'player') return kind === 'player' && !isGoalkeeper;
+  return false;
+}
+
+function getPersonStandardSets(settings, personOrKind) {
+  const sets = sortStandardSets(migrateStandardSets(settings));
+  const assignedId = typeof personOrKind === 'string' ? null : personOrKind?.standardSetId;
+  const assigned = assignedId ? sets.find(set => set.id === assignedId) : null;
+  if (assigned) return [assigned];
+  const matching = sets.filter(set => setSupportsPerson(set, personOrKind));
+  const defaults = matching.filter(set => !!set.isDefault);
+  return defaults.length > 0 ? defaults : matching;
+}
+
+// Artikelgenaue Groessen bleiben optional; ohne Einzelgroessen gilt die Personengroesse.
+function getPersonItemSize(person, itemId) {
+  const itemSizes = person?.itemSizes || {};
+  const itemSize = itemId ? itemSizes[itemId] : null;
+  return (person?.individualSizes && itemSize) ? itemSize : (person?.size || 'L');
+}
+
+function shouldPlanStandardSetInMaterial(data, person) {
+  if (!person || !shouldReceiveSeasonEquipment(person)) return false;
+  const sets = getPersonStandardSets(data.settings, person);
+  if (sets.length === 0) return false;
+  if (seasonFlag(person.seasonEntry)) return true;
+  if (person.standardSetId) return true;
+  return !personHasIssuedEquipment(data, person.id);
+}
+
+function inventoryEffectiveNumber(data, inv) {
+  if (inv?.assignedNumber !== undefined && inv.assignedNumber !== null && inv.assignedNumber !== '') {
+    return String(inv.assignedNumber).trim().toUpperCase();
+  }
+  const owner = findPerson(data, inv?.assignedTo);
+  return personNumberValue(owner).toUpperCase();
+}
+
+function inventoryMatchesPersonNumberInData(data, inv, person) {
+  const invNumber = inventoryEffectiveNumber(data, inv);
+  const personNumber = personNumberValue(person).toUpperCase();
+  if (!invNumber || !personNumber || invNumber !== personNumber) return false;
+  const owner = findPerson(data, inv?.assignedTo);
+  const invKind = inv?.personKind || owner?._kind || person?._kind;
+  return invKind === person?._kind;
+}
+
+function normalizeFlockName(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function inventoryMatchesPersonName(inv, person) {
+  const invName = normalizeFlockName(inv?.assignedName);
+  if (!invName) return true;
+  return invName === normalizeFlockName(person?.lastName);
+}
+
+function inventoryMatchesPersonIdentityInData(data, inv, person) {
+  return inventoryMatchesPersonNumberInData(data, inv, person) && inventoryMatchesPersonName(inv, person);
+}
+
+function materialSourceNeedsReprint(data, inv, person) {
+  if (!inv) return false;
+  if (inv.status === 'ausgegeben') {
+    return !inventoryMatchesPersonNumberInData(data, inv, person);
+  }
+  const hasNumber = inv.assignedNumber !== undefined && inv.assignedNumber !== null && String(inv.assignedNumber).trim() !== '';
+  const hasName = inv.assignedName !== undefined && inv.assignedName !== null && String(inv.assignedName).trim() !== '';
+  if (!hasNumber && !hasName) return false;
+  if (hasNumber && inventoryMatchesPersonNumberInData(data, inv, person)) return false;
+  return !inventoryMatchesPersonIdentityInData(data, inv, person);
+}
+
+function itemReprintExcluded(data, itemId) {
+  return !!(data.items || []).find(item => item.id === itemId)?.reprintExcluded;
+}
+
+function sourceReprintExcluded(data, inv, person) {
+  return !!inv?.reprintExcluded || (itemReprintExcluded(data, inv?.itemType) && materialSourceNeedsReprint(data, inv, person));
+}
+
+function stockReservedForOther(inv, person) {
+  return inv?.reservedFor && inv.reservedFor !== person?.id;
+}
+
+function stockUsableForPerson(inv, person) {
+  if (!inv || inv.status !== 'lager') return false;
+  if (stockReservedForOther(inv, person)) return false;
+  if (inv.team && person?.team && inv.team !== person.team && person?._kind !== 'coach') return false;
+  return true;
+}
+
+function findStockCandidates(data, itemId, person, size, usedStock) {
+  const wantedSize = size || person?.size || 'L';
+  return (data.inventory || []).filter(inv =>
+    stockUsableForPerson(inv, person) &&
+    inv.itemType === itemId &&
+    (inv.size || wantedSize) === wantedSize &&
+    !usedStock.has(inv.id)
+  );
+}
+
+function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock) {
+  const wantedSize = size || person?.size || 'L';
+  const stock = findStockCandidates(data, itemId, person, wantedSize, usedStock);
+  const exactTransfer = findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, exactNumberOnly: true });
+  if (exactTransfer) return exactTransfer;
+
+  const reservedExact = stock.find(inv => inv.reservedFor === person?.id && inventoryMatchesPersonIdentityInData(data, inv, person));
+  if (reservedExact) return reservedExact;
+
+  const exactNumberStock = stock.find(inv => inventoryMatchesPersonNumberInData(data, inv, person) && !sourceReprintExcluded(data, inv, person));
+  if (exactNumberStock) return exactNumberStock;
+
+  const exactStock = stock.find(inv => inventoryMatchesPersonIdentityInData(data, inv, person));
+  if (exactStock) return exactStock;
+
+  const reservedStock = stock.find(inv => inv.reservedFor === person?.id && !sourceReprintExcluded(data, inv, person));
+  if (reservedStock) return reservedStock;
+
+  const reprintStock = stock.find(inv => !sourceReprintExcluded(data, inv, person) && !inventoryMatchesPersonIdentityInData(data, inv, person));
+  if (reprintStock) return reprintStock;
+
+  return findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, excludeReprintBlocked: true });
+}
+
+function findSeasonTransferCandidate(data, itemId, person, usedStock, options = {}) {
+  const wantedSize = options.size || person?.size || 'L';
+  const exactNumberOnly = !!options.exactNumberOnly;
+  const excludeReprintBlocked = !!options.excludeReprintBlocked;
+  const candidates = (data.inventory || []).filter(inv => {
+    if (usedStock.has(inv.id)) return false;
+    if (inv.status !== 'ausgegeben' || inv.itemType !== itemId) return false;
+    if ((inv.size || wantedSize) !== wantedSize) return false;
+    const owner = findPerson(data, inv.assignedTo);
+    const valid = owner
+      && owner.id !== person.id
+      && owner._kind === person._kind
+      && (owner.team === person.team || person._kind === 'coach')
+      && seasonFlag(owner.seasonExit)
+      && !seasonFlag(owner.seasonEntry);
+    if (!valid) return false;
+    if (exactNumberOnly && !inventoryMatchesPersonNumberInData(data, inv, person)) return false;
+    if (excludeReprintBlocked && sourceReprintExcluded(data, inv, person)) return false;
+    return true;
+  });
+  return candidates.sort((a, b) => {
+    const aExact = inventoryMatchesPersonNumberInData(data, a, person) ? 0 : 1;
+    const bExact = inventoryMatchesPersonNumberInData(data, b, person) ? 0 : 1;
+    return aExact - bExact;
+  })[0] || null;
+}
+
+function personHasIssuedEquipment(data, personId) {
+  return (data.inventory || []).some(inv => inv.status === 'ausgegeben' && inv.assignedTo === personId);
+}
+
+function isUnmarkedActiveWithEquipment(data, person) {
+  return !seasonFlag(person?.seasonEntry) && !seasonFlag(person?.seasonExit) && personHasIssuedEquipment(data, person?.id);
+}
+
+function orderCoversNeed(order) {
+  return !['geliefert', 'storniert', 'cancelled', 'canceled'].includes(String(order?.status || '').toLowerCase());
+}
+
+function openOrderedQtyForPersonItem(data, person, itemId, size) {
+  return (data.orders || []).reduce((sum, order) => {
+    if (!orderCoversNeed(order)) return sum;
+    return sum + (order.lines || []).reduce((lineSum, line) => {
+      if (line.playerId !== person?.id) return lineSum;
+      if (line.itemType !== itemId) return lineSum;
+      if (size && line.size && line.size !== size) return lineSum;
+      return lineSum + (Number(line.qty) || 1);
+    }, 0);
+  }, 0);
+}
+
+function currentDraftQtyForPersonItem(lines, person, itemId, size) {
+  return (lines || []).reduce((sum, line) => {
+    if (line.playerId !== person?.id) return sum;
+    if (line.itemType !== itemId) return sum;
+    if (size && line.size && line.size !== size) return sum;
+    return sum + (Number(line.qty) || 1);
+  }, 0);
+}
+
+function issuedQtyForPersonItem(data, person, itemId, size) {
+  return (data.inventory || []).filter(inv =>
+    inv.itemType === itemId &&
+    inv.status === 'ausgegeben' &&
+    inv.assignedTo === person?.id &&
+    (!size || !inv.size || inv.size === size)
+  ).length;
 }
 
 // Komprimiert eine Liste von Zahlen in lesbare Bereiche: [1,2,3,5,7,8,9] → "1–3, 5, 7–9"
@@ -736,6 +958,33 @@ function PersonsView({ data, update, kind }) {
     alert(`Bestellung "${title}" mit ${lines.length} Position(en) angelegt.`);
   }
 
+  function exportHandoverProtocol(person) {
+    const signature = prompt('Digitale Unterschrift / Name der empfangenden Person:');
+    if (!signature) return;
+    const items = (data.inventory || []).filter(i => i.assignedTo === person.id && i.status === 'ausgegeben');
+    const deposit = (data.deposits || []).find(d => d.playerId === person.id && !d.refunded);
+    const mode = getDepositMode(data.settings, person.team);
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    doc.setFontSize(16);
+    doc.text('Uebergabeprotokoll Vereinsmaterial', 14, 18);
+    doc.setFontSize(10);
+    doc.text(`${person.firstName} ${person.lastName} · ${person.team} · ${person._kind === 'coach' ? 'Initialen' : 'Nr.'} ${personNumberValue(person) || '-'}`, 14, 27);
+    doc.text(`Pfandregel: ${mode === 'ohne_pfand' ? 'ohne Pfand' : mode === 'saison' ? 'Saison-Abschreibung' : 'Pauschal'} · Pfand: ${deposit ? `${deposit.amount.toFixed(2)} EUR` : 'nicht hinterlegt'}`, 14, 34);
+    doc.autoTable({
+      startY: 42,
+      head: [['Artikel', 'Groesse', 'Nr./Init.', 'Inventar-ID']],
+      body: items.map(i => [i.itemName, i.size || '', i.assignedNumber || personNumberValue(person) || '', i.id]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [9, 36, 71] },
+    });
+    const y = Math.max(doc.lastAutoTable?.finalY || 55, 70) + 12;
+    doc.text('Die oben aufgefuehrten Teile wurden als Leihgabe erhalten. Die Pfand- und Kleiderordnung wurde anerkannt.', 14, y, { maxWidth: 180 });
+    doc.line(14, y + 24, 95, y + 24);
+    doc.text(`Digitale Unterschrift: ${signature}`, 14, y + 30);
+    doc.text(`Datum: ${new Date().toLocaleDateString('de-DE')}`, 130, y + 30);
+    doc.save(`uebergabe_${person.lastName || person.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  }
+
   function sortPersonList(list) {
     return [...list].sort((a, b) => {
       if (sort.key === 'number') return compareValues(a.number, b.number, sort.dir);
@@ -794,7 +1043,7 @@ function PersonsView({ data, update, kind }) {
         ))}
       </div>
 
-      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
+      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} standardSets={migrateStandardSets(data.settings)} items={data.items || []} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
       {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} kind={kind} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
       {equipmentPerson && (
         <BasicEquipmentDialog
@@ -855,9 +1104,25 @@ function PersonsView({ data, update, kind }) {
                       <td className="p-3 font-medium">
                         {p.firstName} {p.lastName}
                         <div className="text-xs text-stone-500 md:hidden">{p.team}</div>
+                        {isPlayer && p.isGoalkeeper && (
+                          <div className="text-xs mt-1">
+                            <span className="mr-1 px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)' }}>Torwart</span>
+                          </div>
+                        )}
+                        {(p.seasonEntry || p.seasonExit) && (
+                          <div className="text-xs mt-1">
+                            {p.seasonEntry && <span className="mr-1 px-1.5 py-0.5 bg-emerald-50 text-emerald-700">Eintritt Saison</span>}
+                            {p.seasonExit && <span className="mr-1 px-1.5 py-0.5 bg-orange-50 text-orange-700">Ausscheiden Saison</span>}
+                          </div>
+                        )}
                       </td>
                       <td className="p-3 hidden md:table-cell text-stone-600">{p.team}</td>
-                      <td className="p-3 hidden sm:table-cell text-stone-600">{p.size || '–'}</td>
+                      <td className="p-3 hidden sm:table-cell text-stone-600">
+                        {p.size || '–'}
+                        {p.individualSizes && (
+                          <div className="text-[10px]" style={{ color: 'var(--vereinsblau)' }}>Einzelgrößen</div>
+                        )}
+                      </td>
                       <td className="p-3">
                         <span className={`inline-block px-2 py-0.5 text-xs ${itemCount > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-stone-100 text-stone-500'}`}>
                           {itemCount} Teile
@@ -882,6 +1147,9 @@ function PersonsView({ data, update, kind }) {
                             <span className="hidden lg:inline text-xs">Set</span>
                           </button>
                         )}
+                        <button onClick={() => exportHandoverProtocol({ ...p, _kind: kind })} className="text-stone-400 hover:text-stone-900 p-1" title="Übergabeprotokoll PDF">
+                          <FileText size={14} />
+                        </button>
                         <button onClick={() => { setEditing(p); setShowForm(true); }} className="text-stone-400 hover:text-stone-900 p-1">
                           <Edit2 size={14} />
                         </button>
@@ -911,21 +1179,20 @@ function PersonsView({ data, update, kind }) {
 }
 
 function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel }) {
-  const allSets = migrateStandardSets(data.settings).filter(set =>
-    set.target === 'both' ||
-    (person._kind === 'coach' ? set.target === 'coach' : set.target === 'player')
-  );
+  const allSets = getPersonStandardSets(data.settings, person);
   const [setId, setSetId] = useState(allSets[0]?.id || '');
   const [correctionMode, setCorrectionMode] = useState(true);
   const [orderReprints, setOrderReprints] = useState({});
+  const [includeUnmarkedEquipped, setIncludeUnmarkedEquipped] = useState(false);
   const selectedSet = allSets.find(s => s.id === setId);
   const targetNumber = personNumberValue(person);
   const targetName = (person.lastName || '').toUpperCase();
 
-  function issuedCountForItem(itemId) {
+  function issuedCountForItem(itemId, size) {
     return (data.inventory || []).filter(inv =>
       inv.itemType === itemId &&
       inv.status === 'ausgegeben' &&
+      (!size || !inv.size || inv.size === size) &&
       (
         inv.assignedTo === person.id ||
         (inv.assignedTo == null && inv.team === person.team && inventoryMatchesPersonNumber(inv, person))
@@ -935,36 +1202,42 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
 
   function buildSuggestions() {
     if (!selectedSet) return [];
+    if (!shouldReceiveSeasonEquipment(person)) return [];
+    if (!includeUnmarkedEquipped && isUnmarkedActiveWithEquipment(data, person)) return [];
     const usedStock = new Set();
     const suggestions = [];
     (selectedSet.items || []).forEach(entry => {
       const item = (data.items || []).find(i => i.id === entry.itemId);
       if (!item) return;
       const qty = Number(entry.qty) || 1;
-      const alreadyIssued = issuedCountForItem(item.id);
-      const missing = Math.max(0, qty - alreadyIssued);
+      const wantedSize = getPersonItemSize(person, item.id);
+      const alreadyIssued = issuedCountForItem(item.id, wantedSize);
+      const alreadyOrdered = openOrderedQtyForPersonItem(data, person, item.id, wantedSize);
+      const missing = Math.max(0, qty - alreadyIssued - alreadyOrdered);
       for (let idx = 0; idx < missing; idx++) {
-        const stock = (data.inventory || []).filter(inv =>
-          inv.status === 'lager' &&
-          inv.itemType === item.id &&
-          (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
-          !usedStock.has(inv.id)
-        );
-        const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-        const sized = correctionMode ? (exact || null) : (exact || stock[0] || null);
+        const source = chooseMaterialSourceForNeed(data, item.id, person, wantedSize, usedStock);
+        const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
         if (sized) usedStock.add(sized.id);
-        const oldNumber = sized?.assignedNumber ? String(sized.assignedNumber) : '';
-        const needsReprint = !correctionMode && !!sized && (!inventoryMatchesPersonNumber(sized, person));
+        const oldNumber = sized ? inventoryEffectiveNumber(data, sized) : '';
+        const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
+        const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
+        const returnedMatchingStock = sized?.status === 'lager'
+          && (sized.assignedNumber || sized.assignedName)
+          && inventoryMatchesPersonNumberInData(data, sized, person);
+        const action = (fromPerson || returnedMatchingStock)
+          ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
+          : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
         suggestions.push({
           id: `${item.id}_${idx}`,
           item,
-          size: person.size || sized?.size || 'L',
+          size: wantedSize || sized?.size || 'L',
           alreadyIssued,
           stock: sized,
-          action: exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur',
+          action,
           needsReprint,
           oldNumber,
           newNumber: targetNumber,
+          sourcePerson: fromPerson || (returnedMatchingStock ? { firstName: 'Rücklauf', lastName: sized.assignedName || oldNumber || '' } : null),
         });
       }
     });
@@ -993,6 +1266,10 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
           personKind: person._kind,
           team: person.team || s.stock.team || null,
           assignedAt: now,
+          reservedFor: null,
+          reservedAt: null,
+          transferredFrom: s.sourcePerson?.id || null,
+          transferredAt: s.sourcePerson ? now : null,
           needsReprint: s.needsReprint,
           reprintFromNumber: s.needsReprint ? oldNumber : null,
           reprintToNumber: s.needsReprint ? (targetNumber || null) : null,
@@ -1084,7 +1361,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
     const lines = orderableRows.map((s, idx) => ({
       id: `l_${stamp}_${idx}`,
       itemType: s.item.id,
-      size: s.stock?.size || s.size || person.size || 'L',
+      size: s.stock?.size || s.size || getPersonItemSize(person, s.item.id),
       qty: 1,
       playerId: person.id,
       personKind: person._kind,
@@ -1094,6 +1371,8 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
       reprintFromNumber: s.needsReprint ? (s.oldNumber || '') : '',
       reprintToNumber: s.needsReprint ? (s.newNumber || targetNumber || '') : '',
       orderReason: s.stock ? 'umbeflockung' : 'kein_bestand',
+      sourceInventoryId: s.stock?.id || null,
+      sourcePersonId: s.sourcePerson?.id || null,
     }));
     onCreateOrder({
       title: `Grundbestueckung ${person.firstName} ${person.lastName}`.trim(),
@@ -1136,11 +1415,19 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
                 <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Fehlende Teile direkt als ausgegeben einpflegen, auch ohne vorherigen Lagerbestand.</div>
               </div>
             </label>
+            <label className="flex items-start gap-3 p-3 cursor-pointer md:col-span-2" style={{ border: '1px solid var(--rule)', background: includeUnmarkedEquipped ? '#F1ECDF' : 'white' }}>
+              <input type="checkbox" checked={includeUnmarkedEquipped} onChange={e => setIncludeUnmarkedEquipped(e.target.checked)} className="mt-1" />
+              <div>
+                <div className="text-sm font-medium">Bestands-Person ohne Saisonmarkierung einbeziehen</div>
+                <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Standard: Personen mit ausgegebenem Material und ohne Eintritt/Austritt werden aus dem Bestellvorschlag herausgenommen.</div>
+              </div>
+            </label>
           </div>
 
           {correctionMode && (
             <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
               Korrekturmodus: Fehlende Teile werden mit der aktuell hinterlegten Nummer/Initiale {targetNumber || '–'} eingepflegt. Abweichend beflockte Lagerteile werden dabei nicht verwendet.
+              Umbeflockungsvorschläge mit abweichender Nummer erscheinen, wenn der Korrekturmodus deaktiviert ist.
             </div>
           )}
 
@@ -1149,7 +1436,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
               <thead className="bg-stone-50 uppercase tracking-wider">
                 <tr>
                   <th className="text-left p-2">Artikel</th>
-                  <th className="text-left p-2">Größe</th>
+              <th className="text-left p-2">Groesse</th>
                   <th className="text-left p-2">Vorschlag</th>
                   <th className="text-left p-2">Nr./Init. alt</th>
                   <th className="text-left p-2">Nr./Init. neu</th>
@@ -1167,6 +1454,8 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
                     <td className="p-2">
                       {s.action === 'passend' && <span className="text-emerald-700">Passend aus Lager</span>}
                       {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Aus Lager, Umbeflockung nötig</span>}
+                      {s.action === 'umverteilung' && <span className="text-emerald-700">Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}</span>}
+                      {s.action === 'umverteilung_umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}, Umbeflockung nÃ¶tig</span>}
                       {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur-Ausgabe' : 'Kein Lagerbestand'}</span>}
                     </td>
                     <td className="p-2">{s.oldNumber || '–'}</td>
@@ -1224,9 +1513,13 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
 }
 
 function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCreateOrder, onCancel }) {
-  const persons = (kind === 'coach' ? (data.coaches || []) : (data.players || [])).filter(p => p.team === team).map(p => ({ ...p, _kind: kind }));
-  const allSets = migrateStandardSets(data.settings).filter(set =>
-    set.target === 'both' || (kind === 'coach' ? set.target === 'coach' : set.target === 'player')
+  const [includeUnmarkedEquipped, setIncludeUnmarkedEquipped] = useState(false);
+  const persons = (kind === 'coach' ? (data.coaches || []) : (data.players || []))
+    .filter(p => p.team === team && shouldReceiveSeasonEquipment(p))
+    .filter(p => includeUnmarkedEquipped || !isUnmarkedActiveWithEquipment(data, p))
+    .map(p => ({ ...p, _kind: kind }));
+  const allSets = sortStandardSets(migrateStandardSets(data.settings)).filter(set =>
+    set.target === 'both' || set.target === kind || (kind === 'player' && set.target === 'goalkeeper')
   );
   const [setId, setSetId] = useState(allSets[0]?.id || '');
   const [correctionMode, setCorrectionMode] = useState(true);
@@ -1249,31 +1542,40 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
     const usedStock = new Set();
     const out = [];
     persons.forEach(person => {
+      if (!setSupportsPerson(selectedSet, person) && person.standardSetId !== selectedSet.id) return;
       const targetNumber = personNumberValue(person);
       (selectedSet.items || []).forEach(entry => {
         const item = (data.items || []).find(i => i.id === entry.itemId);
         if (!item) return;
-        const missing = Math.max(0, (Number(entry.qty) || 1) - issuedCountForPersonItem(person, item.id));
+        const size = getPersonItemSize(person, item.id);
+        const missing = Math.max(0,
+          (Number(entry.qty) || 1)
+          - issuedCountForPersonItem(person, item.id)
+          - openOrderedQtyForPersonItem(data, person, item.id, size)
+        );
         for (let idx = 0; idx < missing; idx++) {
-          const stock = (data.inventory || []).filter(inv =>
-            inv.status === 'lager' &&
-            inv.itemType === item.id &&
-            (inv.size || person.size || 'L') === (person.size || inv.size || 'L') &&
-            !usedStock.has(inv.id)
-          );
-          const exact = stock.find(inv => inventoryMatchesPersonNumber(inv, person));
-          const sized = correctionMode ? (exact || null) : (exact || stock[0] || null);
+          const source = chooseMaterialSourceForNeed(data, item.id, person, size, usedStock);
+          const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
           if (sized) usedStock.add(sized.id);
+        const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
+        const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
+        const returnedMatchingStock = sized?.status === 'lager'
+          && (sized.assignedNumber || sized.assignedName)
+          && inventoryMatchesPersonNumberInData(data, sized, person);
+        const action = (fromPerson || returnedMatchingStock)
+          ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
+          : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
           out.push({
             id: `${person.id}_${item.id}_${idx}`,
             person,
             item,
             stock: sized,
-            size: person.size || sized?.size || 'L',
-            oldNumber: sized?.assignedNumber ? String(sized.assignedNumber) : '',
+            size: sized?.size || size,
+            oldNumber: sized ? inventoryEffectiveNumber(data, sized) : '',
             newNumber: targetNumber,
-            needsReprint: !correctionMode && !!sized && !inventoryMatchesPersonNumber(sized, person),
-            action: exact ? 'passend' : sized ? 'umbeflocken' : 'korrektur',
+            needsReprint,
+            action,
+            sourcePerson: fromPerson || (returnedMatchingStock ? { firstName: 'Rücklauf', lastName: sized.assignedName || oldNumber || '' } : null),
           });
         }
       });
@@ -1303,6 +1605,10 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           personKind: person._kind,
           team: person.team || s.stock.team || null,
           assignedAt: now,
+          reservedFor: null,
+          reservedAt: null,
+          transferredFrom: s.sourcePerson?.id || null,
+          transferredAt: s.sourcePerson ? now : null,
           needsReprint: s.needsReprint,
           reprintFromNumber: s.needsReprint ? (s.oldNumber || null) : null,
           reprintToNumber: s.needsReprint ? (targetNumber || null) : null,
@@ -1395,7 +1701,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
       return {
         id: `l_${stamp}_${idx}`,
         itemType: s.item.id,
-        size: s.stock?.size || s.size || s.person.size || 'L',
+        size: s.stock?.size || s.size || getPersonItemSize(s.person, s.item.id),
         qty: 1,
         playerId: s.person.id,
         personKind: s.person._kind,
@@ -1405,6 +1711,8 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
         reprintFromNumber: s.needsReprint ? (s.oldNumber || '') : '',
         reprintToNumber: s.needsReprint ? (s.newNumber || targetNumber || '') : '',
         orderReason: s.stock ? 'umbeflockung' : 'kein_bestand',
+        sourceInventoryId: s.stock?.id || null,
+        sourcePersonId: s.sourcePerson?.id || null,
       };
     });
     onCreateOrder({
@@ -1442,10 +1750,18 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
             <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Fehlende Teile ohne Lagerbestand einpflegen.</div>
           </div>
         </label>
+        <label className="flex items-start gap-3 p-3 cursor-pointer md:col-span-3" style={{ border: '1px solid var(--rule)', background: includeUnmarkedEquipped ? '#F1ECDF' : 'white' }}>
+          <input type="checkbox" checked={includeUnmarkedEquipped} onChange={e => setIncludeUnmarkedEquipped(e.target.checked)} className="mt-1" />
+          <div>
+            <div className="text-sm font-medium">Bestands-Spieler/Trainer ohne Saisonmarkierung einbeziehen</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Standard: Personen mit bereits ausgegebenem Material und ohne Eintritt/Austritt werden aus dem Bestellvorschlag ausgeschlossen.</div>
+          </div>
+        </label>
       </div>
       {correctionMode && (
         <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
           Korrekturmodus: fehlende Teile werden je Person mit der im Kader hinterlegten Nummer/Initiale eingepflegt. Abweichend beflockte Lagerteile werden nicht verwendet und erzeugen keine Umbeflockung.
+          Umbeflockungsvorschläge mit abweichender Nummer erscheinen, wenn der Korrekturmodus deaktiviert ist.
         </div>
       )}
       <div className="border border-stone-200 overflow-x-auto mb-3 max-h-80">
@@ -1470,6 +1786,8 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
                 <td className="p-2">
                   {s.action === 'passend' && <span className="text-emerald-700">Passend</span>}
                   {s.action === 'umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umbeflockung</span>}
+                  {s.action === 'umverteilung' && <span className="text-emerald-700">Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}</span>}
+                  {s.action === 'umverteilung_umbeflocken' && <span style={{ color: 'var(--warn)' }}>Umverteilung von {s.sourcePerson?.firstName} {s.sourcePerson?.lastName}, Umbeflockung</span>}
                   {s.action === 'korrektur' && <span style={{ color: correctionMode ? 'var(--vereinsblau)' : 'var(--danger)' }}>{correctionMode ? 'Korrektur' : 'Kein Lager'}</span>}
                 </td>
                 <td className="p-2">{s.oldNumber || '–'}</td>
@@ -1513,20 +1831,33 @@ function CoachesView({ data, update }) {
   return <PersonsView data={data} update={update} kind="coach" />;
 }
 
-function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) {
+function PlayerForm({ player, players, teams, labels, kind, standardSets, items, onSave, onCancel }) {
   const isCoach = kind === 'coach';
   const numberLabel = isCoach ? 'Initialen (max. 3 Zeichen)' : 'Rückennummer';
   const numberPlaceholder = isCoach ? 'z.B. DW' : '';
   const L = labels || { addNew: 'Spieler anlegen', editNew: 'Spieler bearbeiten', singular: 'Spieler' };
-  const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '' });
+  const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', individualSizes: false, itemSizes: {}, notes: '', isGoalkeeper: false, standardSetId: '', seasonEntry: false, seasonExit: false });
+  const formSetOptions = sortStandardSets(standardSets || []).filter(set =>
+    setSupportsPerson(set, { _kind: kind, isGoalkeeper: !!form.isGoalkeeper }) || form.standardSetId === set.id
+  );
+  const activeSizeSet = form.standardSetId
+    ? formSetOptions.find(set => set.id === form.standardSetId)
+    : formSetOptions[0];
+  const activeSizeRows = (activeSizeSet?.items || [])
+    .map(entry => ({ entry, item: (items || []).find(i => i.id === entry.itemId) }))
+    .filter(row => row.item);
 
   // Konflikt-Check funktioniert für Spieler (Nummer) wie Trainer (Initialen) gleich:
   // Pro Mannschaft darf der gleiche Wert nicht doppelt vergeben sein.
-  const numberConflict = form.number && players.some(p =>
+  const duplicateNumberPlayers = form.number ? players.filter(p =>
     p.id !== player?.id
     && p.team === form.team
     && String(p.number).trim().toLowerCase() === String(form.number).trim().toLowerCase()
-  );
+  ) : [];
+  const isSeasonTransitionDuplicate = (other) =>
+    (!!form.seasonEntry && !!other.seasonExit) || (!!form.seasonExit && !!other.seasonEntry);
+  const numberConflict = duplicateNumberPlayers.some(p => !isSeasonTransitionDuplicate(p));
+  const seasonDuplicateAllowed = duplicateNumberPlayers.length > 0 && !numberConflict;
 
   function handleNumberChange(val) {
     if (isCoach) {
@@ -1550,7 +1881,8 @@ function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) 
       ? (form.number ? String(form.number).trim().toUpperCase() : null)
       : (form.number ? parseInt(form.number) : null);
 
-    onSave({ ...form, number: numberValue });
+    const itemSizes = form.individualSizes ? (form.itemSizes || {}) : {};
+    onSave({ ...form, number: numberValue, size: form.size || 'L', individualSizes: !!form.individualSizes, itemSizes, isGoalkeeper: isCoach ? false : !!form.isGoalkeeper, standardSetId: form.standardSetId || '' });
   }
 
   return (
@@ -1580,13 +1912,104 @@ function PlayerForm({ player, players, teams, labels, kind, onSave, onCancel }) 
             value={form.number || ''}
             onChange={e => handleNumberChange(e.target.value)}
           />
+          {seasonDuplicateAllowed && (
+            <p className="text-xs mt-1 text-emerald-700">
+              Doppelvergabe ist erlaubt, weil Eintritt/Austritt fÃ¼r den Saisonwechsel passend markiert ist.
+            </p>
+          )}
         </Field>
         <Field label="Größe">
           <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.size} onChange={e => setForm({ ...form, size: e.target.value })}>
-            {['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => <option key={s}>{s}</option>)}
+            {SIZE_OPTIONS.map(s => <option key={s}>{s}</option>)}
           </select>
         </Field>
+        <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.individualSizes ? '#F1ECDF' : 'white' }}>
+          <input type="checkbox" checked={!!form.individualSizes} onChange={e => setForm({ ...form, individualSizes: e.target.checked })} className="mt-1" />
+          <div>
+            <div className="text-sm font-medium">Einzelne Größen</div>
+            <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Je Artikel aus dem Standard-Set eine eigene Größe pflegen.</div>
+          </div>
+        </label>
+        {!isCoach && (
+          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.isGoalkeeper ? '#F1ECDF' : 'white' }}>
+            <input type="checkbox" checked={!!form.isGoalkeeper} onChange={e => setForm({ ...form, isGoalkeeper: e.target.checked, standardSetId: '' })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium">Torwart</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Verwendet Torwart-Sets statt normaler Spieler-Sets.</div>
+            </div>
+          </label>
+        )}
+        <Field label="Standard-Set">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.standardSetId || ''} onChange={e => setForm({ ...form, standardSetId: e.target.value })}>
+            <option value="">Automatisch nach Standard</option>
+            {formSetOptions.map((set, idx) => (
+              <option key={set.id} value={set.id}>{setSortValue(set, idx)} - {set.name}</option>
+            ))}
+          </select>
+          {formSetOptions.length === 0 && (
+            <p className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>Noch kein passendes Set in den Einstellungen angelegt.</p>
+          )}
+        </Field>
         <Field label="Notizen"><input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></Field>
+        {form.individualSizes && (
+          <div className="sm:col-span-2 p-3" style={{ border: '1px solid var(--rule)', background: 'var(--paper)' }}>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 mb-3">
+              <div className="text-sm font-medium">Größen je Artikel</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+                Basis: {activeSizeSet?.name || 'kein Standard-Set'} · leere Werte nutzen {form.size || 'L'}
+              </div>
+            </div>
+            {activeSizeRows.length === 0 ? (
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Wähle ein Standard-Set mit Artikeln, um Einzelgrößen zu pflegen.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="uppercase tracking-wider" style={{ color: 'var(--ink-mute)' }}>
+                    <tr>
+                      <th className="text-left p-2">Artikel</th>
+                      <th className="text-left p-2 w-32">Größe</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeSizeRows.map(({ entry, item }) => (
+                      <tr key={entry.itemId} className="border-t border-stone-200">
+                        <td className="p-2">{item.articleNumber ? `[${item.articleNumber}] ` : ''}{item.name}</td>
+                        <td className="p-2">
+                          <select
+                            className="w-full border border-stone-300 px-2 py-1 text-xs bg-white"
+                            value={(form.itemSizes || {})[entry.itemId] || form.size || 'L'}
+                            onChange={e => setForm({
+                              ...form,
+                              itemSizes: { ...(form.itemSizes || {}), [entry.itemId]: e.target.value },
+                            })}
+                          >
+                            {SIZE_OPTIONS.map(s => <option key={s}>{s}</option>)}
+                          </select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.seasonEntry ? '#F1ECDF' : 'white' }}>
+            <input type="checkbox" checked={!!form.seasonEntry} onChange={e => setForm({ ...form, seasonEntry: e.target.checked })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium">Eintritt neue Saison</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Für Bedarfsermittlung als Neuzugang vormerken.</div>
+            </div>
+          </label>
+          <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.seasonExit ? '#F5EBDD' : 'white' }}>
+            <input type="checkbox" checked={!!form.seasonExit} onChange={e => setForm({ ...form, seasonExit: e.target.checked })} className="mt-1" />
+            <div>
+              <div className="text-sm font-medium">Ausscheiden neue Saison</div>
+              <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Material bleibt sichtbar, wird aber für Saisonplanung als Rücklauf berücksichtigt.</div>
+            </div>
+          </label>
+        </div>
       </div>
       <div className="flex gap-2 mt-4">
         <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Speichern</button>
@@ -1779,7 +2202,7 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
 
           <div className="text-xs p-4" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)' }}>
             <strong style={{ color: 'var(--vereinsblau)' }}>Pflichtspalten:</strong> Vorname, Nachname<br />
-            <strong style={{ color: 'var(--vereinsblau)' }}>Optionale Spalten:</strong> Mannschaft, {numberLabel}{isCoach ? ' (1–3 Buchstaben)' : ''}, Größe (XS/S/M/L/XL/XXL/3XL), Notizen<br />
+            <strong style={{ color: 'var(--vereinsblau)' }}>Optionale Spalten:</strong> Mannschaft, {numberLabel}{isCoach ? ' (1–3 Buchstaben)' : ''}, Größe (S/M/L/XL/XXL/XXXL), Notizen<br />
             <strong style={{ color: 'var(--vereinsblau)' }}>Trennzeichen:</strong> Semikolon (;) oder Komma (,) — wird automatisch erkannt<br />
             <strong style={{ color: 'var(--vereinsblau)' }}>Verfügbare Mannschaften:</strong> {teams.length > 0 ? teams.join(' · ') : '— keine angelegt —'}
           </div>
@@ -1857,7 +2280,7 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
                     </td>
                     <td className="p-1">
                       <select className="px-2 py-1 text-xs" value={r.size} onChange={e => updateRow(r._idx, 'size', e.target.value)} style={{ border: '1px solid var(--rule)' }}>
-                        {['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL'].map(s => <option key={s}>{s}</option>)}
+                        {SIZE_OPTIONS.map(s => <option key={s}>{s}</option>)}
                       </select>
                     </td>
                     <td className="p-1"><input className="w-full px-2 py-1 text-xs" value={r.notes} onChange={e => updateRow(r._idx, 'notes', e.target.value)} style={{ border: '1px solid var(--rule)' }} /></td>
@@ -2271,11 +2694,619 @@ function CatalogImport({ existingItems, onImport, onCancel, suppliers = [] }) {
 }
 
 // ============ MATERIAL / INVENTORY ============
+function ImageLightbox({ title, subtitle, url, onClose }) {
+  if (!url) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6" style={{ background: 'rgba(0,0,0,0.72)' }}>
+      <div className="bg-white border border-stone-200 w-full max-w-5xl max-h-[92vh] overflow-auto">
+        <div className="flex items-center justify-between gap-3 p-3 border-b border-stone-200">
+          <div>
+            <div className="font-display text-xl">{title || 'Foto'}</div>
+            {subtitle && <span className="text-xs" style={{ color: 'var(--ink-mute)' }}>{subtitle}</span>}
+          </div>
+          <button onClick={onClose} className="px-3 py-1.5 text-xs uppercase" style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            Zurück
+          </button>
+        </div>
+        <div className="p-3 sm:p-4">
+          <img src={url} alt={title || 'Foto'} style={{ width: '100%', maxHeight: '80vh', objectFit: 'contain', display: 'block' }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function itemPhoto(item, className = 'w-10 h-10', onOpen = null) {
+  if (!item?.photo) return null;
+  const img = <img src={item.photo} alt={item.name || 'Artikel'} className={`${className} object-cover border border-stone-200`} />;
+  if (!onOpen) return img;
+  return (
+    <button type="button" onClick={() => onOpen(item)} className="shrink-0" title="Foto vergrößern">
+      {img}
+    </button>
+  );
+}
+
+function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
+  const [team, setTeam] = useState('alle');
+  const [number, setNumber] = useState('');
+  const [itemId, setItemId] = useState('alle');
+  const [scope, setScope] = useState('artikel');
+  const [criteria, setCriteria] = useState(null);
+
+  const persons = allPersons(data);
+  const activeTeam = criteria?.team || 'alle';
+  const activeNumber = criteria?.number || '';
+  const activeItemId = criteria?.itemId || 'alle';
+  const activeScope = criteria?.scope || 'artikel';
+  const normalizedNumber = String(activeNumber).trim().toLowerCase();
+  const matchedPersons = persons.filter(p => {
+    if (!criteria) return false;
+    if (activeTeam !== 'alle' && p.team !== activeTeam) return false;
+    if (!normalizedNumber) return true;
+    return String(personNumberValue(p) || '').trim().toLowerCase() === normalizedNumber;
+  });
+  const matchedPersonIds = new Set(matchedPersons.map(p => p.id));
+  const rows = [];
+
+  if (criteria) {
+    (data.inventory || []).forEach(inv => {
+      const item = (data.items || []).find(x => x.id === inv.itemType) || { id: inv.itemType, name: inv.itemName || inv.itemType };
+      const person = findPerson(data, inv.assignedTo);
+      const invTeam = inv.status === 'ausgegeben' ? person?.team : inv.team;
+      const numberMatch = !normalizedNumber || (person && matchedPersonIds.has(person.id)) || String(inv.assignedNumber || '').trim().toLowerCase() === normalizedNumber;
+      const teamMatch = activeTeam === 'alle' || invTeam === activeTeam || (!invTeam && inv.status === 'lager');
+      const itemMatch = activeItemId === 'alle' || inv.itemType === activeItemId;
+      const personScopeMatch = activeScope === 'person' && normalizedNumber && person && matchedPersonIds.has(person.id);
+      if (teamMatch && numberMatch && (itemMatch || personScopeMatch)) {
+        rows.push({
+          key: `inv_${inv.id}`,
+          status: inv.status === 'lager' ? 'Im Lager' : inv.status === 'ausgegeben' ? 'Beim Spieler/Trainer' : inv.status,
+          item,
+          size: inv.size || '',
+          number: inv.assignedNumber || personNumberValue(person) || '',
+          team: invTeam || 'global',
+          owner: person ? `${person.firstName} ${person.lastName}` : (inv.assignedName || 'Lager'),
+          detail: inv.id,
+        });
+      }
+    });
+
+    (data.orders || []).forEach(order => {
+      (order.lines || []).forEach(line => {
+        const item = (data.items || []).find(x => x.id === line.itemType) || { id: line.itemType, name: line.itemType };
+        const person = findPerson(data, line.playerId);
+        const lineTeam = person?.team || order.team;
+        const numberMatch = !normalizedNumber || String(line.number || personNumberValue(person) || '').trim().toLowerCase() === normalizedNumber;
+        const teamMatch = activeTeam === 'alle' || lineTeam === activeTeam || order.team === activeTeam;
+        const itemMatch = activeItemId === 'alle' || line.itemType === activeItemId;
+        const personScopeMatch = activeScope === 'person' && normalizedNumber && person && matchedPersonIds.has(person.id);
+        if (teamMatch && numberMatch && (itemMatch || personScopeMatch)) {
+          rows.push({
+            key: `ord_${order.id}_${line.id}`,
+            status: 'Bestellt',
+            item,
+            size: line.size || '',
+            number: line.number || personNumberValue(person) || '',
+            team: lineTeam || 'div.',
+            owner: person ? `${person.firstName} ${person.lastName}` : (line.name || order.title),
+            detail: order.title,
+          });
+        }
+      });
+    });
+  }
+
+  function runSearch() {
+    setCriteria({
+      team,
+      number: number.trim(),
+      itemId,
+      scope,
+    });
+  }
+
+  function resetSearch() {
+    setTeam('alle');
+    setNumber('');
+    setItemId('alle');
+    setScope('artikel');
+    setCriteria(null);
+  }
+
+  return (
+    <div className="bg-white border border-stone-200 p-4 mb-4">
+      <div className="font-display text-xl mb-3">{title}</div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+        <Field label="Mannschaft">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={team} onChange={e => setTeam(e.target.value)}>
+            <option value="alle">Alle Mannschaften</option>
+            {(data.teams || []).map(t => <option key={t}>{t}</option>)}
+          </select>
+        </Field>
+        <Field label="Trikotnummer / Initialen">
+          <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={number} onChange={e => setNumber(e.target.value)} placeholder="z.B. 7 oder DH" />
+        </Field>
+        <Field label="Artikel">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={itemId} onChange={e => setItemId(e.target.value)}>
+            <option value="alle">Alle Artikel</option>
+            {(data.items || []).map(i => <option key={i.id} value={i.id}>{i.articleNumber ? `[${i.articleNumber}] ` : ''}{i.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Anzeige">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={scope} onChange={e => setScope(e.target.value)}>
+            <option value="artikel">Nur gewählten Artikel</option>
+            <option value="person">Alle Teile der Person</option>
+          </select>
+        </Field>
+      </div>
+      <div className="flex flex-wrap gap-2 mb-3">
+        <button onClick={runSearch}
+          className="px-5 py-2 text-xs uppercase text-white"
+          style={{ background: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+          Suchen
+        </button>
+        {criteria && (
+          <button onClick={resetSearch}
+            className="px-5 py-2 text-xs uppercase"
+            style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            {'Zur\u00fccksetzen'}
+          </button>
+        )}
+      </div>
+      {!criteria ? (
+        <div className="text-sm text-stone-500 py-3">Bitte Suchkriterien eingeben und Suche starten.</div>
+      ) : rows.length === 0 ? (
+        <div className="text-sm text-stone-500 py-3">Keine passenden Lager-, Ausgabe- oder Bestellpositionen gefunden.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
+              <tr><th className="text-left p-2">Status</th><th className="text-left p-2">Artikel</th><th className="text-left p-2">Nr./Init.</th><th className="text-left p-2">Mannschaft</th><th className="text-left p-2">Ort / Person</th><th className="text-left p-2">Detail</th></tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.key} className="border-t border-stone-100">
+                  <td className="p-2 font-medium">{r.status}</td>
+                  <td className="p-2"><div className="flex items-center gap-2">{itemPhoto(r.item)}<span>{r.item.name} {r.size ? `· ${r.size}` : ''}</span></div></td>
+                  <td className="p-2" style={{ color: 'var(--vereinsblau)' }}>{r.number || '–'}</td>
+                  <td className="p-2">{r.team}</td>
+                  <td className="p-2">{r.owner}</td>
+                  <td className="p-2 text-xs text-stone-500">{r.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SeasonMaterialWorkArea({ data, update }) {
+  const [open, setOpen] = useState(true);
+  const [filterPersonKind, setFilterPersonKind] = useState('alle'); // alle | player | coach
+  const [filterTeam, setFilterTeam] = useState('');
+  const [filterPersonId, setFilterPersonId] = useState('');
+  const [filterItemId, setFilterItemId] = useState('');
+  const [filterSize, setFilterSize] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
+  const standardSets = migrateStandardSets(data.settings);
+  const persons = allPersons(data);
+  const openOrders = (data.orders || []).filter(orderCoversNeed);
+
+  const rows = useMemo(() => {
+    const result = [];
+    const usedSources = new Set();
+    const needKeys = new Set();
+
+    function addRow({ person, item, size, sourceHint, orderId, allowMissing = false }) {
+      if (!person || !item) return;
+      const target = { ...person, _kind: person._kind };
+      const wantedSize = size || getPersonItemSize(target, item.id);
+      const source = chooseMaterialSourceForNeed(data, item.id, target, wantedSize, usedSources);
+      if (!source) {
+        if (!allowMissing) return;
+        result.push({
+          id: `missing_${target.id}_${item.id}_${wantedSize}_${result.length}`,
+          category: 'bestellung',
+          item,
+          size: wantedSize,
+          source: null,
+          sourceLabel: 'Kein Bestand',
+          target,
+          oldNumber: '',
+          newNumber: personNumberValue(target),
+          sourceHint,
+          orderId: null,
+        });
+        return;
+      }
+
+      usedSources.add(source.id);
+      const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
+      const needsReprint = materialSourceNeedsReprint(data, source, target);
+      const returnedMatchingStock = source.status === 'lager'
+        && (source.assignedNumber || source.assignedName)
+        && inventoryMatchesPersonNumberInData(data, source, target);
+      const category = needsReprint ? 'umbeflockung' : (source.status === 'ausgegeben' || returnedMatchingStock) ? 'umverteilung' : 'ausgabe';
+      result.push({
+        id: `${source.id}_${target.id}_${item.id}_${result.length}`,
+        category,
+        item,
+        size: source.size || wantedSize,
+        source,
+        sourceLabel: sourcePerson
+          ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson._kind === 'coach' && sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
+          : returnedMatchingStock
+            ? `Rücklauf Lager${source.assignedName ? ` ${source.assignedName}` : ''}`
+          : source.reservedFor
+            ? 'Reservierter Lagerbestand'
+            : source.team ? `Lagerbestand ${source.team}` : 'Lagerbestand',
+        target,
+        oldNumber: inventoryEffectiveNumber(data, source),
+        newNumber: personNumberValue(target),
+        sourceHint,
+        orderId,
+      });
+    }
+
+    openOrders.forEach(order => {
+      (order.lines || []).forEach(line => {
+        const person = findPerson(data, line.playerId);
+        const item = (data.items || []).find(i => i.id === line.itemType);
+        const qty = Number(line.qty) || 1;
+        for (let idx = 0; idx < qty; idx++) {
+          addRow({ person, item, size: line.size || getPersonItemSize(person, item.id), sourceHint: `Bestellung: ${order.title}`, orderId: order.id, allowMissing: false });
+        }
+      });
+    });
+
+    persons.filter(p => shouldPlanStandardSetInMaterial(data, p)).forEach(person => {
+      const sets = getPersonStandardSets(data.settings, person);
+      sets.forEach(set => {
+        (set.items || []).forEach(entry => {
+          const item = (data.items || []).find(i => i.id === entry.itemId);
+          if (!item) return;
+          const size = getPersonItemSize(person, item.id);
+          const key = `${person.id}_${item.id}_${size}`;
+          if (needKeys.has(key)) return;
+          needKeys.add(key);
+          const remaining = Math.max(0,
+            (Number(entry.qty) || 1)
+            - issuedQtyForPersonItem(data, person, item.id, size)
+            - openOrderedQtyForPersonItem(data, person, item.id, size)
+          );
+          for (let idx = 0; idx < remaining; idx++) {
+            const basis = seasonFlag(person.seasonEntry)
+              ? `Saisonstatus: Eintritt (${set.name})`
+              : person.standardSetId
+                ? `Standard-Set zugeordnet (${set.name})`
+                : `Standard-Set offen (${set.name})`;
+            addRow({ person, item, size, sourceHint: basis, allowMissing: true });
+          }
+        });
+      });
+    });
+
+    return result;
+  }, [data, persons, standardSets, openOrders]);
+
+  const filterPersons = persons.filter(p => {
+    if (filterTeam && p.team !== filterTeam) return false;
+    if (filterPersonKind !== 'alle' && p._kind !== filterPersonKind) return false;
+    return true;
+  });
+  const sizeOptions = [...new Set(rows.map(r => r.size).filter(Boolean))].sort((a, b) => compareValues(a, b, 'asc'));
+  const filteredRows = rows.filter(row => {
+    if (filterPersonKind !== 'alle' && row.target._kind !== filterPersonKind) return false;
+    if (filterTeam && row.target.team !== filterTeam) return false;
+    if (filterPersonId && row.target.id !== filterPersonId) return false;
+    if (filterItemId && row.item.id !== filterItemId) return false;
+    if (filterSize && row.size !== filterSize) return false;
+    const q = filterSearch.trim().toLowerCase();
+    if (q) {
+      const haystack = [
+        row.item.name,
+        row.item.articleNumber,
+        row.size,
+        row.sourceLabel,
+        row.oldNumber,
+        row.newNumber,
+        row.target.firstName,
+        row.target.lastName,
+        row.target.team,
+        row.target._kind === 'coach' ? 'trainer' : 'spieler',
+        row.sourceHint,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!haystack.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const transfers = filteredRows.filter(r => r.category === 'umverteilung');
+  const issues = filteredRows.filter(r => r.category === 'ausgabe');
+  const reprints = filteredRows.filter(r => r.category === 'umbeflockung');
+  const missingOrders = filteredRows.filter(r => r.category === 'bestellung');
+
+  function reserveSource(row) {
+    if (row.source?.status !== 'lager') return;
+    const now = new Date().toISOString();
+    update('inventory', (data.inventory || []).map(inv => inv.id === row.source.id ? {
+      ...inv,
+      reservedFor: row.target.id,
+      reservedAt: now,
+      assignedNumber: row.newNumber || inv.assignedNumber || null,
+      assignedName: (row.target.lastName || '').toUpperCase() || inv.assignedName || null,
+      personKind: row.target._kind,
+      needsReprint: row.category === 'umbeflockung',
+      reprintFromNumber: row.category === 'umbeflockung' ? (row.oldNumber || null) : null,
+      reprintToNumber: row.category === 'umbeflockung' ? (row.newNumber || null) : null,
+      reprintRequestedAt: row.category === 'umbeflockung' ? now : null,
+    } : inv), { mode: 'replace' });
+  }
+
+  function toggleReprintExcluded(row, checked) {
+    if (!row.source?.id) return;
+    update('inventory', (data.inventory || []).map(inv => inv.id === row.source.id ? {
+      ...inv,
+      reprintExcluded: checked,
+      reprintExcludedAt: checked ? new Date().toISOString() : null,
+      needsReprint: checked ? false : inv.needsReprint,
+    } : inv), { mode: 'replace' });
+  }
+
+  function createMissingOrder(list) {
+    const unique = [];
+    const seen = new Set();
+    list.forEach(row => {
+      const key = `${row.target.id}_${row.item.id}_${row.size}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (issuedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
+      if (openOrderedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
+      unique.push(row);
+    });
+    if (unique.length === 0) {
+      alert('Keine bestellbaren Restpositionen vorhanden. Offene Bestellungen und vorhandene Ausstattung wurden bereits berücksichtigt.');
+      return;
+    }
+    const teams = [...new Set(unique.map(row => row.target.team).filter(Boolean))];
+    const now = new Date().toISOString();
+    const order = {
+      id: `ord_${Date.now()}`,
+      title: `Restbedarf Material ${new Date().toLocaleDateString('de-DE')}`,
+      type: 'restbedarf_material',
+      team: teams.length === 1 ? teams[0] : 'mehrere',
+      articleSupplierId: null,
+      flockSupplierId: null,
+      flockBy: 'haus',
+      notes: 'Aus Materialbereich Umverteilung/Umbeflockung erzeugt. Enthält nur Positionen ohne Umverteilung, Lagerausgabe, Umbeflockung oder offene Bestellung.',
+      lines: unique.map((row, idx) => ({
+        id: `l_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+        itemType: row.item.id,
+        size: row.size,
+        qty: 1,
+        playerId: row.target.id,
+        personKind: row.target._kind,
+        number: row.newNumber || '',
+        name: (row.target.lastName || '').toUpperCase(),
+        orderReason: 'fehlbestand_material',
+      })),
+      sponsors: { brust: '', ruecken: '', aermel: '' },
+      sponsorKey: '',
+      fromReports: [],
+      createdAt: now,
+      status: 'angelegt',
+    };
+    update('orders', [...(data.orders || []), order]);
+    alert(`Bestellung "${order.title}" mit ${unique.length} Restposition(en) angelegt.`);
+  }
+
+  function printRowsPdf(list, title, filename) {
+    if (typeof window !== 'undefined' && typeof jsPDF === 'undefined') return;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    if (typeof doc.autoTable !== 'function') {
+      alert('PDF-Export ist nicht verfuegbar.');
+      return;
+    }
+    doc.setFontSize(16);
+    doc.text(title, 14, 16);
+    doc.setFontSize(9);
+    doc.text(`Stand: ${new Date().toLocaleString('de-DE')}`, 14, 23);
+    doc.autoTable({
+      startY: 28,
+      head: [['Artikel', 'Groesse', 'Alt', 'Neu', 'Quelle', 'Basis']],
+      body: list.map(row => [
+        `${row.item.articleNumber ? `[${row.item.articleNumber}] ` : ''}${row.item.name}`,
+        row.size || '',
+        `${row.sourceLabel} ${row.oldNumber || '-'}`,
+        `${row.target.firstName} ${row.target.lastName}${row.target._kind === 'coach' ? ' (Trainer)' : ''} ${row.newNumber || '-'}`,
+        row.source ? (row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ruecklauf ${row.source.id}`) : 'Bestellung',
+        row.sourceHint || '',
+      ]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [0, 51, 102] },
+    });
+    doc.save(filename);
+  }
+
+  function renderRows(list, emptyText) {
+    if (list.length === 0) return <div className="p-4 text-sm text-stone-500">{emptyText}</div>;
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-stone-50 uppercase tracking-wider text-stone-500">
+            <tr>
+              <th className="text-left p-2">Artikel</th>
+              <th className="text-left p-2">{'Gr\u00f6\u00dfe'}</th>
+              <th className="text-left p-2">Alt</th>
+              <th className="text-left p-2">Neu</th>
+              <th className="text-left p-2">Quelle</th>
+              <th className="text-left p-2">Basis</th>
+              <th className="text-left p-2">Umflockung</th>
+              <th className="text-right p-2">Aktion</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map(row => (
+              <tr key={row.id} className="border-t border-stone-100">
+                <td className="p-2 font-medium">{row.item.articleNumber ? `[${row.item.articleNumber}] ` : ''}{row.item.name}</td>
+                <td className="p-2">{row.size}</td>
+                <td className="p-2">{row.sourceLabel} {row.oldNumber || '-'}</td>
+                <td className="p-2">
+                  {row.target.firstName} {row.target.lastName} {row.newNumber || '-'}
+                  {row.target._kind === 'coach' && (
+                    <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
+                  )}
+                </td>
+                <td className="p-2 font-mono">{row.source ? (row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`) : 'Bestellung'}</td>
+                <td className="p-2">{row.sourceHint}</td>
+                <td className="p-2">
+                  {row.category === 'umbeflockung' && row.source ? (
+                    <label className="inline-flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={!!row.source.reprintExcluded || itemReprintExcluded(data, row.item.id)}
+                        disabled={itemReprintExcluded(data, row.item.id)}
+                        onChange={e => toggleReprintExcluded(row, e.target.checked)}
+                      />
+                      {itemReprintExcluded(data, row.item.id) ? 'Artikel gesperrt' : 'ausschließen'}
+                    </label>
+                  ) : (
+                    <span className="text-stone-400">-</span>
+                  )}
+                </td>
+                <td className="p-2 text-right">
+                  {!row.source ? (
+                    <span className="text-stone-500">Restbedarf</span>
+                  ) : row.source.status === 'lager' ? (
+                    row.source.reservedFor === row.target.id ? (
+                      <span className="text-emerald-700">reserviert</span>
+                    ) : (
+                      <button onClick={() => reserveSource(row)} className="text-xs bg-stone-900 text-white px-2 py-1">Reservieren</button>
+                    )
+                  ) : (
+                    <span className="text-stone-500">{'R\u00fccklauf'}</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border border-stone-200 mb-4">
+      <button onClick={() => setOpen(!open)} className="w-full p-4 text-left flex justify-between items-center">
+        <div>
+          <div className="font-display text-xl">UMVERTEILUNG & UMBEFLOCKUNG</div>
+          <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+            {transfers.length} Umverteilung(en) / {issues.length} Ausgabe(n) / {reprints.length} Umbeflockung(en) / {missingOrders.length} Restbedarf aus offenen Bestellungen, Saisonstatus und aktuellem Bestand
+          </div>
+        </div>
+        <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{open ? 'zuklappen' : 'aufklappen'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-stone-200">
+          <div className="p-4 border-b border-stone-100" style={{ background: 'var(--paper)' }}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              <Field label="Personenkreis">
+                <select value={filterPersonKind} onChange={e => { setFilterPersonKind(e.target.value); setFilterPersonId(''); }} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="alle">Alle</option>
+                  <option value="player">Nur Spieler</option>
+                  <option value="coach">Nur Trainer</option>
+                </select>
+              </Field>
+              <Field label="Mannschaft">
+                <select value={filterTeam} onChange={e => { setFilterTeam(e.target.value); setFilterPersonId(''); }} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Mannschaften</option>
+                  {(data.teams || []).map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </Field>
+              <Field label="Person">
+                <select value={filterPersonId} onChange={e => setFilterPersonId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Personen</option>
+                  {filterPersons.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p._kind === 'coach' ? personNumberValue(p) : `#${personNumberValue(p) || '-'}`} {p.firstName} {p.lastName}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Artikel">
+                <select value={filterItemId} onChange={e => setFilterItemId(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Artikel</option>
+                  {(data.items || []).map(item => <option key={item.id} value={item.id}>{item.articleNumber ? `[${item.articleNumber}] ` : ''}{item.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Größe">
+                <select value={filterSize} onChange={e => setFilterSize(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white">
+                  <option value="">Alle Größen</option>
+                  {sizeOptions.map(size => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </Field>
+              <Field label="Suche">
+                <input value={filterSearch} onChange={e => setFilterSearch(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm bg-white" placeholder="Name, Nr., Artikel..." />
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-3 text-xs" style={{ color: 'var(--ink-mute)' }}>
+              <span>{filteredRows.length} von {rows.length} Vorschlag/Vorschlägen sichtbar</span>
+              <button
+                onClick={() => { setFilterPersonKind('alle'); setFilterTeam(''); setFilterPersonId(''); setFilterItemId(''); setFilterSize(''); setFilterSearch(''); }}
+                className="px-3 py-1.5 border border-stone-300 bg-white"
+              >
+                Filter zurücksetzen
+              </button>
+            </div>
+          </div>
+          <div className="p-4 border-b border-stone-100 flex flex-wrap gap-2 justify-end">
+            <button onClick={() => printRowsPdf(transfers, 'Umverteilung alt - neu', 'umverteilung_alt_neu.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Umverteilung PDF
+            </button>
+            <button onClick={() => printRowsPdf(reprints, 'Umbeflockung alt - neu', 'umbeflockung_alt_neu.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Umbeflockung PDF
+            </button>
+            <button onClick={() => printRowsPdf(issues, 'Ausgabe aus Lager', 'ausgabe_aus_lager.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Ausgabe Lager PDF
+            </button>
+            <button onClick={() => printRowsPdf(missingOrders, 'Restbedarf Bestellung', 'restbedarf_bestellung.pdf')} className="px-3 py-1.5 text-xs bg-stone-900 text-white">
+              Restbedarf PDF
+            </button>
+            <button onClick={() => createMissingOrder(missingOrders)} disabled={missingOrders.length === 0} className="px-3 py-1.5 text-xs text-white disabled:opacity-50" style={{ background: 'var(--vereinsblau)' }}>
+              Restbedarf bestellen ({missingOrders.length})
+            </button>
+          </div>
+          <div className="p-4 border-b border-stone-100">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.18em' }}>UMVERTEILUNG: ALT - NEU</div>
+            {renderRows(transfers, 'Aktuell keine Umverteilungsvorschl\u00e4ge.')}
+          </div>
+          <div className="p-4 border-b border-stone-100">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--success)', letterSpacing: '0.18em' }}>AUSGABE AUS LAGER</div>
+            {renderRows(issues, 'Aktuell keine passenden Lagerausgaben.')}
+          </div>
+          <div className="p-4">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--warn)', letterSpacing: '0.18em' }}>UMBEFLOCKUNG: ALT - NEU</div>
+            {renderRows(reprints, 'Aktuell keine Umbeflockungsvorschl\u00e4ge.')}
+          </div>
+          <div className="p-4 border-t border-stone-100">
+            <div className="font-sub text-xs mb-2" style={{ color: 'var(--danger)', letterSpacing: '0.18em' }}>RESTBEDARF BESTELLUNG</div>
+            {renderRows(missingOrders, 'Aktuell kein offener Restbedarf ohne Bestand oder offene Bestellung.')}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InventoryView({ data, update }) {
   const [filter, setFilter] = useState('alle');
   const [showForm, setShowForm] = useState(false);
   const [showAssign, setShowAssign] = useState(null);
   const [showPrintDialog, setShowPrintDialog] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState(null);
   const [view, setView] = useState('aggregiert'); // 'aggregiert' | 'einzeln'
   const [groupBy, setGroupBy] = useState('article'); // 'article' | 'team' | 'person'
   const [openGroups, setOpenGroups] = useState({}); // {groupKey: true}
@@ -2431,19 +3462,38 @@ function InventoryView({ data, update }) {
   }
 
   function assign(invId, playerId, number, reprint = {}) {
+    const targetPerson = findPerson(data, playerId);
+    const targetName = (targetPerson?.lastName || '').toUpperCase() || null;
     update('inventory', data.inventory.map(i =>
-      i.id === invId ? {
-        ...i,
-        status: 'ausgegeben',
-        assignedTo: playerId,
-        assignedAt: new Date().toISOString(),
-        assignedNumber: number,
-        personKind: reprint.personKind || i.personKind || null,
-        needsReprint: !!reprint.needsReprint,
-        reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
-        reprintToNumber: reprint.needsReprint ? (reprint.toNumber || number || null) : null,
-        reprintRequestedAt: reprint.needsReprint ? new Date().toISOString() : null,
-      } : i
+      i.id === invId ? (
+        reprint.reserveOnly ? {
+          ...i,
+          status: 'lager',
+          reservedFor: playerId,
+          reservedAt: new Date().toISOString(),
+          assignedNumber: number,
+          assignedName: targetName,
+          personKind: reprint.personKind || i.personKind || null,
+          needsReprint: !!reprint.needsReprint,
+          reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
+          reprintToNumber: reprint.needsReprint ? (reprint.toNumber || number || null) : null,
+          reprintRequestedAt: reprint.needsReprint ? new Date().toISOString() : null,
+        } : {
+          ...i,
+          status: 'ausgegeben',
+          assignedTo: playerId,
+          assignedAt: new Date().toISOString(),
+          reservedFor: null,
+          reservedAt: null,
+          assignedNumber: number,
+          assignedName: targetName,
+          personKind: reprint.personKind || i.personKind || null,
+          needsReprint: !!reprint.needsReprint,
+          reprintFromNumber: reprint.needsReprint ? (reprint.fromNumber || null) : null,
+          reprintToNumber: reprint.needsReprint ? (reprint.toNumber || number || null) : null,
+          reprintRequestedAt: reprint.needsReprint ? new Date().toISOString() : null,
+        }
+      ) : i
     ), { mode: 'replace' });
     setShowAssign(null);
   }
@@ -2451,7 +3501,13 @@ function InventoryView({ data, update }) {
   function unassign(invId) {
     if (!confirm('Material zurück ins Lager buchen?')) return;
     update('inventory', data.inventory.map(i =>
-      i.id === invId ? { ...i, status: 'lager', assignedTo: null, assignedAt: null } : i
+      i.id === invId ? { ...i, status: 'lager', assignedTo: null, assignedAt: null, reservedFor: null, reservedAt: null } : i
+    ), { mode: 'replace' });
+  }
+
+  function clearReservation(invId) {
+    update('inventory', data.inventory.map(i =>
+      i.id === invId ? { ...i, reservedFor: null, reservedAt: null } : i
     ), { mode: 'replace' });
   }
 
@@ -2475,6 +3531,14 @@ function InventoryView({ data, update }) {
         title: `${person.firstName} ${person.lastName}`,
         subtitle: person.team,
         isCoach: person._kind === 'coach',
+      };
+    }
+    const reserved = findPerson(data, i.reservedFor);
+    if (reserved) {
+      return {
+        title: `Reserviert: ${reserved.firstName} ${reserved.lastName}`,
+        subtitle: reserved.team,
+        isCoach: reserved._kind === 'coach',
       };
     }
     if (i.assignedName || i.assignedNumber) {
@@ -2501,10 +3565,15 @@ function InventoryView({ data, update }) {
     const assignment = assignedPersonLabel(i);
     const numberLabel = assignedNumberLabel(i);
     const conditionLabel = getConditionFactors(data.settings)[i.condition]?.label || i.condition;
+    const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
     return (
       <tr key={i.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
         <td className="p-3 pl-10 text-sm" style={{ color: 'var(--ink-mute)' }}>
-          <span className="text-xs">↳</span> {i.itemName}
+          <div className="flex items-center gap-2">
+            <span className="text-xs">↳</span>
+            {itemPhoto(item, 'w-9 h-9', setPhotoPreview)}
+            <span>{i.itemName}</span>
+          </div>
         </td>
         <td className="p-3 text-sm font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
           {numberLabel || '–'}
@@ -2543,7 +3612,10 @@ function InventoryView({ data, update }) {
         <td className="p-3 hidden lg:table-cell text-sm" style={{ color: 'var(--ink-soft)' }}>{conditionLabel}</td>
         <td className="p-3 text-right whitespace-nowrap">
           {i.status === 'lager' ? (
-            <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">Ausgeben</button>
+            <>
+              <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">{i.reservedFor ? 'Reservierung' : 'Ausgeben'}</button>
+              {i.reservedFor && <button onClick={() => clearReservation(i.id)} className="text-xs border border-stone-300 px-2 py-1 ml-1">LÃ¶sen</button>}
+            </>
           ) : (
             <button onClick={() => unassign(i.id)} className="text-xs border border-stone-300 px-2 py-1">Zurück</button>
           )}
@@ -2570,6 +3642,10 @@ function InventoryView({ data, update }) {
           </button>
         </div>
       </div>
+
+      <ArticleLocationSearch data={data} title="ARTIKELSUCHE MATERIAL" />
+
+      <SeasonMaterialWorkArea data={data} update={update} />
 
       <div className="flex flex-wrap gap-2 mb-4 items-center justify-between">
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -2714,9 +3790,15 @@ function InventoryView({ data, update }) {
                 {sortedItems.map(i => {
                   const assignment = assignedPersonLabel(i);
                   const numberLabel = assignedNumberLabel(i);
+                  const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
                   return (
                     <tr key={i.id} className="border-t border-stone-100">
-                      <td className="p-3 font-medium">{i.itemName}</td>
+                      <td className="p-3 font-medium">
+                        <div className="flex items-center gap-2">
+                          {itemPhoto(item, 'w-9 h-9', setPhotoPreview)}
+                          <span>{i.itemName}</span>
+                        </div>
+                      </td>
                       <td className="p-3 font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
                         {numberLabel || '–'}
                       </td>
@@ -3124,7 +4206,7 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
                     </td>
                     <td className="p-1">
                       <select value={r.size} onChange={e => updateFreeRow(r.id, 'size', e.target.value)} className="border border-stone-300 px-2 py-1 text-xs">
-                        {['XS','S','M','L','XL','XXL','3XL'].map(s => <option key={s}>{s}</option>)}
+                        {SIZE_OPTIONS.map(s => <option key={s}>{s}</option>)}
                       </select>
                     </td>
                     <td className="p-1">
@@ -3628,6 +4710,23 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
     }
   }
 
+  function reserve() {
+    if (!personId) return;
+    let storedNumber;
+    if (isCoach) {
+      storedNumber = number ? String(number).trim().toUpperCase() : null;
+    } else {
+      storedNumber = number ? parseInt(number) : null;
+    }
+    onAssign(inv.id, personId, storedNumber, {
+      reserveOnly: true,
+      needsReprint,
+      fromNumber: reprintFromNumber || null,
+      toNumber: storedNumber || null,
+      personKind: person?._kind || null,
+    });
+  }
+
   function submit() {
     if (!personId) return;
     let storedNumber;
@@ -3707,6 +4806,8 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
       <div className="flex gap-2 mt-4">
         <button onClick={submit}
           disabled={!personId} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">Ausgeben</button>
+        <button onClick={reserve}
+          disabled={!personId} className="border border-stone-300 px-4 py-2 text-sm disabled:opacity-50">Reservieren</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
       </div>
     </div>
@@ -3978,6 +5079,39 @@ function ReturnsView({ data, update }) {
     alert('Rückgabe abgeschlossen.');
   }
 
+  function exportReturnProtocol() {
+    if (!player) return;
+    const signature = prompt('Digitale Unterschrift / Name bei Rückgabe:');
+    if (!signature) return;
+
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    doc.setFontSize(16);
+    doc.text('Rueckgabeprotokoll Vereinsmaterial', 14, 18);
+    doc.setFontSize(10);
+    doc.text(`${player.firstName} ${player.lastName} - ${player.team} - ${player._kind === 'coach' ? 'Initialen' : 'Nr.'} ${personNumberValue(player) || '-'}`, 14, 27);
+    doc.text(`Pfandregel: ${mode === 'ohne_pfand' ? 'ohne Pfand' : mode === 'saison' ? 'Saison-Abschreibung' : 'Pauschal'}`, 14, 34);
+    doc.autoTable({
+      startY: 42,
+      head: [['Artikel', 'Groesse', 'Zustand / Status', 'Abzug EUR']],
+      body: calc.map(({ item, cond, lossValue }) => [
+        item.itemName,
+        item.size || '',
+        conditionFactors[cond]?.label || cond,
+        lossValue.toFixed(2),
+      ]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [9, 36, 71] },
+    });
+    const y = Math.max(doc.lastAutoTable?.finalY || 55, 70) + 10;
+    doc.text(`Pfand: ${deposit ? `${deposit.amount.toFixed(2)} EUR` : 'nicht hinterlegt'}`, 14, y);
+    doc.text(`Einbehalt: ${retained.toFixed(2)} EUR`, 14, y + 7);
+    doc.text(`Auszahlung: ${refund.toFixed(2)} EUR`, 14, y + 14);
+    doc.line(14, y + 34, 95, y + 34);
+    doc.text(`Digitale Unterschrift: ${signature}`, 14, y + 40);
+    doc.text(`Datum: ${new Date().toLocaleDateString('de-DE')}`, 130, y + 40);
+    doc.save(`rueckgabe_${player.lastName || player.id}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  }
+
   return (
     <div>
       <div className="mb-8">
@@ -4122,6 +5256,11 @@ function ReturnsView({ data, update }) {
           )}
 
           <div className="flex flex-wrap gap-2">
+            <button onClick={exportReturnProtocol}
+              className="px-7 py-3 text-xs font-medium uppercase"
+              style={{ border: '1px solid var(--rule)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+              Rückgabeprotokoll PDF
+            </button>
             <button onClick={processReturn}
               className="px-7 py-3 text-xs font-medium uppercase text-white"
               style={{
@@ -4142,12 +5281,22 @@ function ReturnsView({ data, update }) {
 // ============ BESTELLUNGEN + FLOCK-LISTE ============
 function OrdersView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
+  const [editingOrder, setEditingOrder] = useState(null);
   const [viewing, setViewing] = useState(null);
   const [selected, setSelected] = useState([]);
   const [mergeMode, setMergeMode] = useState(false);
   const [sort, setSort] = useState({ key: 'createdAt', dir: 'desc' });
 
   function saveOrder(order) {
+    if (order.id) {
+      const updatedOrder = { ...order, updatedAt: new Date().toISOString() };
+      update('orders', data.orders.map(o => o.id === order.id ? updatedOrder : o));
+      if (viewing?.id === order.id) setViewing(updatedOrder);
+      setShowForm(false);
+      setEditingOrder(null);
+      return;
+    }
+
     const newOrder = { ...order, id: `ord_${Date.now()}`, createdAt: new Date().toISOString(), status: 'angelegt' };
     update('orders', [...data.orders, newOrder]);
 
@@ -4161,6 +5310,7 @@ function OrdersView({ data, update }) {
       update('reports', updatedReports);
     }
     setShowForm(false);
+    setEditingOrder(null);
   }
 
   function orderSponsorLabel(order) {
@@ -4252,7 +5402,7 @@ function OrdersView({ data, update }) {
     setMergeMode(false);
   }
 
-  if (viewing) return <OrderDetail order={viewing} data={data} onBack={() => setViewing(null)} onStatus={setStatus} />;
+  if (viewing) return <OrderDetail order={viewing} data={data} onBack={() => setViewing(null)} onStatus={setStatus} onEdit={(order) => { setViewing(null); setEditingOrder(order); setShowForm(true); }} />;
 
   return (
     <div>
@@ -4266,7 +5416,7 @@ function OrdersView({ data, update }) {
                 style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
                 Zusammenführen
               </button>
-              <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+              <button onClick={() => { setEditingOrder(null); setShowForm(true); }} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
                 style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
                 <Plus size={14} /> Neue Bestellung
               </button>
@@ -4295,7 +5445,7 @@ function OrdersView({ data, update }) {
         </div>
       )}
 
-      {showForm && <OrderForm data={data} onSave={saveOrder} onCancel={() => setShowForm(false)} />}
+      {showForm && <OrderForm data={data} order={editingOrder} onSave={saveOrder} onCancel={() => { setShowForm(false); setEditingOrder(null); }} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden">
         {data.orders.length === 0 ? (
@@ -4348,6 +5498,7 @@ function OrdersView({ data, update }) {
                       </td>
                       <td className="p-3 text-right whitespace-nowrap">
                         <button onClick={() => setViewing(o)} className="text-xs bg-stone-900 text-white px-2 py-1">Details</button>
+                        <button onClick={() => { setEditingOrder(o); setShowForm(true); }} className="text-xs border border-stone-300 px-2 py-1 ml-1">Bearbeiten</button>
                         <button onClick={() => remove(o.id)} className="text-stone-400 hover:text-red-600 p-1 ml-1"><Trash2 size={14} /></button>
                       </td>
                     </tr>
@@ -4362,19 +5513,21 @@ function OrdersView({ data, update }) {
   );
 }
 
-function OrderForm({ data, onSave, onCancel }) {
-  const [type, setType] = useState('komplett');
-  const [team, setTeam] = useState(data.teams[0] || '');
-  const [title, setTitle] = useState('');
-  const [articleSupplierId, setArticleSupplierId] = useState('');
-  const [flockSupplierId, setFlockSupplierId] = useState('');
-  const [flockBy, setFlockBy] = useState('haus'); // 'haus' | 'lieferant' | 'extern'
-  const [notes, setNotes] = useState('');
-  const [lines, setLines] = useState([]);
-  const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '' });
-  const [sponsorKey, setSponsorKey] = useState('');
+function OrderForm({ data, order, onSave, onCancel }) {
+  const isEditing = !!order?.id;
+  const [type, setType] = useState(order?.type || 'komplett');
+  const [team, setTeam] = useState(order?.team && data.teams.includes(order.team) ? order.team : (isEditing ? '' : (data.teams[0] || '')));
+  const [title, setTitle] = useState(order?.title || '');
+  const [articleSupplierId, setArticleSupplierId] = useState(order?.articleSupplierId || '');
+  const [flockSupplierId, setFlockSupplierId] = useState(order?.flockSupplierId || '');
+  const [flockBy, setFlockBy] = useState(order?.flockBy || 'haus'); // 'haus' | 'lieferant' | 'extern'
+  const [notes, setNotes] = useState(order?.notes || '');
+  const [lines, setLines] = useState((order?.lines || []).map((line, idx) => ({ ...line, id: line.id || `l_${Date.now()}_${idx}` })));
+  const [sponsors, setSponsors] = useState({ brust: '', ruecken: '', aermel: '', ...(order?.sponsors || {}) });
+  const [sponsorKey, setSponsorKey] = useState(order?.sponsorKey || '');
   const [showPersonPicker, setShowPersonPicker] = useState(false);
   const [distributingLineId, setDistributingLineId] = useState(null);
+  const [setSuggestionInfo, setSetSuggestionInfo] = useState(null);
 
   const suppliers = data.suppliers || [];
   const articleSuppliers = suppliers.filter(s => s.type === 'artikel' || s.type === 'beides');
@@ -4444,7 +5597,7 @@ function OrderForm({ data, onSave, onCancel }) {
       return {
         id: `l_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 5)}`,
         itemType,
-        size: size || person.size || 'L',
+        size: size || getPersonItemSize(person, itemType),
         qty: 1,
         playerId: person.id,
         personKind: kind,
@@ -4477,20 +5630,7 @@ function OrderForm({ data, onSave, onCancel }) {
     setLines(lines.flatMap(l => l.id === lineId ? newLines : [l]));
   }
 
-  // Standard-Sets aus den Settings holen — neue flexible Liste (settings.standardSets)
-  // mit Migration von alten standardSetPlayer/-Coach-Feldern.
-  const settings = data.settings || {};
-  const allSets = (() => {
-    const list = Array.isArray(settings.standardSets) ? [...settings.standardSets] : [];
-    // Backward-compat: alte Felder bei Bedarf einlesen
-    if (Array.isArray(settings.standardSetPlayer) && settings.standardSetPlayer.length > 0 && !list.some(s => s.id === 'set_player_default')) {
-      list.push({ id: 'set_player_default', name: 'Spieler-Set (Erstausstattung)', target: 'player', items: settings.standardSetPlayer });
-    }
-    if (Array.isArray(settings.standardSetCoach) && settings.standardSetCoach.length > 0 && !list.some(s => s.id === 'set_coach_default')) {
-      list.push({ id: 'set_coach_default', name: 'Trainer-Set (Erstausstattung)', target: 'coach', items: settings.standardSetCoach });
-    }
-    return list.filter(s => Array.isArray(s.items) && s.items.length > 0);
-  })();
+  const allSets = migrateStandardSets(data.settings).filter(s => Array.isArray(s.items) && s.items.length > 0);
 
   // Wer hat schon was? Wir prüfen das aktuelle Inventar — wenn eine Person bereits
   // ein Item desselben Typs (Artikel) ausgegeben hat, gilt sie für dieses Item als ausgestattet.
@@ -4510,45 +5650,90 @@ function OrderForm({ data, onSave, onCancel }) {
     if (!set) return;
     const newLines = [];
     const seen = new Set(lines.map(l => `${l.playerId}__${l.itemType}__${l.size}`));
+    const usedTransfers = new Set();
+    const transferRows = [];
+    const reprintRows = [];
+    let skippedExisting = 0;
+    let skippedDuplicate = 0;
 
     // Welche Personen bekommen das Set?
     const candidates = [];
-    if (set.target === 'player' || set.target === 'both') {
-      teamPlayers.forEach(p => candidates.push({ person: p, kind: 'player' }));
+    if (set.target === 'player' || set.target === 'goalkeeper' || set.target === 'both') {
+      teamPlayers
+        .filter(p => shouldReceiveSeasonEquipment(p))
+        .filter(p => !isUnmarkedActiveWithEquipment(data, p))
+        .filter(p => setSupportsPerson(set, { ...p, _kind: 'player' }) || p.standardSetId === set.id)
+        .forEach(p => candidates.push({ person: p, kind: 'player' }));
     }
     if (set.target === 'coach' || set.target === 'both') {
-      teamCoaches.forEach(c => candidates.push({ person: c, kind: 'coach' }));
+      teamCoaches
+        .filter(c => shouldReceiveSeasonEquipment(c))
+        .filter(c => !isUnmarkedActiveWithEquipment(data, c))
+        .forEach(c => candidates.push({ person: c, kind: 'coach' }));
     }
 
     let skippedFully = 0;
     candidates.forEach(({ person, kind }, idxP) => {
-      const size = person.size || 'L';
       let addedForPerson = 0;
       set.items.forEach((entry, idxItem) => {
         const item = data.items.find(i => i.id === entry.itemId);
         if (!item) return;
-        // Filter: Nur Personen, die diesen Artikel noch nicht haben
-        if (hasItemAssigned(person.id, item.id)) return;
+        const targetPerson = { ...person, _kind: kind };
+        const size = getPersonItemSize(targetPerson, item.id);
+        const requestedQty = Number(entry.qty) || 1;
+        const alreadyIssued = issuedQtyForPersonItem(data, targetPerson, item.id, size);
+        const alreadyOrdered = openOrderedQtyForPersonItem(data, targetPerson, item.id, size);
+        const alreadyInDraft = currentDraftQtyForPersonItem([...lines, ...newLines], targetPerson, item.id, size);
+        let remainingQty = Math.max(0, requestedQty - alreadyIssued - alreadyOrdered - alreadyInDraft);
+        if (remainingQty === 0) {
+          skippedExisting++;
+          return;
+        }
         const key = `${person.id}__${item.id}__${size}`;
-        if (seen.has(key)) return;
+        if (seen.has(key)) {
+          skippedDuplicate++;
+          return;
+        }
         seen.add(key);
-        newLines.push({
-          id: `l_${Date.now()}_${idxP}_${idxItem}_${Math.random().toString(36).slice(2, 5)}`,
-          itemType: item.id,
-          size,
-          qty: Number(entry.qty) || 1,
-          playerId: person.id,
-          personKind: kind,
-          number: person.number != null ? String(person.number) : '',
-          name: (person.lastName || '').toUpperCase(),
-        });
-        addedForPerson++;
+        for (let needIdx = 0; needIdx < remainingQty; needIdx++) {
+          const source = chooseMaterialSourceForNeed(data, item.id, targetPerson, size, usedTransfers);
+          if (source) {
+            usedTransfers.add(source.id);
+            const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
+            const sourceRow = {
+              itemName: item.name,
+              size: source.size || size,
+              sourceName: sourcePerson
+                ? `${sourcePerson.firstName} ${sourcePerson.lastName}`
+                : source.reservedFor ? 'Reservierter Lagerbestand' : 'Lagerbestand',
+              targetName: `${person.firstName} ${person.lastName}`,
+              oldNumber: inventoryEffectiveNumber(data, source),
+              newNumber: personNumberValue(targetPerson),
+              needsReprint: materialSourceNeedsReprint(data, source, targetPerson),
+            };
+            if (sourceRow.needsReprint) reprintRows.push(sourceRow);
+            else transferRows.push(sourceRow);
+            continue;
+          }
+          newLines.push({
+            id: `l_${Date.now()}_${idxP}_${idxItem}_${needIdx}_${Math.random().toString(36).slice(2, 5)}`,
+            itemType: item.id,
+            size,
+            qty: 1,
+            playerId: person.id,
+            personKind: kind,
+            number: person.number != null ? String(person.number) : '',
+            name: (person.lastName || '').toUpperCase(),
+          });
+          addedForPerson++;
+        }
       });
       if (addedForPerson === 0) skippedFully++;
     });
 
+    setSetSuggestionInfo({ transfers: transferRows, reprints: reprintRows, skippedExisting, skippedDuplicate, ordered: newLines.length });
     if (newLines.length === 0) {
-      alert(`Keine neuen Bestellzeilen erzeugt — alle ${candidates.length} Personen sind bereits mit diesem Set ausgestattet.`);
+      alert(`Keine neuen Bestellzeilen erzeugt. ${transferRows.length + reprintRows.length} Position(en) sind durch Umverteilung gedeckt.`);
       return;
     }
     const personsAdded = candidates.length - skippedFully;
@@ -4562,17 +5747,18 @@ function OrderForm({ data, onSave, onCancel }) {
     if (!title) return alert('Titel fehlt');
     if (lines.length === 0) return alert('Keine Positionen');
     onSave({
+      ...(order || {}),
       title, type,
       team: team || null,
       articleSupplierId, flockSupplierId, flockBy,
       notes, lines, sponsors, sponsorKey,
-      fromReports: [],
+      fromReports: order?.fromReports || [],
     });
   }
 
   return (
     <div className="bg-white border-2 border-stone-900 p-6 mb-4">
-      <h2 className="font-display text-2xl mb-4">NEUE BESTELLUNG</h2>
+      <h2 className="font-display text-2xl mb-4">{isEditing ? 'BESTELLUNG BEARBEITEN' : 'NEUE BESTELLUNG'}</h2>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
         <Field label="Titel">
           <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={title} onChange={e => setTitle(e.target.value)} placeholder="z.B. Saison 2026/27 1. Mannschaft" />
@@ -4692,18 +5878,20 @@ function OrderForm({ data, onSave, onCancel }) {
               defaultValue=""
             >
               <option value="">– Standard-Set anwenden –</option>
-              {allSets.map(set => {
+              {sortStandardSets(allSets).map((set, idx) => {
                 // Anzeigen: wieviele Personen würden was bekommen
-                const target = set.target;
-                const candidates =
-                  target === 'player' ? teamPlayers.length :
-                  target === 'coach' ? teamCoaches.length :
-                  teamPlayers.length + teamCoaches.length;
+                const playerCandidates = teamPlayers
+                  .filter(p => shouldReceiveSeasonEquipment(p) && !isUnmarkedActiveWithEquipment(data, p))
+                  .filter(p => setSupportsPerson(set, { ...p, _kind: 'player' }) || p.standardSetId === set.id).length;
+                const coachCandidates = teamCoaches
+                  .filter(c => shouldReceiveSeasonEquipment(c) && !isUnmarkedActiveWithEquipment(data, c))
+                  .filter(c => setSupportsPerson(set, { ...c, _kind: 'coach' }) || c.standardSetId === set.id).length;
+                const candidates = playerCandidates + coachCandidates;
                 if (candidates === 0) return null;
-                const targetLabel = target === 'player' ? 'Spieler' : target === 'coach' ? 'Trainer' : 'Sp.+Tr.';
+                const targetLabel = set.target === 'player' ? 'Spieler' : set.target === 'goalkeeper' ? 'Torwart' : set.target === 'coach' ? 'Trainer' : 'Sp.+Tr.';
                 return (
                   <option key={set.id} value={set.id}>
-                    {set.name} ({targetLabel}, max. {candidates} Personen)
+                    {setSortValue(set, idx)} - {set.name} ({targetLabel}, max. {candidates} Personen)
                   </option>
                 );
               })}
@@ -4711,6 +5899,24 @@ function OrderForm({ data, onSave, onCancel }) {
           </div>
         )}
       </div>
+
+      {setSuggestionInfo && (
+        <div className="text-xs p-3 mb-3" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
+          <div className="font-medium mb-1" style={{ color: 'var(--vereinsblau)' }}>
+            Set-Auswertung: {setSuggestionInfo.ordered} Bestellzeile(n), {(setSuggestionInfo.transfers.length + setSuggestionInfo.reprints.length)} Umverteilung/Umbeflockung(en), {setSuggestionInfo.skippedExisting} bereits gedeckte Position(en).
+          </div>
+          {setSuggestionInfo.transfers.length > 0 && (
+            <div className="mb-1">
+              <strong>Umverteilung: alt - neu:</strong> {setSuggestionInfo.transfers.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} ${r.oldNumber || '-'} -> ${r.targetName} ${r.newNumber || '-'}`).join('; ')}
+            </div>
+          )}
+          {setSuggestionInfo.reprints.length > 0 && (
+            <div>
+              <strong>Umbeflockung: alt - neu:</strong> {setSuggestionInfo.reprints.slice(0, 8).map(r => `${r.itemName} ${r.size}: ${r.sourceName} ${r.oldNumber || '-'} -> ${r.targetName} ${r.newNumber || '-'}`).join('; ')}
+            </div>
+          )}
+        </div>
+      )}
 
       {showPersonPicker && (
         <PersonPicker
@@ -4776,7 +5982,7 @@ function OrderForm({ data, onSave, onCancel }) {
                     </td>
                     <td className="p-1">
                       <select value={l.size} onChange={e => updateLine(l.id, 'size', e.target.value)} className="border border-stone-300 px-1 py-1 text-xs">
-                        {['XS','S','M','L','XL','XXL','3XL'].map(s => <option key={s}>{s}</option>)}
+                        {SIZE_OPTIONS.map(s => <option key={s}>{s}</option>)}
                       </select>
                     </td>
                     <td className="p-1">
@@ -4838,7 +6044,7 @@ function OrderForm({ data, onSave, onCancel }) {
       )}
 
       <div className="flex gap-2">
-        <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Bestellung anlegen</button>
+        <button onClick={submit} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">{isEditing ? 'Änderungen speichern' : 'Bestellung anlegen'}</button>
         <button onClick={onCancel} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
       </div>
     </div>
@@ -4958,7 +6164,7 @@ function PersonPicker({ data, team, mode = 'add', preselectQty, preselectSize, p
               </Field>
               <Field label="Größe">
                 <select value={size} onChange={e => setSize(e.target.value)} className="w-full border border-stone-300 px-3 py-2 text-sm">
-                  {['XS','S','M','L','XL','XXL','3XL'].map(s => <option key={s}>{s}</option>)}
+                  {SIZE_OPTIONS.map(s => <option key={s}>{s}</option>)}
                 </select>
               </Field>
             </div>
@@ -5054,7 +6260,7 @@ function PersonPicker({ data, team, mode = 'add', preselectQty, preselectSize, p
   );
 }
 
-function OrderDetail({ order, data, onBack, onStatus }) {
+function OrderDetail({ order, data, onBack, onStatus, onEdit }) {
   function downloadCSV(rows, filename) {
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -5347,7 +6553,12 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 
   return (
     <div>
-      <button onClick={onBack} className="text-sm mb-6 flex items-center gap-1 hover:underline" style={{ color: 'var(--vereinsblau)' }}><ArrowLeft size={14} /> Zurück zu Bestellungen</button>
+      <div className="flex flex-wrap gap-2 mb-6">
+        <button onClick={onBack} className="text-sm flex items-center gap-1 hover:underline" style={{ color: 'var(--vereinsblau)' }}><ArrowLeft size={14} /> Zurück zu Bestellungen</button>
+        {onEdit && (
+          <button onClick={() => onEdit(order)} className="text-xs border border-stone-300 px-3 py-1.5">Bestellung bearbeiten</button>
+        )}
+      </div>
       <div className="bg-white p-7 mb-4" style={{ border: '1px solid var(--rule)' }}>
         <div className="flex flex-wrap justify-between items-start gap-4">
           <div>
@@ -5519,7 +6730,12 @@ function OrderDetail({ order, data, onBack, onStatus }) {
 // Migrations-Helper: Wandelt alte standardSetPlayer/-Coach in die neue Liste um
 function migrateStandardSets(rawSettings) {
   const existing = Array.isArray(rawSettings?.standardSets) ? rawSettings.standardSets : null;
-  if (existing) return existing;
+  if (existing) return sortStandardSets(existing.map((set, idx) => ({
+    ...set,
+    setNumber: setSortValue(set, idx),
+    target: set.target || 'player',
+    isDefault: !!set.isDefault,
+  })));
 
   const migrated = [];
   if (Array.isArray(rawSettings?.standardSetPlayer) && rawSettings.standardSetPlayer.length > 0) {
@@ -5527,6 +6743,8 @@ function migrateStandardSets(rawSettings) {
       id: `set_player_default`,
       name: 'Spieler-Set (Erstausstattung)',
       target: 'player',
+      setNumber: 1,
+      isDefault: true,
       items: rawSettings.standardSetPlayer,
     });
   }
@@ -5535,10 +6753,12 @@ function migrateStandardSets(rawSettings) {
       id: `set_coach_default`,
       name: 'Trainer-Set (Erstausstattung)',
       target: 'coach',
+      setNumber: 10,
+      isDefault: true,
       items: rawSettings.standardSetCoach,
     });
   }
-  return migrated;
+  return sortStandardSets(migrated);
 }
 
 function SettingsView({ data, update }) {
@@ -5570,6 +6790,8 @@ function SettingsView({ data, update }) {
   const [renamingTeam, setRenamingTeam] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const [showItemImport, setShowItemImport] = useState(false);
+  const [settingsSection, setSettingsSection] = useState('general');
+  const [photoPreview, setPhotoPreview] = useState(null);
 
   function saveSettings() {
     // Beim Speichern entfernen wir die alten Felder, falls vorhanden — die neue
@@ -5626,7 +6848,21 @@ function SettingsView({ data, update }) {
   }
 
   function addItem() {
-    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30, replacementValue: 20 }]);
+    setItems([...items, { id: `custom_${Date.now()}`, name: 'Neuer Artikel', price: 30, replacementValue: 20, photo: '', reprintExcluded: false }]);
+  }
+
+  function updateItemPhoto(idx, file) {
+    if (!file) return;
+    if (file.size > 900_000) {
+      alert('Foto ist zu groß. Bitte ein komprimiertes Bild unter 900 KB verwenden.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setItems(items.map((item, itemIdx) => itemIdx === idx ? { ...item, photo: reader.result } : item));
+    };
+    reader.onerror = () => alert('Foto konnte nicht gelesen werden.');
+    reader.readAsDataURL(file);
   }
 
   function loadFCFDefaults() {
@@ -5674,7 +6910,32 @@ function SettingsView({ data, update }) {
     <div>
       <PageHeader number="09" label="KONFIGURATION" title="Einstellungen" subtitle="Mannschaften, Artikelkatalog, Backup" />
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
+        {[
+          { id: 'general', label: 'Allgemein' },
+          { id: 'teams', label: 'Mannschaften' },
+          { id: 'catalog', label: 'Artikel & Sets' },
+          { id: 'suppliers', label: 'Lieferanten' },
+          { id: 'deposit', label: 'Pfandregeln' },
+        ].map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setSettingsSection(tab.id)}
+            className="px-4 py-2 text-xs uppercase whitespace-nowrap"
+            style={{
+              background: settingsSection === tab.id ? 'var(--vereinsblau)' : 'white',
+              color: settingsSection === tab.id ? 'white' : 'var(--ink)',
+              border: '1px solid var(--rule)',
+              fontFamily: "'Bebas Neue', sans-serif",
+              letterSpacing: '0.15em',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'general' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-4">ALLGEMEIN</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Vereinsname">
@@ -5686,7 +6947,7 @@ function SettingsView({ data, update }) {
         </div>
       </div>
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'teams' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-4">MANNSCHAFTEN</h2>
         <p className="text-xs text-stone-500 mb-3">Mannschaften anlegen, umbenennen, sortieren oder löschen. Beim Umbenennen ziehen Spieler und Bestellungen automatisch mit.</p>
 
@@ -5751,12 +7012,12 @@ function SettingsView({ data, update }) {
         )}
       </div>
 
-      <SuppliersBlock data={data} update={update} />
+      {settingsSection === 'suppliers' && <SuppliersBlock data={data} update={update} />}
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
-        <div className="flex justify-between items-center mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'catalog' ? undefined : 'none' }}>
+        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4">
           <h2 className="font-display text-2xl">ARTIKELKATALOG</h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button onClick={() => setShowItemImport(true)} className="text-xs px-3 py-1.5 flex items-center gap-1"
               style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>
               <Download size={12} style={{ transform: 'rotate(180deg)' }} /> CSV importieren
@@ -5781,12 +7042,15 @@ function SettingsView({ data, update }) {
           />
         )}
 
+        <div className="overflow-x-auto">
+          <div className="min-w-[980px]">
         <div className="grid grid-cols-12 gap-2 text-xs uppercase tracking-wider mb-2" style={{ color: 'var(--ink-mute)' }}>
           <div className="col-span-2">Art.-Nr.</div>
           <div className="col-span-3">Artikel</div>
           <div className="col-span-3">Lieferant</div>
-          <div className="col-span-2 text-right">Preis €</div>
+          <div className="col-span-1 text-right">Preis €</div>
           <div className="col-span-1 text-right">Ersatz €</div>
+          <div className="col-span-1 text-center">Flock</div>
           <div className="col-span-1"></div>
         </div>
         <div className="space-y-2">
@@ -5795,25 +7059,44 @@ function SettingsView({ data, update }) {
               <input className="col-span-2 border border-stone-300 px-2 py-2 text-sm font-mono" value={it.articleNumber || ''}
                 placeholder="z.B. T-12345"
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, articleNumber: e.target.value } : i))} />
-              <input className="col-span-3 border border-stone-300 px-3 py-2 text-sm" value={it.name}
-                onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
+              <div className="col-span-3 flex items-center gap-2">
+                {itemPhoto(it, 'w-9 h-9', setPhotoPreview)}
+                <input className="flex-1 min-w-0 border border-stone-300 px-3 py-2 text-sm" value={it.name}
+                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, name: e.target.value } : i))} />
+              </div>
               <select className="col-span-3 border border-stone-300 px-2 py-2 text-sm" value={it.supplierId || ''}
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, supplierId: e.target.value || null } : i))}>
                 <option value="">– kein Lieferant –</option>
                 {(data.suppliers || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
-              <input type="number" step="0.01" className="col-span-2 border border-stone-300 px-2 py-2 text-sm text-right"
+              <input type="number" step="0.01" className="col-span-1 border border-stone-300 px-2 py-2 text-sm text-right"
                 value={Number.isFinite(it.price) ? it.price : 0}
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, price: parseFloat(e.target.value) || 0 } : i))} />
               <input type="number" step="0.01" className="col-span-1 border border-stone-300 px-2 py-2 text-sm text-right"
                 value={Number.isFinite(it.replacementValue) ? it.replacementValue : ''}
                 placeholder="–"
                 onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, replacementValue: e.target.value === '' ? null : (parseFloat(e.target.value) || 0) } : i))} />
-              <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="col-span-1 text-stone-400 hover:text-red-600 p-1 justify-self-end"><Trash2 size={14} /></button>
+              <label className="col-span-1 flex items-center justify-center gap-1 text-[10px] cursor-pointer" title="Artikel nicht für Umflockung verwenden">
+                <input
+                  type="checkbox"
+                  checked={!!it.reprintExcluded}
+                  onChange={e => setItems(items.map((i, ix) => ix === idx ? { ...i, reprintExcluded: e.target.checked } : i))}
+                />
+                aus
+              </label>
+              <div className="col-span-1 flex justify-end gap-1">
+                <label className="inline-flex items-center gap-1 px-2 py-1 text-xs cursor-pointer hover:underline" style={{ color: 'var(--vereinsblau)' }} title={it.photo ? 'Foto ersetzen' : 'Foto hinzufügen'}>
+                  <FileText size={13} /> Foto
+                  <input type="file" accept="image/*" className="hidden" onChange={e => updateItemPhoto(idx, e.target.files?.[0])} />
+                </label>
+                <button onClick={() => setItems(items.filter((_, ix) => ix !== idx))} className="text-stone-400 hover:text-red-600 p-1" title="Löschen"><Trash2 size={14} /></button>
+              </div>
             </div>
           ))}
         </div>
-        <div className="mt-3 text-xs flex justify-between items-center" style={{ color: 'var(--ink-mute)' }}>
+          </div>
+        </div>
+        <div className="mt-3 text-xs flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3" style={{ color: 'var(--ink-mute)' }}>
           <span>Summe aktueller Artikelwerte (Neupreis): {items.reduce((s, i) => s + (i.price || 0), 0).toFixed(2)} €</span>
           <button onClick={loadFCFDefaults}
             className="px-3 py-1.5 text-xs uppercase"
@@ -5823,7 +7106,7 @@ function SettingsView({ data, update }) {
         </div>
       </div>
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'deposit' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">PFANDREGELN</h2>
         <p className="text-xs text-stone-500 mb-4">Wie wird bei der Rückgabe abgerechnet? Wähle das Modell, das zur Pfandordnung des Vereins passt.</p>
 
@@ -5949,7 +7232,7 @@ function SettingsView({ data, update }) {
 
       {/* Folgende Block (alter Wochenbericht-Versand) wird unverändert weitergeführt */}
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'deposit' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">PFAND- & KLEIDERORDNUNG (FCF, STAND 2025)</h2>
         <p className="text-xs text-stone-500 mb-4">Diese Regelung ist im aktuellen Pauschal-Modus hinterlegt. Ein Auszug für die Spielersicht — die vollständige Ordnung gibt's als PDF-Anhang.</p>
         <ol className="text-sm space-y-2 pl-5 list-decimal" style={{ color: 'var(--ink-soft)' }}>
@@ -5964,9 +7247,9 @@ function SettingsView({ data, update }) {
         </ol>
       </div>
 
-      <SuppliersBlock data={data} update={update} />
+      {false && <SuppliersBlock data={data} update={update} />}
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'catalog' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">STANDARD-SETS (ERSTAUSSTATTUNG)</h2>
         <p className="text-xs text-stone-500 mb-4">
           Lege beliebig viele Sets an — etwa „Erstausstattung Senioren", „Trainer-Set 1. Mannschaft" oder „Jugend-Basis". Pro Set wählst du, ob es für Spieler, Trainer oder beide gilt. In der Bestellung erscheint ein Auswahlmenü mit allen passenden Sets, das nur Personen ohne diese Ausstattung berücksichtigt.
@@ -5979,7 +7262,7 @@ function SettingsView({ data, update }) {
         />
       </div>
 
-      <div className="bg-white border border-stone-200 p-6 mb-4">
+      <div className="bg-white border border-stone-200 p-6 mb-4" style={{ display: settingsSection === 'general' ? undefined : 'none' }}>
         <h2 className="font-display text-2xl mb-2">WOCHENBERICHT-VERSAND (SMTP)</h2>
         <p className="text-xs text-stone-500 mb-4">
           Aus den eingegangenen Bedarfsmeldungen wird ein Wochenbericht erzeugt und per E-Mail versendet. SMTP-Zugangsdaten werden als Umgebungsvariablen in Vercel hinterlegt — siehe Anleitung im README oder unten.
@@ -6064,6 +7347,14 @@ function SettingsView({ data, update }) {
           ))}
         </div>
       </div>
+      {photoPreview && (
+        <ImageLightbox
+          title={photoPreview.name || 'Artikel-Foto'}
+          subtitle={photoPreview.articleNumber ? `[${photoPreview.articleNumber}]` : 'Artikelkatalog'}
+          url={photoPreview.photo}
+          onClose={() => setPhotoPreview(null)}
+        />
+      )}
     </div>
   );
 }
@@ -6077,13 +7368,13 @@ function StandardSetsManager({ items, sets, onChange }) {
 
   function addSet() {
     const id = `set_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-    const newSet = { id, name: 'Neues Set', target: 'player', items: [] };
+    const newSet = { id, setNumber: sets.length + 1, name: 'Neues Set', target: 'player', isDefault: false, items: [] };
     onChange([...sets, newSet]);
     setOpenSetId(id);
   }
 
   function updateSet(id, updates) {
-    onChange(sets.map(s => s.id === id ? { ...s, ...updates } : s));
+    onChange(sortStandardSets(sets.map(s => s.id === id ? { ...s, ...updates } : s)));
   }
 
   function removeSet(id) {
@@ -6098,13 +7389,14 @@ function StandardSetsManager({ items, sets, onChange }) {
     const original = sets.find(s => s.id === id);
     if (!original) return;
     const newId = `set_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
-    const copy = { ...original, id: newId, name: `${original.name} (Kopie)` };
+    const copy = { ...original, id: newId, setNumber: sets.length + 1, name: `${original.name} (Kopie)`, isDefault: false };
     onChange([...sets, copy]);
     setOpenSetId(newId);
   }
 
   function targetLabel(target) {
     if (target === 'player') return 'Nur Spieler';
+    if (target === 'goalkeeper') return 'Nur Torwart';
     if (target === 'coach') return 'Nur Trainer';
     return 'Spieler + Trainer';
   }
@@ -6124,7 +7416,7 @@ function StandardSetsManager({ items, sets, onChange }) {
         </div>
       ) : (
         <div className="space-y-2">
-          {sets.map(set => {
+          {sortStandardSets(sets).map((set, idx) => {
             const totalPieces = (set.items || []).reduce((s, r) => s + (Number(r.qty) || 0), 0);
             const isOpen = openSetId === set.id;
             return (
@@ -6136,9 +7428,9 @@ function StandardSetsManager({ items, sets, onChange }) {
                   >
                     <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{isOpen ? '▾' : '▸'}</span>
                     <div>
-                      <div className="font-medium">{set.name}</div>
+                      <div className="font-medium">{setSortValue(set, idx)} - {set.name}</div>
                       <div className="text-xs mt-0.5" style={{ color: 'var(--ink-mute)' }}>
-                        {targetLabel(set.target)} · {(set.items || []).length} Artikel · {totalPieces} Teile
+                        {targetLabel(set.target)} · {(set.items || []).length} Artikel · {totalPieces} Teile{set.isDefault ? ' · Standard' : ''}
                       </div>
                     </div>
                   </button>
@@ -6155,6 +7447,15 @@ function StandardSetsManager({ items, sets, onChange }) {
                 {isOpen && (
                   <div className="p-4 border-t border-stone-200" style={{ background: 'var(--paper)' }}>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                      <Field label="Set-Nr.">
+                        <input
+                          type="number"
+                          min="1"
+                          className="w-full border border-stone-300 px-3 py-2 text-sm"
+                          value={setSortValue(set, idx)}
+                          onChange={e => updateSet(set.id, { setNumber: parseInt(e.target.value) || 1 })}
+                        />
+                      </Field>
                       <Field label="Set-Name">
                         <input
                           className="w-full border border-stone-300 px-3 py-2 text-sm"
@@ -6170,10 +7471,18 @@ function StandardSetsManager({ items, sets, onChange }) {
                           onChange={e => updateSet(set.id, { target: e.target.value })}
                         >
                           <option value="player">Nur Spieler</option>
+                          <option value="goalkeeper">Nur Torwart</option>
                           <option value="coach">Nur Trainer</option>
                           <option value="both">Spieler und Trainer</option>
                         </select>
                       </Field>
+                      <label className="flex items-start gap-3 p-3 sm:col-span-2 cursor-pointer" style={{ border: '1px solid var(--rule)', background: set.isDefault ? '#F1ECDF' : 'white' }}>
+                        <input type="checkbox" checked={!!set.isDefault} onChange={e => updateSet(set.id, { isDefault: e.target.checked })} className="mt-1" />
+                        <div>
+                          <div className="text-sm font-medium">Als Standard verwenden</div>
+                          <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Wird automatisch vorgeschlagen, wenn keine Person ein eigenes Set zugeordnet hat.</div>
+                        </div>
+                      </label>
                     </div>
 
                     <SetItemsEditor
@@ -6878,7 +8187,7 @@ function ReportsView({ data, update }) {
       return {
         id: `l_${Date.now()}_${idx}`,
         itemType: r.item,
-        size: person?.size || 'L',
+        size: getPersonItemSize(person, r.item),
         qty: 1,
         playerId: person?.id || '',
         personKind,
@@ -6950,11 +8259,15 @@ function ReportsView({ data, update }) {
 
   function getPlayer(team, number) {
     // Spieler: numerisch matchen
-    const player = data.players.find(p => p.team === team && String(p.number) === String(number));
+    const player = [...(data.players || [])]
+      .sort((a, b) => (Number(!!a.seasonExit) - Number(!!b.seasonExit)) || (Number(!!b.seasonEntry) - Number(!!a.seasonEntry)))
+      .find(p => p.team === team && String(p.number) === String(number));
     if (player) return player;
     // Trainer: alphabetisch matchen, case-insensitive (Initialen)
     const initials = String(number || '').trim().toUpperCase();
-    return (data.coaches || []).find(c => c.team === team && String(c.number || '').trim().toUpperCase() === initials);
+    return [...(data.coaches || [])]
+      .sort((a, b) => (Number(!!a.seasonExit) - Number(!!b.seasonExit)) || (Number(!!b.seasonEntry) - Number(!!a.seasonEntry)))
+      .find(c => c.team === team && String(c.number || '').trim().toUpperCase() === initials);
   }
   function getItem(itemId) {
     return data.items.find(i => i.id === itemId);
@@ -7082,7 +8395,7 @@ function ReportsView({ data, update }) {
       lines.push({
         id: `l_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         itemType: r.item,
-        size: player?.size || 'L',
+        size: getPersonItemSize(player, r.item),
         qty: 1,
         playerId: player?.id || '',
         personKind,
