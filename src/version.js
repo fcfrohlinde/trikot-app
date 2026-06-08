@@ -1,8 +1,28 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.30';
+export const APP_VERSION = '1.14.32';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.32',
+    date: '2026-06-08',
+    changes: [
+      'Lagerbestand zaehlt nicht mehr nur den Rohstatus lager, sondern alle nicht wirklich ausgegebenen und nicht verlorenen Bestandsteile',
+      'Altbestand oder inkonsistent eingebuchte Teile mit Status ausgegeben ohne gueltige Person werden im Materialfilter als Lager angezeigt',
+      'Materialliste, Dashboard, Artikelsuche, Sponsoruebersicht und Bestands-PDF nutzen dieselbe Lager-/Ausgegeben-Klassifizierung',
+      'Team-Sichtbarkeit fuer Lagerware nutzt ebenfalls die neue Bestandsklassifizierung',
+    ],
+  },
+  {
+    version: '1.14.31',
+    date: '2026-06-08',
+    changes: [
+      'Saison-Ruecklauf mit gleicher Nummer und Groesse wird global fuer den passenden Eintritt priorisiert',
+      'Ruecklaufteile von austretenden Spielern/Trainern koennen nicht mehr vorher als Umbeflockung fuer andere Nummern verbraucht werden',
+      'Aeltere Rueckgaben ohne gespeicherte Nummer werden ueber Ruecklaufdaten, Name, Mannschaft und Saison-Austritt robuster zugeordnet',
+      'Material- und Bestellvorschlaege zeigen Saison-Ruecklauf deutlicher als Umverteilung an',
+    ],
+  },
   {
     version: '1.14.30',
     date: '2026-06-08',

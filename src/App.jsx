@@ -70,16 +70,51 @@ function findPerson(data, id) {
   return allPersons(data).find(p => p.id === id);
 }
 
+function normalizeInventoryStatus(inv) {
+  return String(inv?.status || 'lager').trim().toLowerCase();
+}
+
+function inventoryAssignedPerson(data, inv) {
+  return inv?.assignedTo ? findPerson(data, inv.assignedTo) : null;
+}
+
+function inventoryIsLost(inv) {
+  return ['verloren', 'lost', 'missing', 'fehlt'].includes(normalizeInventoryStatus(inv));
+}
+
+function inventoryIsIssued(data, inv) {
+  return normalizeInventoryStatus(inv) === 'ausgegeben' && !!inventoryAssignedPerson(data, inv);
+}
+
+function inventoryIsInStock(data, inv) {
+  if (!inv || inventoryIsLost(inv)) return false;
+  return !inventoryIsIssued(data, inv);
+}
+
+function inventoryStatusLabel(data, inv) {
+  if (inventoryIsIssued(data, inv)) return 'Ausgegeben';
+  if (inventoryIsInStock(data, inv)) return 'Lager';
+  if (inventoryIsLost(inv)) return 'Verloren';
+  return inv?.status || 'Unbekannt';
+}
+
 function personNumberValue(person) {
   if (!person || person.number === undefined || person.number === null || person.number === '') return '';
   return person._kind === 'coach' ? String(person.number).trim().toUpperCase() : String(person.number).trim();
+}
+
+function normalizePersonKind(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (['player', 'spieler'].includes(raw)) return 'player';
+  if (['coach', 'trainer'].includes(raw)) return 'coach';
+  return raw;
 }
 
 function inventoryMatchesPersonNumber(inv, person) {
   const invNumber = inv.assignedNumber === undefined || inv.assignedNumber === null ? '' : String(inv.assignedNumber).trim().toUpperCase();
   const personNumber = personNumberValue(person).toUpperCase();
   if (!invNumber || !personNumber || invNumber !== personNumber) return false;
-  const invKind = inv.personKind || person._kind;
+  const invKind = normalizePersonKind(inv.personKind || person._kind);
   return invKind === person._kind;
 }
 
@@ -216,7 +251,7 @@ function inventoryEffectiveNumber(data, inv) {
   const owner = findPerson(data, inv?.assignedTo);
   const ownerNumber = personNumberValue(owner).toUpperCase();
   if (ownerNumber) return ownerNumber;
-  if (inv?.status === 'lager' && (inv?.assignedName || inv?.returnedName)) {
+  if (inventoryIsInStock(data, inv) && (inv?.assignedName || inv?.returnedName)) {
     const invName = normalizeFlockName(inv.assignedName || inv.returnedName);
     const invTeam = normalizeTeamKey(inv.team || inv.returnedTeam);
     const invKind = inv.personKind || '';
@@ -240,7 +275,7 @@ function inventoryMatchesPersonNumberInData(data, inv, person) {
   const personNumber = personNumberValue(person).toUpperCase();
   if (!invNumber || !personNumber || invNumber !== personNumber) return false;
   const owner = findPerson(data, inv?.assignedTo);
-  const invKind = inv?.personKind || owner?._kind || person?._kind;
+  const invKind = normalizePersonKind(inv?.personKind || owner?._kind || person?._kind);
   return invKind === person?._kind;
 }
 
@@ -258,10 +293,13 @@ function inventoryMatchesPersonIdentityInData(data, inv, person) {
   return inventoryMatchesPersonNumberInData(data, inv, person) && inventoryMatchesPersonName(inv, person);
 }
 
-function materialSourceNeedsReprint(data, inv, person) {
+function materialSourceNeedsReprint(data, inv, person, context = {}) {
   if (!inv) return false;
-  if (inv.status === 'ausgegeben') {
+  if (inventoryIsIssued(data, inv)) {
     return !inventoryMatchesPersonNumberInData(data, inv, person);
+  }
+  if (context.itemId && seasonStockMatchesTarget(data, inv, person, context.itemId, context.size, context)) {
+    return false;
   }
   const hasNumber = inventoryEffectiveNumber(data, inv) !== '';
   const hasName = inv.assignedName !== undefined && inv.assignedName !== null && String(inv.assignedName).trim() !== '';
@@ -278,12 +316,114 @@ function sourceReprintExcluded(data, inv, person) {
   return !!inv?.reprintExcluded || (itemReprintExcluded(data, inv?.itemType) && materialSourceNeedsReprint(data, inv, person));
 }
 
+function inventoryLooksReturned(inv) {
+  return !!(
+    inv?.returnedAt
+    || inv?.returnedFrom
+    || inv?.returnedName
+    || inv?.returnedNumber
+    || Number(inv?.seasonsUsed || 0) > 0
+  );
+}
+
+function seasonExitSourceOwner(data, inv, itemId, size, options = {}) {
+  const directOwner = findPerson(data, inv?.assignedTo) || findPerson(data, inv?.returnedFrom);
+  const wantedSize = normalizeSizeKey(size || inv?.size || '');
+  const invNumber = inventoryEffectiveNumber(data, inv);
+  const invName = normalizeFlockName(inv?.assignedName || inv?.returnedName);
+  const invTeam = normalizeTeamKey(inv?.team || inv?.returnedTeam);
+  const invKind = normalizePersonKind(inv?.personKind);
+  const allowCrossTeam = !!options.allowCrossTeam;
+
+  function ownerFits(owner, requireNumber = false) {
+    if (!owner || !seasonFlag(owner.seasonExit) || seasonFlag(owner.seasonEntry)) return false;
+    if (invKind && owner._kind !== invKind) return false;
+    if (!allowCrossTeam && invTeam && normalizeTeamKey(owner.team) !== invTeam) return false;
+    if (wantedSize && itemId && normalizeSizeKey(getPersonItemSize(owner, itemId)) !== wantedSize) return false;
+    if (invName && normalizeFlockName(owner.lastName) !== invName) return false;
+    if (requireNumber && invNumber && personNumberValue(owner).toUpperCase() !== invNumber) return false;
+    return true;
+  }
+
+  if (ownerFits(directOwner, false)) return directOwner;
+
+  const candidates = allPersons(data).filter(owner => ownerFits(owner, true));
+  if (candidates.length === 1) return candidates[0];
+  if (invName) return candidates.find(owner => normalizeFlockName(owner.lastName) === invName) || null;
+  return null;
+}
+
+function seasonSourceNumber(data, inv, owner = null) {
+  return inventoryEffectiveNumber(data, inv) || personNumberValue(owner).toUpperCase();
+}
+
+function personNeedsStandardSetItem(data, person, itemId, size) {
+  if (!person || !shouldPlanStandardSetInMaterial(data, person)) return false;
+  const sets = getPersonStandardSets(data.settings, person);
+  const wantedSize = size || getPersonItemSize(person, itemId);
+  const requested = sets.reduce((sum, set) => sum + (set.items || []).reduce((setSum, entry) => (
+    itemMatchesCatalogEntry(data, entry.itemId, itemId)
+      ? setSum + (Number(entry.qty) || 1)
+      : setSum
+  ), 0), 0);
+  if (requested <= 0) return false;
+  return requested > (
+    issuedQtyForPersonItem(data, person, itemId, wantedSize)
+    + openOrderedQtyForPersonItem(data, person, itemId, wantedSize)
+  );
+}
+
+function seasonStockMatchesTarget(data, inv, person, itemId, size, options = {}) {
+  if (!inv || !inventoryIsInStock(data, inv) || !person || !seasonFlag(person.seasonEntry)) return false;
+  if (!inventoryLooksReturned(inv) && !inv.assignedName && !inv.assignedNumber && !inv.returnedNumber) return false;
+  const wantedSize = size || getPersonItemSize(person, itemId);
+  if (!inventoryItemMatches(data, inv, itemId)) return false;
+  if (normalizeSizeKey(inv.size || wantedSize) !== normalizeSizeKey(wantedSize)) return false;
+  const owner = seasonExitSourceOwner(data, inv, itemId, wantedSize, options);
+  const sourceNumber = seasonSourceNumber(data, inv, owner);
+  const targetNumber = personNumberValue(person).toUpperCase();
+  if (!sourceNumber || !targetNumber || sourceNumber !== targetNumber) return false;
+  const sourceKind = normalizePersonKind(inv.personKind || owner?._kind || person._kind);
+  if (sourceKind && sourceKind !== person._kind) return false;
+  const allowCrossTeam = !!options.allowCrossTeam || person._kind === 'coach';
+  if (!allowCrossTeam) {
+    const sourceTeam = normalizeTeamKey(owner?.team || inv.team || inv.returnedTeam);
+    const targetTeam = normalizeTeamKey(person.team);
+    if (sourceTeam && targetTeam && sourceTeam !== targetTeam) return false;
+  }
+  return true;
+}
+
+function sourceHeldForOtherSeasonEntry(data, inv, currentPerson, itemId, size, options = {}) {
+  if (!inv || !inventoryIsInStock(data, inv)) return false;
+  if (!inventoryLooksReturned(inv) && !inv.assignedName && !inv.assignedNumber && !inv.returnedNumber) return false;
+  const owner = seasonExitSourceOwner(data, inv, itemId, size, options);
+  const sourceNumber = seasonSourceNumber(data, inv, owner);
+  if (!sourceNumber) return false;
+  const sourceKind = normalizePersonKind(inv.personKind || owner?._kind || currentPerson?._kind);
+  return allPersons(data).some(person => {
+    if (person.id === currentPerson?.id) return false;
+    if (!seasonFlag(person.seasonEntry) || seasonFlag(person.seasonExit)) return false;
+    if (sourceKind && person._kind !== sourceKind) return false;
+    if (personNumberValue(person).toUpperCase() !== sourceNumber) return false;
+    if (!seasonStockMatchesTarget(data, inv, person, itemId, size, options)) return false;
+    return personNeedsStandardSetItem(data, person, itemId, size);
+  });
+}
+
+function inventoryNumberForTarget(data, inv, person, itemId, size, options = {}) {
+  const direct = inventoryEffectiveNumber(data, inv);
+  if (direct) return direct;
+  const owner = seasonExitSourceOwner(data, inv, itemId, size, options);
+  return personNumberValue(owner).toUpperCase();
+}
+
 function stockReservedForOther(inv, person) {
   return inv?.reservedFor && inv.reservedFor !== person?.id;
 }
 
-function stockUsableForPerson(inv, person, options = {}) {
-  if (!inv || inv.status !== 'lager') return false;
+function stockUsableForPerson(data, inv, person, options = {}) {
+  if (!inv || !inventoryIsInStock(data, inv)) return false;
   if (stockReservedForOther(inv, person)) return false;
   const allowCrossTeam = !!options.allowCrossTeam || person?._kind === 'coach';
   if (!allowCrossTeam && inv.team && person?.team && normalizeTeamKey(inv.team) !== normalizeTeamKey(person.team)) return false;
@@ -293,7 +433,7 @@ function stockUsableForPerson(inv, person, options = {}) {
 function findStockCandidates(data, itemId, person, size, usedStock, options = {}) {
   const wantedSize = size || person?.size || 'L';
   return (data.inventory || []).filter(inv =>
-    stockUsableForPerson(inv, person, options) &&
+    stockUsableForPerson(data, inv, person, options) &&
     inventoryItemMatches(data, inv, itemId) &&
     normalizeSizeKey(inv.size || wantedSize) === normalizeSizeKey(wantedSize) &&
     !usedStock.has(inv.id)
@@ -307,19 +447,24 @@ function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock, opti
   const exactTransfer = findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, exactNumberOnly: true, allowCrossTeam: sourceOptions.allowCrossTeam });
   if (exactTransfer) return exactTransfer;
 
-  const reservedExact = stock.find(inv => inv.reservedFor === person?.id && inventoryMatchesPersonIdentityInData(data, inv, person));
+  const seasonStock = stock.find(inv => seasonStockMatchesTarget(data, inv, person, itemId, wantedSize, sourceOptions));
+  if (seasonStock) return seasonStock;
+
+  const allocatableStock = stock.filter(inv => !sourceHeldForOtherSeasonEntry(data, inv, person, itemId, wantedSize, sourceOptions));
+
+  const reservedExact = allocatableStock.find(inv => inv.reservedFor === person?.id && inventoryMatchesPersonIdentityInData(data, inv, person));
   if (reservedExact) return reservedExact;
 
-  const exactNumberStock = stock.find(inv => inventoryMatchesPersonNumberInData(data, inv, person) && !sourceReprintExcluded(data, inv, person));
+  const exactNumberStock = allocatableStock.find(inv => inventoryMatchesPersonNumberInData(data, inv, person) && !sourceReprintExcluded(data, inv, person));
   if (exactNumberStock) return exactNumberStock;
 
-  const exactStock = stock.find(inv => inventoryMatchesPersonIdentityInData(data, inv, person));
+  const exactStock = allocatableStock.find(inv => inventoryMatchesPersonIdentityInData(data, inv, person));
   if (exactStock) return exactStock;
 
-  const reservedStock = stock.find(inv => inv.reservedFor === person?.id && !sourceReprintExcluded(data, inv, person));
+  const reservedStock = allocatableStock.find(inv => inv.reservedFor === person?.id && !sourceReprintExcluded(data, inv, person));
   if (reservedStock) return reservedStock;
 
-  const reprintStock = stock.find(inv => !sourceReprintExcluded(data, inv, person) && !inventoryMatchesPersonIdentityInData(data, inv, person));
+  const reprintStock = allocatableStock.find(inv => !sourceReprintExcluded(data, inv, person) && !inventoryMatchesPersonIdentityInData(data, inv, person));
   if (reprintStock) return reprintStock;
 
   return findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, excludeReprintBlocked: true, allowCrossTeam: sourceOptions.allowCrossTeam });
@@ -332,7 +477,7 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock, options = 
   const allowCrossTeam = !!options.allowCrossTeam || person?._kind === 'coach';
   const candidates = (data.inventory || []).filter(inv => {
     if (usedStock.has(inv.id)) return false;
-    if (inv.status !== 'ausgegeben' || !inventoryItemMatches(data, inv, itemId)) return false;
+    if (!inventoryIsIssued(data, inv) || !inventoryItemMatches(data, inv, itemId)) return false;
     if (normalizeSizeKey(inv.size || wantedSize) !== normalizeSizeKey(wantedSize)) return false;
     const owner = findPerson(data, inv.assignedTo);
     const valid = owner
@@ -354,7 +499,7 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock, options = 
 }
 
 function personHasIssuedEquipment(data, personId) {
-  return (data.inventory || []).some(inv => inv.status === 'ausgegeben' && inv.assignedTo === personId);
+  return (data.inventory || []).some(inv => inventoryIsIssued(data, inv) && inv.assignedTo === personId);
 }
 
 function isUnmarkedActiveWithEquipment(data, person) {
@@ -389,7 +534,7 @@ function currentDraftQtyForPersonItem(lines, person, itemId, size, data = null) 
 function issuedQtyForPersonItem(data, person, itemId, size) {
   return (data.inventory || []).filter(inv =>
     inventoryItemMatches(data, inv, itemId) &&
-    inv.status === 'ausgegeben' &&
+    inventoryIsIssued(data, inv) &&
     inv.assignedTo === person?.id &&
     (!size || !inv.size || normalizeSizeKey(inv.size) === normalizeSizeKey(size))
   ).length;
@@ -524,7 +669,7 @@ function AppContent() {
       //  - Ausgegebene Teile sichtbar, wenn die Person zum erlaubten Team gehört
       //  - Lagerware: sichtbar wenn ohne Team (Altbestand) ODER wenn das Team erlaubt ist
       inventory: (rawData.inventory || []).filter(i => {
-        if (i.status === 'ausgegeben') {
+        if (inventoryIsIssued(rawData, i)) {
           return i.assignedTo && allowedPersonIds.has(i.assignedTo);
         }
         // Lager
@@ -568,7 +713,7 @@ function AppContent() {
         const allowedCoachIds = new Set((rawData?.coaches || []).filter(c => allowedTeams.has(c.team)).map(c => c.id));
         const allowedPersonIds = new Set([...allowedPlayerIds, ...allowedCoachIds]);
         const isVisible = (i) => {
-          if (i.status === 'ausgegeben') return i.assignedTo && allowedPersonIds.has(i.assignedTo);
+          if (inventoryIsIssued(rawData, i)) return i.assignedTo && allowedPersonIds.has(i.assignedTo);
           // Lager
           if (!i.team) return true;
           return allowedTeams.has(i.team);
@@ -851,7 +996,7 @@ function Dashboard({ data, setView }) {
   const playersWithMaterial = data.players.filter(p =>
     data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben')
   ).length;
-  const unusedItems = data.inventory.filter(i => i.status === 'lager').length;
+  const unusedItems = data.inventory.filter(i => inventoryIsInStock(data, i)).length;
   const totalDeposits = data.deposits.filter(d => !d.refunded).reduce((s, d) => s + d.amount, 0);
   const openOrders = data.orders.filter(o => o.status !== 'geliefert' && o.status !== 'storniert').length;
 
@@ -1311,12 +1456,15 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
         const source = chooseMaterialSourceForNeed(data, item.id, person, wantedSize, usedStock);
         const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
         if (sized) usedStock.add(sized.id);
-        const oldNumber = sized ? inventoryEffectiveNumber(data, sized) : '';
-        const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
+        const oldNumber = sized ? inventoryNumberForTarget(data, sized, person, item.id, wantedSize) : '';
+        const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person, { itemId: item.id, size: wantedSize });
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
         const returnedMatchingStock = sized?.status === 'lager'
-          && (inventoryEffectiveNumber(data, sized) || sized.assignedName || sized.returnedName)
-          && inventoryMatchesPersonNumberInData(data, sized, person);
+          && (
+            seasonStockMatchesTarget(data, sized, person, item.id, wantedSize)
+            || ((inventoryNumberForTarget(data, sized, person, item.id, wantedSize) || sized.assignedName || sized.returnedName)
+              && inventoryMatchesPersonNumberInData(data, sized, person))
+          );
         const action = (fromPerson || returnedMatchingStock)
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
           : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
@@ -1651,10 +1799,13 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
           if (sized) usedStock.add(sized.id);
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
-        const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
+        const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person, { itemId: item.id, size });
         const returnedMatchingStock = sized?.status === 'lager'
-          && (inventoryEffectiveNumber(data, sized) || sized.assignedName || sized.returnedName)
-          && inventoryMatchesPersonNumberInData(data, sized, person);
+          && (
+            seasonStockMatchesTarget(data, sized, person, item.id, size)
+            || ((inventoryNumberForTarget(data, sized, person, item.id, size) || sized.assignedName || sized.returnedName)
+              && inventoryMatchesPersonNumberInData(data, sized, person))
+          );
         const action = (fromPerson || returnedMatchingStock)
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
           : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
@@ -1664,7 +1815,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
             item,
             stock: sized,
             size: sized?.size || size,
-            oldNumber: sized ? inventoryEffectiveNumber(data, sized) : '',
+            oldNumber: sized ? inventoryNumberForTarget(data, sized, person, item.id, size) : '',
             newNumber: targetNumber,
             needsReprint,
             action,
@@ -2846,15 +2997,15 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
     (data.inventory || []).forEach(inv => {
       const item = (data.items || []).find(x => x.id === inv.itemType) || { id: inv.itemType, name: inv.itemName || inv.itemType };
       const person = findPerson(data, inv.assignedTo);
-      const invTeam = inv.status === 'ausgegeben' ? person?.team : inv.team;
+      const invTeam = inventoryIsIssued(data, inv) ? person?.team : inv.team;
       const numberMatch = !normalizedNumber || (person && matchedPersonIds.has(person.id)) || String(inv.assignedNumber || '').trim().toLowerCase() === normalizedNumber;
-      const teamMatch = activeTeam === 'alle' || invTeam === activeTeam || (!invTeam && inv.status === 'lager');
+      const teamMatch = activeTeam === 'alle' || invTeam === activeTeam || (!invTeam && inventoryIsInStock(data, inv));
       const itemMatch = activeItemId === 'alle' || inv.itemType === activeItemId;
       const personScopeMatch = activeScope === 'person' && normalizedNumber && person && matchedPersonIds.has(person.id);
       if (teamMatch && numberMatch && (itemMatch || personScopeMatch)) {
         rows.push({
           key: `inv_${inv.id}`,
-          status: inv.status === 'lager' ? 'Im Lager' : inv.status === 'ausgegeben' ? 'Beim Spieler/Trainer' : inv.status,
+          status: inventoryIsInStock(data, inv) ? 'Im Lager' : inventoryIsIssued(data, inv) ? 'Beim Spieler/Trainer' : inventoryStatusLabel(data, inv),
           item,
           size: inv.size || '',
           number: inv.assignedNumber || personNumberValue(person) || '',
@@ -3046,7 +3197,7 @@ function SponsorKitOverview({ data }) {
       sponsor: sponsorLabelForInventory(data, inv),
       team: person?.team || inv.team,
       itemName: inv.itemName,
-      status: inv.status === 'ausgegeben' ? 'ausgegeben' : 'lager',
+      status: inventoryIsIssued(data, inv) ? 'ausgegeben' : inventoryIsInStock(data, inv) ? 'lager' : normalizeInventoryStatus(inv),
     });
   });
 
@@ -3325,10 +3476,16 @@ function SeasonMaterialWorkArea({ data, update }) {
 
       usedSources.add(source.id);
       const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
-      const needsReprint = materialSourceNeedsReprint(data, source, target);
+      const seasonSourceOwner = source.status === 'lager'
+        ? seasonExitSourceOwner(data, source, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution })
+        : null;
+      const needsReprint = materialSourceNeedsReprint(data, source, target, { itemId: item.id, size: wantedSize, allowCrossTeam: allowCrossTeamRedistribution });
       const returnedMatchingStock = source.status === 'lager'
-        && (inventoryEffectiveNumber(data, source) || source.assignedName || source.returnedName)
-        && inventoryMatchesPersonNumberInData(data, source, target);
+        && (
+          seasonStockMatchesTarget(data, source, target, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution })
+          || ((inventoryNumberForTarget(data, source, target, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution }) || source.assignedName || source.returnedName)
+            && inventoryMatchesPersonNumberInData(data, source, target))
+        );
       const category = needsReprint ? 'umbeflockung' : (source.status === 'ausgegeben' || returnedMatchingStock) ? 'umverteilung' : 'ausgabe';
       result.push({
         id: `${source.id}_${target.id}_${item.id}_${result.length}`,
@@ -3339,12 +3496,12 @@ function SeasonMaterialWorkArea({ data, update }) {
         sourceLabel: sourcePerson
           ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
           : returnedMatchingStock
-            ? `Rücklauf Lager${source.assignedName ? ` ${source.assignedName}` : ''}${source.team ? ` (${source.team})` : ''}`
+            ? `Rücklauf Lager${(source.assignedName || source.returnedName || seasonSourceOwner?.lastName) ? ` ${source.assignedName || source.returnedName || seasonSourceOwner?.lastName}` : ''}${source.team ? ` (${source.team})` : ''}`
           : source.reservedFor
             ? 'Reservierter Lagerbestand'
             : source.team ? `Lagerbestand ${source.team}` : 'Lagerbestand',
         target,
-        oldNumber: inventoryEffectiveNumber(data, source),
+        oldNumber: inventoryNumberForTarget(data, source, target, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution }),
         newNumber: personNumberValue(target),
         sourceHint,
         orderId,
@@ -3729,11 +3886,13 @@ function InventoryView({ data, update }) {
   const [groupBy, setGroupBy] = useState('article'); // 'article' | 'team' | 'person'
   const [openGroups, setOpenGroups] = useState({}); // {groupKey: true}
   const [sort, setSort] = useState({ key: 'item', dir: 'asc' });
+  const stockCount = data.inventory.filter(i => inventoryIsInStock(data, i)).length;
+  const issuedCount = data.inventory.filter(i => inventoryIsIssued(data, i)).length;
 
   const filtered = data.inventory.filter(i => {
     if (filter === 'alle') return true;
-    if (filter === 'lager') return i.status === 'lager';
-    if (filter === 'ausgegeben') return i.status === 'ausgegeben';
+    if (filter === 'lager') return inventoryIsInStock(data, i);
+    if (filter === 'ausgegeben') return inventoryIsIssued(data, i);
     if (filter === 'markiert') return i.flagged;
     return i.itemType === filter;
   });
@@ -3747,14 +3906,14 @@ function InventoryView({ data, update }) {
       // Bei ausgegebenem Material gibt das Team der Person den Schlüssel,
       // bei Lagerware das Inventur-eigene team-Feld.
       let teamKey = '';
-      if (i.status === 'ausgegeben') {
+      if (inventoryIsIssued(data, i)) {
         const person = findPerson(data, i.assignedTo);
         teamKey = person?.team || '— ohne Team —';
       } else {
         teamKey = i.team || '— global —';
       }
       const person = findPerson(data, i.assignedTo);
-      const personLabel = i.status === 'lager'
+      const personLabel = inventoryIsInStock(data, i)
         ? `Lager ${teamKey}`
         : person
           ? `${personNumberValue(person) ? `${person._kind === 'coach' ? personNumberValue(person) : `#${personNumberValue(person)}`} ` : ''}${person.firstName} ${person.lastName}`
@@ -3762,7 +3921,7 @@ function InventoryView({ data, update }) {
       const key = groupBy === 'team'
         ? `team__${teamKey}`
         : groupBy === 'person'
-          ? `person__${i.status === 'lager' ? teamKey : (person?.id || 'unknown')}`
+          ? `person__${inventoryIsInStock(data, i) ? teamKey : (person?.id || 'unknown')}`
           : `${i.itemType}__${i.size || '–'}__${teamKey}`;
       if (!map.has(key)) {
         map.set(key, {
@@ -3785,8 +3944,8 @@ function InventoryView({ data, update }) {
       const sponsor = sponsorLabelForInventory(data, i);
       if (sponsor) g.sponsors.add(sponsor);
       g.total++;
-      if (i.status === 'lager') g.lager++;
-      if (i.status === 'ausgegeben') g.ausgegeben++;
+      if (inventoryIsInStock(data, i)) g.lager++;
+      if (inventoryIsIssued(data, i)) g.ausgegeben++;
       if (i.flagged) g.markiert++;
     });
     // Größen-Sortierung: XS, S, M, L, XL, XXL, dann Rest
@@ -3819,7 +3978,7 @@ function InventoryView({ data, update }) {
     if (sort.key === 'item') return compareValues(a.itemName, b.itemName, sort.dir);
     if (sort.key === 'number') return compareValues(assignedNumberLabel(a), assignedNumberLabel(b), sort.dir);
     if (sort.key === 'size') return compareValues(a.size, b.size, sort.dir);
-    if (sort.key === 'status') return compareValues(a.status, b.status, sort.dir);
+    if (sort.key === 'status') return compareValues(inventoryStatusLabel(data, a), inventoryStatusLabel(data, b), sort.dir);
     if (sort.key === 'assigned') return compareValues(assignedPersonLabel(a)?.title, assignedPersonLabel(b)?.title, sort.dir);
     if (sort.key === 'condition') return compareValues(getConditionFactors(data.settings)[a.condition]?.label || a.condition, getConditionFactors(data.settings)[b.condition]?.label || b.condition, sort.dir);
     return 0;
@@ -3992,6 +4151,8 @@ function InventoryView({ data, update }) {
     const conditionLabel = getConditionFactors(data.settings)[i.condition]?.label || i.condition;
     const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
     const sponsorLabel = sponsorLabelForInventory(data, i);
+    const isStock = inventoryIsInStock(data, i);
+    const isIssued = inventoryIsIssued(data, i);
     return (
       <tr key={i.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
         <td className="p-3 pl-10 text-sm" style={{ color: 'var(--ink-mute)' }}>
@@ -4009,8 +4170,8 @@ function InventoryView({ data, update }) {
         </td>
         <td className="p-3 hidden sm:table-cell text-sm">{i.size}</td>
         <td className="p-3 hidden md:table-cell">
-          <span className={`inline-block px-2 py-0.5 text-xs ${i.status === 'lager' ? 'bg-stone-100 text-stone-700' : 'bg-emerald-50 text-emerald-700'}`}>
-            {i.status === 'lager' ? 'Lager' : 'Ausgegeben'}
+          <span className={`inline-block px-2 py-0.5 text-xs ${isStock ? 'bg-stone-100 text-stone-700' : isIssued ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+            {inventoryStatusLabel(data, i)}
           </span>
           {i.flagged && (
             <span className="inline-block px-2 py-0.5 text-xs ml-1" style={{ background: '#F5EBDD', color: 'var(--warn)' }}
@@ -4040,13 +4201,15 @@ function InventoryView({ data, update }) {
         </td>
         <td className="p-3 hidden lg:table-cell text-sm" style={{ color: 'var(--ink-soft)' }}>{conditionLabel}</td>
         <td className="p-3 text-right whitespace-nowrap">
-          {i.status === 'lager' ? (
+          {isStock ? (
             <>
               <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">{i.reservedFor ? 'Reservierung' : 'Ausgeben'}</button>
               {i.reservedFor && <button onClick={() => clearReservation(i.id)} className="text-xs border border-stone-300 px-2 py-1 ml-1">LÃ¶sen</button>}
             </>
-          ) : (
+          ) : isIssued ? (
             <button onClick={() => unassign(i.id)} className="text-xs border border-stone-300 px-2 py-1">Zurück</button>
+          ) : (
+            <span className="text-xs text-stone-400">-</span>
           )}
           <button onClick={() => remove(i.id)} className="text-stone-400 hover:text-red-600 p-1 ml-1">
             <Trash2 size={14} />
@@ -4059,7 +4222,7 @@ function InventoryView({ data, update }) {
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
-        <PageHeader number="05" label="AUSSTATTUNG" title="Material & Bestand" subtitle={`${data.inventory.length} Teile gesamt · ${data.inventory.filter(i => i.status === 'lager').length} im Lager · ${data.items.length} Katalog-Artikel`} />
+        <PageHeader number="05" label="AUSSTATTUNG" title="Material & Bestand" subtitle={`${data.inventory.length} Teile gesamt · ${stockCount} im Lager · ${data.items.length} Katalog-Artikel`} />
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => setShowPrintDialog(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
             style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
@@ -4080,8 +4243,8 @@ function InventoryView({ data, update }) {
         <div className="flex gap-2 overflow-x-auto pb-1">
           {[
             { id: 'alle', label: `Alle (${data.inventory.length})` },
-            { id: 'lager', label: `Im Lager (${data.inventory.filter(i => i.status === 'lager').length})` },
-            { id: 'ausgegeben', label: `Ausgegeben (${data.inventory.filter(i => i.status === 'ausgegeben').length})` },
+            { id: 'lager', label: `Im Lager (${stockCount})` },
+            { id: 'ausgegeben', label: `Ausgegeben (${issuedCount})` },
             { id: 'markiert', label: `Markiert (${data.inventory.filter(i => i.flagged).length})` },
           ].map(f => (
             <button key={f.id} onClick={() => setFilter(f.id)}
@@ -4225,6 +4388,8 @@ function InventoryView({ data, update }) {
                   const numberLabel = assignedNumberLabel(i);
                   const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
                   const sponsorLabel = sponsorLabelForInventory(data, i);
+                  const isStock = inventoryIsInStock(data, i);
+                  const isIssued = inventoryIsIssued(data, i);
                   return (
                     <tr key={i.id} className="border-t border-stone-100">
                       <td className="p-3 font-medium">
@@ -4241,8 +4406,8 @@ function InventoryView({ data, update }) {
                       </td>
                       <td className="p-3 hidden sm:table-cell">{i.size}</td>
                       <td className="p-3 hidden md:table-cell">
-                        <span className={`inline-block px-2 py-0.5 text-xs ${i.status === 'lager' ? 'bg-stone-100 text-stone-700' : 'bg-emerald-50 text-emerald-700'}`}>
-                          {i.status === 'lager' ? 'Lager' : 'Ausgegeben'}
+                        <span className={`inline-block px-2 py-0.5 text-xs ${isStock ? 'bg-stone-100 text-stone-700' : isIssued ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                          {inventoryStatusLabel(data, i)}
                         </span>
                         {i.flagged && (
                           <span className="inline-block px-2 py-0.5 text-xs ml-1" style={{ background: '#F5EBDD', color: 'var(--warn)' }}
@@ -4272,7 +4437,7 @@ function InventoryView({ data, update }) {
                       </td>
                       <td className="p-3 hidden lg:table-cell text-stone-600">{getConditionFactors(data.settings)[i.condition]?.label || i.condition}</td>
                       <td className="p-3 text-right whitespace-nowrap">
-                        {i.status === 'lager' ? (
+                        {isStock ? (
                           <button onClick={() => setShowAssign(i)} className="text-xs bg-stone-900 text-white px-2 py-1">Ausgeben</button>
                         ) : (
                           <button onClick={() => unassign(i.id)} className="text-xs border border-stone-300 px-2 py-1">Zurück</button>
@@ -4698,11 +4863,11 @@ function InventoryPrintDialog({ data, onClose }) {
 
   // Vorschau-Filterung
   const filtered = (data.inventory || []).filter(inv => {
-    if (filterStatus === 'lager' && inv.status !== 'lager') return false;
-    if (filterStatus === 'ausgegeben' && inv.status !== 'ausgegeben') return false;
+    if (filterStatus === 'lager' && !inventoryIsInStock(data, inv)) return false;
+    if (filterStatus === 'ausgegeben' && !inventoryIsIssued(data, inv)) return false;
     if (filterStatus === 'markiert' && !inv.flagged) return false;
 
-    if (filterPersonKind === 'lager' && inv.status !== 'lager') return false;
+    if (filterPersonKind === 'lager' && !inventoryIsInStock(data, inv)) return false;
     if (filterPersonKind === 'player' || filterPersonKind === 'coach') {
       const person = findPerson(data, inv.assignedTo);
       if (!person) return false;
@@ -4712,7 +4877,7 @@ function InventoryPrintDialog({ data, onClose }) {
 
     if (filterTeam) {
       const person = findPerson(data, inv.assignedTo);
-      if (inv.status === 'lager') {
+      if (inventoryIsInStock(data, inv)) {
         // Lagerware: zum Team gehört, wenn das inv.team passt oder global (kein team)
         if (inv.team && inv.team !== filterTeam) return false;
         // Wenn der Filter explizit „nur ausgegeben" verlangt, ist Lager schon oben raus.
@@ -4776,7 +4941,7 @@ function InventoryPrintDialog({ data, onClose }) {
         const groups = {};
         filtered.forEach(inv => {
           let key, label, kind;
-          if (inv.status === 'lager') {
+          if (inventoryIsInStock(data, inv)) {
             key = '__lager__';
             label = 'IM LAGER';
             kind = 'lager';
@@ -4833,7 +4998,7 @@ function InventoryPrintDialog({ data, onClose }) {
               inv.size,
               getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
               [
-                inv.status === 'lager' ? 'Lager' : 'Ausgegeben',
+                inventoryStatusLabel(data, inv),
                 inv.flagged ? '⚠ markiert' : null,
                 inv.needsReprint ? `Umbeflocken ${inv.reprintFromNumber || 'ohne'} → ${inv.reprintToNumber || inv.assignedNumber || 'neu'}` : null,
               ].filter(Boolean).join(' · '),
@@ -4864,7 +5029,7 @@ function InventoryPrintDialog({ data, onClose }) {
             const isCoach = (inv.personKind || p?._kind) === 'coach';
             const number = inv.assignedNumber || p?.number;
             const numberLabel = number ? (isCoach ? `${number} (T)` : `#${number}`) : '';
-            const personLabel = inv.status === 'lager'
+            const personLabel = inventoryIsInStock(data, inv)
               ? (inv.assignedName ? `Lager · ${inv.assignedName}` : '— Lager —')
               : p
                 ? `${p.firstName} ${p.lastName}${isCoach ? ' (T)' : ''}`
@@ -4878,7 +5043,7 @@ function InventoryPrintDialog({ data, onClose }) {
               team: p?.team || '',
               condition: getConditionFactors(data.settings)[inv.condition]?.label || inv.condition || '–',
               status: [
-                inv.status === 'lager' ? 'Lager' : 'Ausgegeben',
+                inventoryStatusLabel(data, inv),
                 inv.flagged ? '⚠' : null,
                 inv.needsReprint ? `Umbeflocken ${inv.reprintFromNumber || 'ohne'} → ${inv.reprintToNumber || inv.assignedNumber || 'neu'}` : null,
               ].filter(Boolean).join(' · '),
@@ -6143,16 +6308,20 @@ function OrderForm({ data, order, onSave, onCancel }) {
           if (source) {
             usedTransfers.add(source.id);
             const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
+            const seasonSourceOwner = source.status === 'lager'
+              ? seasonExitSourceOwner(data, source, item.id, size, { allowCrossTeam: allowCrossTeamRedistribution })
+              : null;
             const sourceRow = {
               itemName: item.name,
               size: source.size || size,
               sourceName: sourcePerson
                 ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
-                : source.reservedFor ? 'Reservierter Lagerbestand' : source.team ? `Lagerbestand (${source.team})` : 'Lagerbestand',
+                : seasonSourceOwner ? `Rücklauf Lager ${seasonSourceOwner.firstName} ${seasonSourceOwner.lastName}${source.team ? ` (${source.team})` : ''}`
+                  : source.reservedFor ? 'Reservierter Lagerbestand' : source.team ? `Lagerbestand (${source.team})` : 'Lagerbestand',
               targetName: `${person.firstName} ${person.lastName}`,
-              oldNumber: inventoryEffectiveNumber(data, source),
+              oldNumber: inventoryNumberForTarget(data, source, targetPerson, item.id, size, { allowCrossTeam: allowCrossTeamRedistribution }),
               newNumber: personNumberValue(targetPerson),
-              needsReprint: materialSourceNeedsReprint(data, source, targetPerson),
+              needsReprint: materialSourceNeedsReprint(data, source, targetPerson, { itemId: item.id, size, allowCrossTeam: allowCrossTeamRedistribution }),
             };
             if (sourceRow.needsReprint) reprintRows.push(sourceRow);
             else transferRows.push(sourceRow);
