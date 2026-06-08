@@ -1,4 +1,5 @@
 import { kv } from '../_lib/auth.js';
+import { clientIp, methodNotAllowed, setApiSecurityHeaders } from '../_lib/http.js';
 
 const REASONS = ['verloren', 'verschlissen', 'flock_kaputt', 'beschaedigt'];
 // Foto-Pflicht-Gründe: für diese muss ein Foto-Beleg vorliegen.
@@ -6,6 +7,7 @@ const REASONS = ['verloren', 'verschlissen', 'flock_kaputt', 'beschaedigt'];
 const PHOTO_REQUIRED_REASONS = ['verschlissen', 'flock_kaputt', 'beschaedigt'];
 
 export default async function handler(req, res) {
+  setApiSecurityHeaders(res);
   if (req.method === 'POST') {
     // Öffentlicher Endpunkt — keine Authentifizierung, dafür Rate-Limiting
     const { team, number, item, reasons, comment, name, photo } = req.body || {};
@@ -16,6 +18,9 @@ export default async function handler(req, res) {
     if (!item) {
       return res.status(400).json({ error: 'Artikel fehlt.' });
     }
+    const [teams, items] = await Promise.all([kv.get('data:teams'), kv.get('data:items')]);
+    if (!((teams || []).includes(team))) return res.status(400).json({ error: 'Unbekannte Mannschaft.' });
+    if (!((items || []).some(i => i.id === item))) return res.status(400).json({ error: 'Unbekannter Artikel.' });
     const validReasons = (reasons || []).filter(r => REASONS.includes(r));
     if (validReasons.length === 0) {
       return res.status(400).json({ error: 'Mindestens ein Grund muss angegeben werden.' });
@@ -43,7 +48,7 @@ export default async function handler(req, res) {
     }
 
     // Einfaches Rate-Limit pro IP: max 10 Meldungen / 10 Minuten
-    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 'unknown';
+    const ip = clientIp(req);
     const rateKey = `rate:report:${ip}`;
     const count = await kv.incr(rateKey);
     if (count === 1) await kv.expire(rateKey, 600);
@@ -155,5 +160,5 @@ export default async function handler(req, res) {
     return res.json({ ok: true, id: report.id, identified: !!identifiedPersonId, materialMarked });
   }
 
-  res.status(405).end();
+  return methodNotAllowed(res, ['POST']);
 }

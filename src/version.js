@@ -1,8 +1,274 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.12.0';
+export const APP_VERSION = '1.14.25';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.25',
+    date: '2026-06-08',
+    changes: [
+      'Umverteilung erkennt zurueckgegebene Lagerteile mit gleicher Nummer, Mannschaft und Groesse wieder vorrangig als verwendbaren Bestand',
+      'Alte Namensbeflockung blockiert nummerngleiche Ruecklaufteile nicht mehr faelschlich als Restbedarf',
+      'Ruecklauf-Lagerteile werden in der Materiallogik als Umverteilung statt als Bestellung eingeordnet',
+      'Fehler in der Standard-Set-Bestellung behoben: artikelgenaue Groesse wird erst nach Ermittlung des Artikels berechnet',
+    ],
+  },
+  {
+    version: '1.14.24',
+    date: '2026-05-21',
+    changes: [
+      'Spieler und Trainer behalten standardmaessig eine Einheitsgroesse',
+      'Optional kann je Person Einzelne Groessen aktiviert werden',
+      'Bei Einzelgroessen wird die Groesse je Artikel des Standard-Sets gepflegt',
+      'Grundbestueckung, Materialvorschlaege und Set-Bestellungen beruecksichtigen artikelgenaue Personengroessen',
+    ],
+  },
+  {
+    version: '1.14.23',
+    date: '2026-05-21',
+    changes: [
+      'Artikel-Fotos im Artikelkatalog nutzen die gleiche Bedienlogik wie die Bedarfsmeldung',
+      'Fotos koennen in Einstellungen und Material per Klick vergroessert und mit Zurueck geschlossen werden',
+      'Materialliste und Lagerbestand zeigen Artikel-Fotos direkt am Artikel',
+      'Artikelkatalog und Fotodarstellung wurden fuer PC, Tablet und Smartphone responsiver aufgebaut',
+    ],
+  },
+  {
+    version: '1.14.22',
+    date: '2026-05-20',
+    changes: [
+      'Artikel koennen im Artikelkatalog unter Einstellungen grundsaetzlich von Umflockung ausgeschlossen werden',
+      'Der katalogweite Ausschluss verhindert Umbeflockungsvorschlaege fuer alle Bestandsstuecke dieses Artikels',
+      'Umbeflockungszeilen zeigen an, wenn der Ausschluss aus dem Artikelkatalog stammt',
+    ],
+  },
+  {
+    version: '1.14.21',
+    date: '2026-05-20',
+    changes: [
+      'Artikel in der Umbeflockungsliste koennen jetzt per Checkbox von der Umflockung ausgeschlossen werden',
+      'Ausgeschlossene Artikel werden nicht mehr als Umbeflockungsquelle vorgeschlagen',
+      'Wenn durch den Ausschluss kein anderes Material passt, wandert der Bedarf in den Restbedarf fuer Bestellung',
+    ],
+  },
+  {
+    version: '1.14.20',
+    date: '2026-05-20',
+    changes: [
+      'Textfehler im Suchbereich korrigiert: Zuruecksetzen wird wieder sauber angezeigt',
+    ],
+  },
+  {
+    version: '1.14.19',
+    date: '2026-05-20',
+    changes: [
+      'Materialbereich zeigt jetzt einen eigenen Restbedarf fuer noch nicht gedeckte Standard-Set-Positionen',
+      'Aus dem Restbedarf kann direkt eine Bestellung erzeugt werden',
+      'Beim Erzeugen der Restbedarf-Bestellung werden vorhandene Ausgabe, offene Bestellungen, Umverteilung, Lagerausgabe und Umbeflockung erneut geprueft',
+      'Restbedarf kann auch als PDF exportiert werden',
+    ],
+  },
+  {
+    version: '1.14.18',
+    date: '2026-05-20',
+    changes: [
+      'Trainer-Material darf bei Umverteilung und Umbeflockung jetzt mannschaftsuebergreifend vorgeschlagen werden',
+      'Spieler-Material bleibt bei Umverteilung und Lagerausgabe weiterhin an die Mannschaft gebunden',
+      'Quellen aus anderen Trainer-Mannschaften werden in den Materialvorschlagslisten mit Mannschaftshinweis angezeigt',
+    ],
+  },
+  {
+    version: '1.14.17',
+    date: '2026-05-20',
+    changes: [
+      'Die Materiallisten fuer Umverteilung, Ausgabe aus Lager und Umbeflockung haben jetzt Filter wie der Lagerbestand',
+      'Filter nach Personenkreis, Mannschaft, Person, Artikel, Groesse und Freitextsuche ergaenzt',
+      'PDF-Exporte der Vorschlagslisten verwenden die aktuell gefilterte Ansicht',
+    ],
+  },
+  {
+    version: '1.14.16',
+    date: '2026-05-20',
+    changes: [
+      'Material-Vorschlagslisten beruecksichtigen jetzt Standard-Sets fuer Spieler und Trainer',
+      'Trainer mit Saison-Eintritt, zugeordnetem Standard-Set oder noch fehlender Ausstattung erscheinen in Umverteilung, Ausgabe aus Lager und Umbeflockung',
+      'Trainer werden in den Material-Vorschlagslisten und PDF-Ausgaben als Trainer gekennzeichnet',
+    ],
+  },
+  {
+    version: '1.14.15',
+    date: '2026-05-20',
+    changes: [
+      'Die Liste Ausgabe aus Lager kann jetzt ebenfalls als PDF gedruckt werden',
+    ],
+  },
+  {
+    version: '1.14.14',
+    date: '2026-05-20',
+    changes: [
+      'Umverteilung aus Material ausscheidender Spieler/Trainer wird wieder nach gleicher Mannschaft, Groesse und Nummer/Initialen bewertet',
+      'Abweichender Flockname beim bisherigen Besitzer verschiebt passende Austritt-zu-Eintritt-Teile nicht mehr faelschlich in Umbeflockung',
+      'Die strengere Namenspruefung bleibt fuer Lagerbestand und Reservierungen erhalten',
+    ],
+  },
+  {
+    version: '1.14.13',
+    date: '2026-05-20',
+    changes: [
+      'Bestellungen koennen nachtraeglich bearbeitet werden',
+      'Lieferant, Beflockung, Sponsorplatzierungen, Sponsor-Kennung, Notizen und Positionen lassen sich nach dem Anlegen anpassen',
+      'Bearbeiten ist aus der Bestelluebersicht und aus der Detailansicht moeglich',
+      'Beim Bearbeiten bleiben Status, ID, Wareneingangsbezug und verknuepfte Bedarfsmeldungen erhalten',
+    ],
+  },
+  {
+    version: '1.14.12',
+    date: '2026-05-20',
+    changes: [
+      'Spieler koennen jetzt per Checkbox als Torwart markiert werden',
+      'Standard-Sets unterstuetzen die neue Zielgruppe Nur Torwart',
+      'Standard-Sets haben eine Set-Nummer und koennen als Standard markiert werden',
+      'Spielern und Trainern kann ein konkretes Standard-Set zugeordnet werden; sonst greift die passende Standardauswahl',
+      'Grundbestueckung, Team-Sets, Bestellvorschlaege und Materialvorschlaege beruecksichtigen Torwart-Sets getrennt von normalen Spieler-Sets',
+    ],
+  },
+  {
+    version: '1.14.11',
+    date: '2026-05-20',
+    changes: [
+      'Materiallogik erneut geprueft und vereinheitlicht: Umverteilung vor passender Lagerausgabe vor Umbeflockung',
+      'Passender Lagerbestand beruecksichtigt jetzt neben Mannschaft und Nummer/Initialen auch den hinterlegten Flocknamen',
+      'Reservierungen speichern Nummer/Initialen und Namen am Bestand und werden dadurch als gedeckter Bedarf erkannt',
+      'Reservierter oder passend vorbeflockter Bestand verhindert neue Bestellvorschlaege fuer denselben Spieler/Trainer und Artikel',
+    ],
+  },
+  {
+    version: '1.14.10',
+    date: '2026-05-20',
+    changes: [
+      'Materialvorschlaege nutzen jetzt fest die Reihenfolge: Umverteilung Austritt zu Eintritt, passende Lagerausgabe, danach Umbeflockung',
+      'Passender Lagerbestand wird im Materialbereich als eigene Kategorie Ausgabe aus Lager angezeigt',
+      'Umbeflockung wird erst vorgeschlagen, wenn keine passende Umverteilung und keine passende Lagerausgabe verfuegbar ist',
+      'Reservieren in der Material-Ausgabe funktioniert jetzt direkt aus dem Ausgabedialog',
+    ],
+  },
+  {
+    version: '1.14.9',
+    date: '2026-05-20',
+    changes: [
+      'Saison-Umverteilung priorisiert jetzt ausscheidende Personen gleicher Mannschaft, gleicher Groesse und gleicher Nummer/Initialen vor Lagerbestand',
+      'Bestell- und Grundbestueckungsvorschlaege nutzen dieselbe Prioritaet fuer Eintritt/Austritt',
+      'Umverteilung und Umbeflockung koennen jeweils als PDF gedruckt werden',
+      'Zeichensatzfehler im neuen Materialbereich wurden korrigiert',
+    ],
+  },
+  {
+    version: '1.14.8',
+    date: '2026-05-20',
+    changes: [
+      'Material hat jetzt einen eigenen Bereich fuer Umverteilung und Umbeflockung angelehnt an die Materialliste',
+      'Vorschlaege aktualisieren sich aus offenen Bestellungen, Saisonstatus, Standard-Sets und aktuellem Bestand',
+      'Umverteilung und Umbeflockung werden getrennt als Alt-zu-Neu-Listen angezeigt',
+      'Lagerbestand kann direkt aus dem Vorschlag heraus fuer einen Spieler oder Trainer reserviert werden',
+    ],
+  },
+  {
+    version: '1.14.7',
+    date: '2026-05-20',
+    changes: [
+      'Offene Bestellungen decken den Bedarf und verhindern erneute Bestellzeilen für denselben Spieler/Trainer, Artikel und Größe',
+      'Standard-Set-Bestellungen berücksichtigen bereits im aktuellen Bestellentwurf vorhandene Positionen',
+      'Set-Mengen werden pro Stück gegen ausgegebenes Material, offene Bestellungen, Lagerbestand, Umverteilung und Umbeflockung verrechnet',
+      'Set-Auswertung weist bereits gedeckte Positionen, Umverteilung und Umbeflockung transparenter aus',
+    ],
+  },
+  {
+    version: '1.14.6',
+    date: '2026-05-20',
+    changes: [
+      'Standard-Set-Bestellvorschlag berücksichtigt jetzt auch Lagerbestand vor dem Erzeugen neuer Bestellzeilen',
+      'Passender Lagerbestand verhindert eine Bestellung; abweichend beflockter Lagerbestand erscheint als Umbeflockungsvorschlag',
+      'Set-Auswertung ist klar nach Umverteilung alt-neu und Umbeflockung alt-neu getrennt',
+      'Lagerbestand, reservierter Lagerbestand und Material ausscheidender Personen werden transparent als Quelle ausgewiesen',
+    ],
+  },
+  {
+    version: '1.14.5',
+    date: '2026-05-20',
+    changes: [
+      'Normales Bestellformular wertet Standard-Sets jetzt ebenfalls gegen Saison-Umverteilung aus',
+      'Set anwenden erzeugt keine Bestellzeilen mehr, wenn passende Teile ausscheidender Personen gleicher Mannschaft und Größe vorhanden sind',
+      'Set-Auswertung zeigt sichtbar an, welche Positionen durch Umverteilung gedeckt sind und wo Umbeflockung/Nummernwechsel zu prüfen ist',
+      'Fall Emre Hamut/Felipe Alves Nr. 11 wird im normalen Bestellformular nicht mehr als Bestellung erzeugt, wenn die passenden Felipe-Teile ausgegeben sind',
+    ],
+  },
+  {
+    version: '1.14.4',
+    date: '2026-05-20',
+    changes: [
+      'Bestelllogik erneut gehärtet: Normale Standard-Set-Bestellungen berücksichtigen Saison-Eintritt/-Austritt jetzt ebenfalls',
+      'Austritte werden aus Set-Bestellungen und Grundbestückungsvorschlägen ausgeschlossen, sofern sie nicht zusätzlich als Eintritt markiert sind',
+      'Umverteilung vergleicht jetzt die effektive Nummer des Materials, also notfalls die Nummer des bisherigen Besitzers',
+      'Saisonwechsel-Fall Emre Hamut/Felipe Alves mit Nummer 11 wird dadurch auch dann als Umverteilung erkannt, wenn am Material selbst keine assignedNumber gespeichert ist',
+      'Umbeflockungshinweis ergänzt: Abweichende Nummern werden vorgeschlagen, wenn Korrektur Ausgabemengen deaktiviert ist',
+    ],
+  },
+  {
+    version: '1.14.3',
+    date: '2026-05-20',
+    changes: [
+      'Bestellvorschläge schließen Bestands-Spieler/Trainer ohne Saisonmarkierung standardmäßig aus; per Checkbox können sie wieder einbezogen werden',
+      'Umverteilung aus Material ausscheidender Personen wird jetzt auch im Korrekturmodus geprüft, sofern keine Umbeflockung nötig ist',
+      'Umverteilungsvorschläge beschränken sich auf gleiche Personenart, Mannschaft, Artikel und Größe',
+      'Saisonwechsel-Fall mit gleicher Nummer, z. B. Nr. 11 Hamut/Alves in der Ersten, wird dadurch als Umverteilung statt Bestellung vorgeschlagen',
+    ],
+  },
+  {
+    version: '1.14.2',
+    date: '2026-05-20',
+    changes: [
+      'Bestellvorschläge für Grundbestückung berücksichtigen Saison-Eintritt und Saison-Austritt',
+      'Team-Grundbestückung überspringt ausscheidende Personen und nutzt Material ausscheidender Personen gleicher Größe als Umverteilung',
+      'Umverteilungen und passende Lager-/Reservierungsbestände werden nicht als fehlender Bestand bestellt',
+      'Umbeflockungen können weiterhin per Checkbox in eine Bestellung übernommen werden, inklusive Verweis auf das passende Material',
+      'Lagerteile können für neue Spieler oder Trainer reserviert werden und werden dadurch aus fremden Bestellvorschlägen herausgehalten',
+    ],
+  },
+  {
+    version: '1.14.1',
+    date: '2026-05-20',
+    changes: [
+      'Doppelte Trikotnummern oder Trainer-Initialen sind für Saisonwechsel erlaubt, wenn eine Person als Eintritt und die andere als Austritt markiert ist',
+      'Bedarfsmeldungen priorisieren bei Saisonwechsel-Doppelungen die eintretende bzw. nicht austretende Person',
+    ],
+  },
+  {
+    version: '1.14.0',
+    date: '2026-05-20',
+    changes: [
+      'Artikelsuche unter Material, Spieler und Trainer ergänzt: Suche nach Trikotnummer/Initialen mit Mannschaftsfilter',
+      'Suchergebnisse zeigen, ob Artikel im Lager, beim Spieler/Trainer ausgegeben oder bestellt sind',
+      'Optional kann die Suche alle zugeordneten Teile einer gefundenen Person anzeigen',
+      'Artikelkatalog unterstützt Fotos je Artikel; diese erscheinen in Suche und Materialübersichten',
+      'Einstellungen sind in Untermenüs für Allgemein, Mannschaften, Artikel & Sets, Lieferanten sowie Pfandregeln gegliedert',
+      'Übergabeprotokoll für ausgegebene Teile als PDF mit Pfandregel und digitaler Unterschrift ergänzt',
+      'Rückgabeprotokoll als PDF mit Zustand, Pfandabrechnung und digitaler Unterschrift ergänzt',
+      'Spieler und Trainer können für Eintritt oder Ausscheiden zur neuen Saison markiert werden',
+    ],
+  },
+  {
+    version: '1.13.0',
+    date: '2026-05-20',
+    changes: [
+      'Pre-Production Security Review umgesetzt: Auth- und Daten-API gehärtet',
+      'Login und Setup setzen bevorzugt HttpOnly-Session-Cookies statt Client-Token im localStorage',
+      'API-Routen liefern Sicherheitsheader und loggen Fehler mit Request-ID ohne sensible Daten',
+      'Datenzugriffe werden nach Rolle und Mannschaft gefiltert, Schreibzugriffe serverseitig autorisiert',
+      'REST-DB-Service schützt Daten vor unberechtigtem Überschreiben und merge-t Bestände scoped nach ID',
+      'Logout-Route ergänzt und Auth-Client auf Cookie-basierte Requests umgestellt',
+      'Tests für Security-Header, Auth-Cookies und Datenzugriff ergänzt',
+    ],
+  },
   {
     version: '1.12.0',
     date: '2026-05-18',
