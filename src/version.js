@@ -1,8 +1,28 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.28';
+export const APP_VERSION = '1.14.30';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.30',
+    date: '2026-06-08',
+    changes: [
+      'Trikotsaetze nach Sponsor sind als eigenes Hauptmenue Sponsoren verfuegbar',
+      'Sponsoren koennen mit Artikel- und optionaler Mannschaftszuordnung angelegt, bearbeitet und geloescht werden',
+      'Sponsorhinweise werden in den Materiallisten direkt an Gruppen und einzelnen Materialzeilen angezeigt',
+      'Neue Wareneingaenge uebernehmen passende Sponsorzuordnungen aus den Stammdaten',
+    ],
+  },
+  {
+    version: '1.14.29',
+    date: '2026-06-08',
+    changes: [
+      'Rueckgaben behalten die Beflockungsnummer und speichern Ruecklaufdaten fuer spaetere Umverteilung',
+      'Bestehende Ruecklaufteile ohne gespeicherte Nummer werden ueber Name, Mannschaft und Saison-Austritt dem vorherigen Spieler/Trainer zugeordnet',
+      'Artikel- und Mannschaftsabgleich fuer Umverteilung, Umbeflockung und Bestellbedarf toleriert unterschiedliche Schreibweisen und Artikelnummern im Namen',
+      'Restbestellungen pruefen direkt vor dem Anlegen erneut, ob ein passender Ruecklauf- oder Lagerbestand vorhanden ist',
+    ],
+  },
   {
     version: '1.14.28',
     date: '2026-06-08',

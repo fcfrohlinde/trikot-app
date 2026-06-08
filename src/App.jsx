@@ -130,13 +130,46 @@ function getPersonItemSize(person, itemId) {
   return (person?.individualSizes && itemSize) ? itemSize : (person?.size || 'L');
 }
 
-function normalizeArticleKey(value) {
-  return String(value || '').trim().toLowerCase();
-}
-
 function normalizeSizeKey(value) {
   const size = String(value || '').trim().toUpperCase();
   return size === '3XL' ? 'XXXL' : size;
+}
+
+function normalizeTeamKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function normalizeArticleKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\[[^\]]+\]/g, ' ')
+    .replace(/[^a-z0-9äöüß]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function articleCodesFrom(...values) {
+  const codes = new Set();
+  values.forEach(value => {
+    String(value || '').replace(/\b\d{3,5}[-/]\d{2,5}\b/g, match => {
+      codes.add(match.replace('/', '-').toLowerCase());
+      return match;
+    });
+  });
+  return codes;
+}
+
+function articleCodeSetsOverlap(a, b) {
+  if (!a.size || !b.size) return false;
+  return [...a].some(code => b.has(code));
+}
+
+function articleNamesMatch(a, b) {
+  const left = normalizeArticleKey(a);
+  const right = normalizeArticleKey(b);
+  if (!left || !right) return false;
+  return left === right || (left.length > 6 && right.includes(left)) || (right.length > 6 && left.includes(right));
 }
 
 function itemMatchesCatalogEntry(data, sourceItemId, targetItemId) {
@@ -145,12 +178,10 @@ function itemMatchesCatalogEntry(data, sourceItemId, targetItemId) {
   const sourceItem = (data.items || []).find(item => item.id === sourceItemId);
   const targetItem = (data.items || []).find(item => item.id === targetItemId);
   if (!sourceItem || !targetItem) return false;
-  const sourceArticle = normalizeArticleKey(sourceItem.articleNumber);
-  const targetArticle = normalizeArticleKey(targetItem.articleNumber);
-  if (sourceArticle && targetArticle && sourceArticle === targetArticle) return true;
-  const sourceName = normalizeArticleKey(sourceItem.name);
-  const targetName = normalizeArticleKey(targetItem.name);
-  return !!sourceName && !!targetName && sourceName === targetName;
+  const sourceCodes = articleCodesFrom(sourceItem.articleNumber, sourceItem.name);
+  const targetCodes = articleCodesFrom(targetItem.articleNumber, targetItem.name);
+  if (articleCodeSetsOverlap(sourceCodes, targetCodes)) return true;
+  return articleNamesMatch(sourceItem.articleNumber, targetItem.articleNumber) || articleNamesMatch(sourceItem.name, targetItem.name);
 }
 
 function inventoryItemMatches(data, inv, targetItemId) {
@@ -158,12 +189,11 @@ function inventoryItemMatches(data, inv, targetItemId) {
   if (inv.itemType === targetItemId) return true;
   const targetItem = (data.items || []).find(item => item.id === targetItemId);
   if (!targetItem) return false;
-  const invArticle = normalizeArticleKey(inv.articleNumber);
-  const targetArticle = normalizeArticleKey(targetItem.articleNumber);
-  if (invArticle && targetArticle && invArticle === targetArticle) return true;
-  const invName = normalizeArticleKey(inv.itemName);
-  const targetName = normalizeArticleKey(targetItem.name);
-  if (invName && targetName && invName === targetName) return true;
+  const invCodes = articleCodesFrom(inv.articleNumber, inv.itemName, inv.itemType);
+  const targetCodes = articleCodesFrom(targetItem.articleNumber, targetItem.name, targetItem.id);
+  if (articleCodeSetsOverlap(invCodes, targetCodes)) return true;
+  if (articleNamesMatch(inv.articleNumber, targetItem.articleNumber)) return true;
+  if (articleNamesMatch(inv.itemName, targetItem.name)) return true;
   return itemMatchesCatalogEntry(data, inv.itemType, targetItemId);
 }
 
@@ -177,11 +207,32 @@ function shouldPlanStandardSetInMaterial(data, person) {
 }
 
 function inventoryEffectiveNumber(data, inv) {
-  if (inv?.assignedNumber !== undefined && inv.assignedNumber !== null && inv.assignedNumber !== '') {
-    return String(inv.assignedNumber).trim().toUpperCase();
+  const numberFields = ['assignedNumber', 'returnedNumber', 'number', 'flockNumber', 'shirtNumber', 'reprintToNumber', 'reprintFromNumber', 'reservedNumber'];
+  for (const field of numberFields) {
+    if (inv?.[field] !== undefined && inv[field] !== null && inv[field] !== '') {
+      return String(inv[field]).trim().toUpperCase();
+    }
   }
   const owner = findPerson(data, inv?.assignedTo);
-  return personNumberValue(owner).toUpperCase();
+  const ownerNumber = personNumberValue(owner).toUpperCase();
+  if (ownerNumber) return ownerNumber;
+  if (inv?.status === 'lager' && (inv?.assignedName || inv?.returnedName)) {
+    const invName = normalizeFlockName(inv.assignedName || inv.returnedName);
+    const invTeam = normalizeTeamKey(inv.team || inv.returnedTeam);
+    const invKind = inv.personKind || '';
+    const previousOwner = allPersons(data).find(person =>
+      normalizeFlockName(person.lastName) === invName
+      && (!invKind || person._kind === invKind)
+      && (!invTeam || normalizeTeamKey(person.team) === invTeam)
+      && seasonFlag(person.seasonExit)
+    ) || allPersons(data).find(person =>
+      normalizeFlockName(person.lastName) === invName
+      && (!invKind || person._kind === invKind)
+      && (!invTeam || normalizeTeamKey(person.team) === invTeam)
+    );
+    return personNumberValue(previousOwner).toUpperCase();
+  }
+  return '';
 }
 
 function inventoryMatchesPersonNumberInData(data, inv, person) {
@@ -212,7 +263,7 @@ function materialSourceNeedsReprint(data, inv, person) {
   if (inv.status === 'ausgegeben') {
     return !inventoryMatchesPersonNumberInData(data, inv, person);
   }
-  const hasNumber = inv.assignedNumber !== undefined && inv.assignedNumber !== null && String(inv.assignedNumber).trim() !== '';
+  const hasNumber = inventoryEffectiveNumber(data, inv) !== '';
   const hasName = inv.assignedName !== undefined && inv.assignedName !== null && String(inv.assignedName).trim() !== '';
   if (!hasNumber && !hasName) return false;
   if (hasNumber && inventoryMatchesPersonNumberInData(data, inv, person)) return false;
@@ -235,7 +286,7 @@ function stockUsableForPerson(inv, person, options = {}) {
   if (!inv || inv.status !== 'lager') return false;
   if (stockReservedForOther(inv, person)) return false;
   const allowCrossTeam = !!options.allowCrossTeam || person?._kind === 'coach';
-  if (!allowCrossTeam && inv.team && person?.team && inv.team !== person.team) return false;
+  if (!allowCrossTeam && inv.team && person?.team && normalizeTeamKey(inv.team) !== normalizeTeamKey(person.team)) return false;
   return true;
 }
 
@@ -287,7 +338,7 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock, options = 
     const valid = owner
       && owner.id !== person.id
       && owner._kind === person._kind
-      && (allowCrossTeam || owner.team === person.team)
+      && (allowCrossTeam || normalizeTeamKey(owner.team) === normalizeTeamKey(person.team))
       && seasonFlag(owner.seasonExit)
       && !seasonFlag(owner.seasonEntry);
     if (!valid) return false;
@@ -687,6 +738,7 @@ function AppContent() {
             {view === 'players' && <PlayersView data={data} update={safeUpdate} />}
             {view === 'coaches' && <CoachesView data={data} update={safeUpdate} />}
             {view === 'inventory' && <InventoryView data={data} update={safeUpdate} />}
+            {view === 'sponsors' && <SponsorsView data={data} update={safeUpdate} />}
             {view === 'deposits' && <DepositsView data={data} update={safeUpdate} />}
             {view === 'orders' && <OrdersView data={data} update={safeUpdate} />}
             {view === 'returns' && <ReturnsView data={data} update={safeUpdate} />}
@@ -712,6 +764,7 @@ function Header({ view, setView, clubName, user, logout, openReportsCount = 0 })
     { id: 'players', label: 'Spieler' },
     { id: 'coaches', label: 'Trainer' },
     { id: 'inventory', label: 'Material' },
+    { id: 'sponsors', label: 'Sponsoren' },
     { id: 'deposits', label: 'Pfand' },
     { id: 'returns', label: 'Rückgabe' },
     { id: 'orders', label: 'Bestellungen' },
@@ -1262,7 +1315,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
         const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
         const returnedMatchingStock = sized?.status === 'lager'
-          && (sized.assignedNumber || sized.assignedName)
+          && (inventoryEffectiveNumber(data, sized) || sized.assignedName || sized.returnedName)
           && inventoryMatchesPersonNumberInData(data, sized, person);
         const action = (fromPerson || returnedMatchingStock)
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
@@ -1600,7 +1653,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
         const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
         const returnedMatchingStock = sized?.status === 'lager'
-          && (sized.assignedNumber || sized.assignedName)
+          && (inventoryEffectiveNumber(data, sized) || sized.assignedName || sized.returnedName)
           && inventoryMatchesPersonNumberInData(data, sized, person);
         const action = (fromPerson || returnedMatchingStock)
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
@@ -2929,6 +2982,37 @@ function orderSponsorLabel(order) {
   return [sponsors.brust, sponsors.ruecken, sponsors.aermel].filter(Boolean).join(' / ');
 }
 
+function sponsorSettingsList(settings) {
+  return Array.isArray(settings?.sponsors) ? settings.sponsors : [];
+}
+
+function sponsorMatchesContext(sponsor, itemId, team) {
+  if (!sponsor?.name) return false;
+  const itemIds = Array.isArray(sponsor.itemIds) ? sponsor.itemIds : [];
+  const teams = Array.isArray(sponsor.teams) ? sponsor.teams : [];
+  const itemMatch = itemIds.length === 0 || itemIds.includes(itemId);
+  const teamMatch = teams.length === 0 || teams.some(t => normalizeTeamKey(t) === normalizeTeamKey(team));
+  return itemMatch && teamMatch;
+}
+
+function sponsorLabelForItem(data, itemId, team) {
+  return sponsorSettingsList(data.settings)
+    .filter(sponsor => sponsorMatchesContext(sponsor, itemId, team))
+    .map(sponsor => sponsor.name)
+    .join(' / ');
+}
+
+function sponsorLabelForInventory(data, inv) {
+  if (!inv) return '';
+  if (inv.sponsorKey) return inv.sponsorKey;
+  const person = inv.assignedTo ? findPerson(data, inv.assignedTo) : null;
+  return sponsorLabelForItem(data, inv.itemType, person?.team || inv.team);
+}
+
+function sponsorLabelForOrderLine(data, order, line) {
+  return orderSponsorLabel(order) || sponsorLabelForItem(data, line?.itemType, order?.team);
+}
+
 function SponsorKitOverview({ data }) {
   const persons = allPersons(data);
   const byId = new Map(persons.map(p => [p.id, p]));
@@ -2959,7 +3043,7 @@ function SponsorKitOverview({ data }) {
   (data.inventory || []).forEach(inv => {
     const person = byId.get(inv.assignedTo);
     addGroup({
-      sponsor: inv.sponsorKey,
+      sponsor: sponsorLabelForInventory(data, inv),
       team: person?.team || inv.team,
       itemName: inv.itemName,
       status: inv.status === 'ausgegeben' ? 'ausgegeben' : 'lager',
@@ -2967,12 +3051,11 @@ function SponsorKitOverview({ data }) {
   });
 
   (data.orders || []).filter(orderCoversNeed).forEach(order => {
-    const sponsor = orderSponsorLabel(order);
     (order.lines || []).forEach(line => {
       const person = byId.get(line.playerId);
       const item = (data.items || []).find(i => i.id === line.itemType);
       addGroup({
-        sponsor,
+        sponsor: sponsorLabelForOrderLine(data, order, line),
         team: person?.team || order.team,
         itemName: item?.name || line.itemName || line.itemType,
         status: 'bestellt',
@@ -3030,6 +3113,175 @@ function SponsorKitOverview({ data }) {
   );
 }
 
+function SponsorsView({ data, update }) {
+  const sponsors = sponsorSettingsList(data.settings);
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState({
+    id: '',
+    name: '',
+    placement: 'satz',
+    itemIds: [],
+    teams: [],
+    notes: '',
+  });
+
+  function startNew() {
+    setEditing('new');
+    setDraft({ id: `sp_${Date.now()}`, name: '', placement: 'satz', itemIds: [], teams: [], notes: '' });
+  }
+
+  function startEdit(sponsor) {
+    setEditing(sponsor.id);
+    setDraft({
+      id: sponsor.id,
+      name: sponsor.name || '',
+      placement: sponsor.placement || 'satz',
+      itemIds: Array.isArray(sponsor.itemIds) ? sponsor.itemIds : [],
+      teams: Array.isArray(sponsor.teams) ? sponsor.teams : [],
+      notes: sponsor.notes || '',
+    });
+  }
+
+  function saveSponsor() {
+    const name = draft.name.trim();
+    if (!name) {
+      alert('Sponsorname fehlt.');
+      return;
+    }
+    const clean = { ...draft, name };
+    const next = sponsors.some(s => s.id === clean.id)
+      ? sponsors.map(s => s.id === clean.id ? clean : s)
+      : [...sponsors, clean];
+    update('settings', { ...(data.settings || {}), sponsors: next });
+    setEditing(null);
+  }
+
+  function deleteSponsor(id) {
+    const sponsor = sponsors.find(s => s.id === id);
+    if (!sponsor) return;
+    if (!confirm(`Sponsor "${sponsor.name}" wirklich löschen? Die Zuordnung aus Bestellungen/Inventar bleibt unverändert, die Stammdaten-Zuordnung wird entfernt.`)) return;
+    update('settings', { ...(data.settings || {}), sponsors: sponsors.filter(s => s.id !== id) });
+    if (editing === id) setEditing(null);
+  }
+
+  function toggleDraftList(key, value) {
+    const current = Array.isArray(draft[key]) ? draft[key] : [];
+    setDraft({
+      ...draft,
+      [key]: current.includes(value) ? current.filter(x => x !== value) : [...current, value],
+    });
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
+        <PageHeader number="06" label="SPONSOREN" title="Sponsoren & Artikelzuordnung" subtitle={`${sponsors.length} Sponsoren · Zuordnung zu Trikotsätzen, Shirts, Jacken und weiteren Artikeln`} />
+        <button onClick={startNew} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+          style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+          <Plus size={14} /> Sponsor anlegen
+        </button>
+      </div>
+
+      {editing && (
+        <div className="bg-white border-2 border-stone-900 p-5 mb-4">
+          <h2 className="font-display text-2xl mb-4">{editing === 'new' ? 'SPONSOR ANLEGEN' : 'SPONSOR BEARBEITEN'}</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            <Field label="Sponsorname">
+              <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} placeholder="z. B. Sparkasse, Stadtwerke, Autohaus" />
+            </Field>
+            <Field label="Art der Zuordnung">
+              <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={draft.placement} onChange={e => setDraft({ ...draft, placement: e.target.value })}>
+                <option value="satz">Trikotsatz / Satzkennung</option>
+                <option value="brust">Brust</option>
+                <option value="ruecken">Rücken</option>
+                <option value="aermel">Ärmel</option>
+                <option value="artikel">Artikel allgemein</option>
+              </select>
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.15em' }}>ARTIKELZUGEHÖRIGKEIT</div>
+              <div className="border border-stone-200 max-h-72 overflow-auto">
+                {(data.items || []).map(item => (
+                  <label key={item.id} className="flex items-center gap-2 p-2 border-b border-stone-100 text-sm">
+                    <input type="checkbox" checked={draft.itemIds.includes(item.id)} onChange={() => toggleDraftList('itemIds', item.id)} />
+                    <span className="font-mono text-xs text-stone-500">{item.articleNumber || '-'}</span>
+                    <span>{item.name}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="text-xs mt-1" style={{ color: 'var(--ink-mute)' }}>Keine Auswahl bedeutet: Sponsor gilt artikelübergreifend.</div>
+            </div>
+            <div>
+              <div className="font-sub text-xs mb-2" style={{ color: 'var(--vereinsblau)', letterSpacing: '0.15em' }}>MANNSCHAFTEN</div>
+              <div className="border border-stone-200 max-h-40 overflow-auto mb-3">
+                {(data.teams || []).map(team => (
+                  <label key={team} className="flex items-center gap-2 p-2 border-b border-stone-100 text-sm">
+                    <input type="checkbox" checked={draft.teams.includes(team)} onChange={() => toggleDraftList('teams', team)} />
+                    <span>{team}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="text-xs mb-3" style={{ color: 'var(--ink-mute)' }}>Keine Auswahl bedeutet: Sponsor gilt mannschaftsübergreifend.</div>
+              <Field label="Hinweis">
+                <textarea className="w-full border border-stone-300 px-3 py-2 text-sm" rows={4} value={draft.notes} onChange={e => setDraft({ ...draft, notes: e.target.value })} placeholder="z. B. nur Heimshirts, Saison 2026/27, Sponsorbindung beachten" />
+              </Field>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={saveSponsor} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium">Speichern</button>
+            <button onClick={() => setEditing(null)} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
+          </div>
+        </div>
+      )}
+
+      <SponsorKitOverview data={data} />
+
+      <div className="bg-white border border-stone-200 overflow-hidden">
+        {sponsors.length === 0 ? (
+          <div className="p-8 text-sm text-stone-500">Noch keine Sponsoren angelegt.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-stone-50 text-xs uppercase tracking-wider text-stone-500">
+                <tr>
+                  <th className="text-left p-3">Sponsor</th>
+                  <th className="text-left p-3">Zuordnung</th>
+                  <th className="text-left p-3">Mannschaften</th>
+                  <th className="text-left p-3">Artikel</th>
+                  <th className="p-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sponsors.map(sponsor => {
+                  const itemNames = (sponsor.itemIds || []).map(id => (data.items || []).find(item => item.id === id)?.name || id);
+                  return (
+                    <tr key={sponsor.id} className="border-t border-stone-100">
+                      <td className="p-3 font-medium">
+                        {sponsor.name}
+                        {sponsor.notes && <div className="text-xs text-stone-500 mt-0.5">{sponsor.notes}</div>}
+                      </td>
+                      <td className="p-3">{sponsor.placement || 'satz'}</td>
+                      <td className="p-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{(sponsor.teams || []).join(', ') || 'alle Mannschaften'}</td>
+                      <td className="p-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{itemNames.slice(0, 5).join(', ') || 'alle Artikel'}{itemNames.length > 5 ? ` +${itemNames.length - 5}` : ''}</td>
+                      <td className="p-3 text-right whitespace-nowrap">
+                        <button onClick={() => startEdit(sponsor)} className="p-1 text-stone-500 hover:text-stone-900" title="Bearbeiten"><Edit2 size={14} /></button>
+                        <button onClick={() => deleteSponsor(sponsor.id)} className="p-1 text-stone-500 hover:text-red-600" title="Löschen"><Trash2 size={14} /></button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SeasonMaterialWorkArea({ data, update }) {
   const [open, setOpen] = useState(true);
   const [filterPersonKind, setFilterPersonKind] = useState('alle'); // alle | player | coach
@@ -3075,7 +3327,7 @@ function SeasonMaterialWorkArea({ data, update }) {
       const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
       const needsReprint = materialSourceNeedsReprint(data, source, target);
       const returnedMatchingStock = source.status === 'lager'
-        && (source.assignedNumber || source.assignedName)
+        && (inventoryEffectiveNumber(data, source) || source.assignedName || source.returnedName)
         && inventoryMatchesPersonNumberInData(data, source, target);
       const category = needsReprint ? 'umbeflockung' : (source.status === 'ausgegeben' || returnedMatchingStock) ? 'umverteilung' : 'ausgabe';
       result.push({
@@ -3207,12 +3459,18 @@ function SeasonMaterialWorkArea({ data, update }) {
   function createMissingOrder(list) {
     const unique = [];
     const seen = new Set();
+    const usedSources = new Set();
     list.forEach(row => {
       const key = `${row.target.id}_${row.item.id}_${row.size}`;
       if (seen.has(key)) return;
       seen.add(key);
       if (issuedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
       if (openOrderedQtyForPersonItem(data, row.target, row.item.id, row.size) > 0) return;
+      const source = chooseMaterialSourceForNeed(data, row.item.id, row.target, row.size, usedSources, { allowCrossTeam: allowCrossTeamRedistribution });
+      if (source) {
+        usedSources.add(source.id);
+        return;
+      }
       unique.push(row);
     });
     if (unique.length === 0) {
@@ -3514,6 +3772,7 @@ function InventoryView({ data, update }) {
           itemName: i.itemName,
           size: groupBy === 'article' ? (i.size || '–') : 'div.',
           team: teamKey,
+          sponsors: new Set(),
           items: [],
           total: 0,
           lager: 0,
@@ -3523,6 +3782,8 @@ function InventoryView({ data, update }) {
       }
       const g = map.get(key);
       g.items.push(i);
+      const sponsor = sponsorLabelForInventory(data, i);
+      if (sponsor) g.sponsors.add(sponsor);
       g.total++;
       if (i.status === 'lager') g.lager++;
       if (i.status === 'ausgegeben') g.ausgegeben++;
@@ -3721,18 +3982,26 @@ function InventoryView({ data, update }) {
     return [...new Set(labels)].join(', ');
   }
 
+  function groupSponsorLabel(g) {
+    return [...(g.sponsors || [])].join(' / ');
+  }
+
   function renderItemRow(i) {
     const assignment = assignedPersonLabel(i);
     const numberLabel = assignedNumberLabel(i);
     const conditionLabel = getConditionFactors(data.settings)[i.condition]?.label || i.condition;
     const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
+    const sponsorLabel = sponsorLabelForInventory(data, i);
     return (
       <tr key={i.id} className="border-t border-stone-100" style={{ background: 'var(--paper)' }}>
         <td className="p-3 pl-10 text-sm" style={{ color: 'var(--ink-mute)' }}>
           <div className="flex items-center gap-2">
             <span className="text-xs">↳</span>
             {itemPhoto(item, 'w-9 h-9', setPhotoPreview)}
-            <span>{i.itemName}</span>
+            <span>
+              {i.itemName}
+              {sponsorLabel && <div className="text-[11px] mt-0.5" style={{ color: 'var(--vereinsblau)' }}>Sponsor: {sponsorLabel}</div>}
+            </span>
           </div>
         </td>
         <td className="p-3 text-sm font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
@@ -3804,8 +4073,6 @@ function InventoryView({ data, update }) {
       </div>
 
       <ArticleLocationSearch data={data} title="ARTIKELSUCHE MATERIAL" />
-
-      <SponsorKitOverview data={data} />
 
       <SeasonMaterialWorkArea data={data} update={update} />
 
@@ -3886,6 +4153,7 @@ function InventoryView({ data, update }) {
                 {sortedGroups.map(g => {
                   const isOpen = !!openGroups[g.key];
                   const assignedNumbers = groupAssignedNumbers(g);
+                  const sponsorLabel = groupSponsorLabel(g);
                   return (
                     <React.Fragment key={g.key}>
                       <tr className="border-t border-stone-100 cursor-pointer hover:bg-stone-50" onClick={() => toggleGroup(g.key)}>
@@ -3895,6 +4163,9 @@ function InventoryView({ data, update }) {
                           <div className="text-xs md:hidden" style={{ color: 'var(--ink-mute)' }}>{g.team}</div>
                           {assignedNumbers && (
                             <div className="text-xs sm:hidden mt-1" style={{ color: 'var(--vereinsblau)' }}>{assignedNumbers}</div>
+                          )}
+                          {sponsorLabel && (
+                            <div className="text-[11px] mt-1 font-normal" style={{ color: 'var(--vereinsblau)' }}>Sponsor: {sponsorLabel}</div>
                           )}
                         </td>
                         <td className="p-3 hidden md:table-cell text-xs" style={{ color: 'var(--ink-soft)' }}>{g.team}</td>
@@ -3953,12 +4224,16 @@ function InventoryView({ data, update }) {
                   const assignment = assignedPersonLabel(i);
                   const numberLabel = assignedNumberLabel(i);
                   const item = (data.items || []).find(x => x.id === i.itemType) || { id: i.itemType, name: i.itemName, photo: i.photo };
+                  const sponsorLabel = sponsorLabelForInventory(data, i);
                   return (
                     <tr key={i.id} className="border-t border-stone-100">
                       <td className="p-3 font-medium">
                         <div className="flex items-center gap-2">
                           {itemPhoto(item, 'w-9 h-9', setPhotoPreview)}
-                          <span>{i.itemName}</span>
+                          <span>
+                            {i.itemName}
+                            {sponsorLabel && <div className="text-[11px] mt-0.5" style={{ color: 'var(--vereinsblau)' }}>Sponsor: {sponsorLabel}</div>}
+                          </span>
                         </div>
                       </td>
                       <td className="p-3 font-medium" style={{ color: numberLabel ? 'var(--vereinsblau)' : 'var(--ink-mute)' }}>
@@ -4160,7 +4435,7 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
             originalPrice: item?.price || 0,
             fromOrderId: order.id,
             fromLineId: r.lineId,
-            sponsorKey: orderSponsorLabel(order) || null,
+            sponsorKey: orderSponsorLabel(order) || sponsorLabelForItem(data, r.itemType, team) || null,
           });
         }
         lineDeltas[r.lineId] = qty;
@@ -4196,6 +4471,7 @@ function InventoryAddForm({ data, onSaveBatch, onCancel }) {
             seasonsUsed: 0,
             condition: 'neu',
             originalPrice: item?.price || 0,
+            sponsorKey: sponsorLabelForItem(data, r.itemType, r.team) || null,
           });
         }
       });
@@ -5207,7 +5483,11 @@ function ReturnsView({ data, update }) {
           ...i,
           status: 'lager',
           assignedTo: null,
-          assignedNumber: null,
+          assignedNumber: i.assignedNumber ?? personNumberValue(player) ?? null,
+          returnedNumber: i.assignedNumber ?? personNumberValue(player) ?? null,
+          returnedName: i.assignedName || (player?.lastName || '').toUpperCase() || null,
+          returnedFrom: selectedPlayer,
+          returnedTeam: player?.team || i.team || null,
           returnedAt: now,
           condition: cond,
           seasonsUsed: (i.seasonsUsed || 0) + 1,
@@ -6947,6 +7227,7 @@ function SettingsView({ data, update }) {
     weeklyReportEmail: '',
     weeklyReportFrom: '',
     standardSets: [],
+    sponsors: [],
     teamDepositRules: {},
     ...(data.settings || {}),
     // conditionFactors absichern: jedes Feld muss label und factor haben

@@ -30,6 +30,7 @@ const DEFAULTS = {
     defaultDeposit: 70,
     clubName: 'FC Frohlinde 1949 e.V.',
     depositMode: 'pauschal',
+    sponsors: [],
   },
 };
 
