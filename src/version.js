@@ -1,8 +1,28 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.26';
+export const APP_VERSION = '1.14.28';
 
 export const CHANGELOG = [
+  {
+    version: '1.14.28',
+    date: '2026-06-08',
+    changes: [
+      'Umverteilung kann optional mannschaftsuebergreifend suchen; Standard bleibt die Bindung an dieselbe Mannschaft',
+      'Gleiche Nummer und gleiche Groesse werden bei Lagerbestand und ausscheidenden Spielern/Trainern vorrangig als Umverteilung erkannt',
+      'Bestellformular nutzt denselben optionalen Modus fuer mannschaftsuebergreifende Set-Umverteilung',
+      'Material zeigt eine neue Trikotsatz-Uebersicht nach Sponsor, Mannschaft, Lager, Ausgabe und offenen Bestellungen',
+    ],
+  },
+  {
+    version: '1.14.27',
+    date: '2026-06-08',
+    changes: [
+      'Bestellbedarf nutzt bei Ruecklauf-Lagerteilen nicht mehr nur die interne Artikel-ID, sondern auch Artikelnummer und Artikelname',
+      'Zurueckgegebene Teile bleiben dadurch nach Katalogimporten oder Artikel-Duplikaten fuer Umverteilung verfuegbar',
+      'Groessenvergleich fuer Lager, Ruecklauf, offene Bestellungen und ausgegebene Teile normalisiert Schreibweisen wie M, M Leerzeichen und 3XL/XXXL',
+      'Standard-Set-Bestellungen und Materialvorschlaege vermeiden dadurch falsche Restbedarfe bei vorhandenen Ruecklaufteilen',
+    ],
+  },
   {
     version: '1.14.26',
     date: '2026-06-08',

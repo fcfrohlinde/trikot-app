@@ -130,6 +130,43 @@ function getPersonItemSize(person, itemId) {
   return (person?.individualSizes && itemSize) ? itemSize : (person?.size || 'L');
 }
 
+function normalizeArticleKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeSizeKey(value) {
+  const size = String(value || '').trim().toUpperCase();
+  return size === '3XL' ? 'XXXL' : size;
+}
+
+function itemMatchesCatalogEntry(data, sourceItemId, targetItemId) {
+  if (!sourceItemId || !targetItemId) return false;
+  if (sourceItemId === targetItemId) return true;
+  const sourceItem = (data.items || []).find(item => item.id === sourceItemId);
+  const targetItem = (data.items || []).find(item => item.id === targetItemId);
+  if (!sourceItem || !targetItem) return false;
+  const sourceArticle = normalizeArticleKey(sourceItem.articleNumber);
+  const targetArticle = normalizeArticleKey(targetItem.articleNumber);
+  if (sourceArticle && targetArticle && sourceArticle === targetArticle) return true;
+  const sourceName = normalizeArticleKey(sourceItem.name);
+  const targetName = normalizeArticleKey(targetItem.name);
+  return !!sourceName && !!targetName && sourceName === targetName;
+}
+
+function inventoryItemMatches(data, inv, targetItemId) {
+  if (!inv || !targetItemId) return false;
+  if (inv.itemType === targetItemId) return true;
+  const targetItem = (data.items || []).find(item => item.id === targetItemId);
+  if (!targetItem) return false;
+  const invArticle = normalizeArticleKey(inv.articleNumber);
+  const targetArticle = normalizeArticleKey(targetItem.articleNumber);
+  if (invArticle && targetArticle && invArticle === targetArticle) return true;
+  const invName = normalizeArticleKey(inv.itemName);
+  const targetName = normalizeArticleKey(targetItem.name);
+  if (invName && targetName && invName === targetName) return true;
+  return itemMatchesCatalogEntry(data, inv.itemType, targetItemId);
+}
+
 function shouldPlanStandardSetInMaterial(data, person) {
   if (!person || !shouldReceiveSeasonEquipment(person)) return false;
   const sets = getPersonStandardSets(data.settings, person);
@@ -194,27 +231,29 @@ function stockReservedForOther(inv, person) {
   return inv?.reservedFor && inv.reservedFor !== person?.id;
 }
 
-function stockUsableForPerson(inv, person) {
+function stockUsableForPerson(inv, person, options = {}) {
   if (!inv || inv.status !== 'lager') return false;
   if (stockReservedForOther(inv, person)) return false;
-  if (inv.team && person?.team && inv.team !== person.team && person?._kind !== 'coach') return false;
+  const allowCrossTeam = !!options.allowCrossTeam || person?._kind === 'coach';
+  if (!allowCrossTeam && inv.team && person?.team && inv.team !== person.team) return false;
   return true;
 }
 
-function findStockCandidates(data, itemId, person, size, usedStock) {
+function findStockCandidates(data, itemId, person, size, usedStock, options = {}) {
   const wantedSize = size || person?.size || 'L';
   return (data.inventory || []).filter(inv =>
-    stockUsableForPerson(inv, person) &&
-    inv.itemType === itemId &&
-    (inv.size || wantedSize) === wantedSize &&
+    stockUsableForPerson(inv, person, options) &&
+    inventoryItemMatches(data, inv, itemId) &&
+    normalizeSizeKey(inv.size || wantedSize) === normalizeSizeKey(wantedSize) &&
     !usedStock.has(inv.id)
   );
 }
 
-function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock) {
+function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock, options = {}) {
   const wantedSize = size || person?.size || 'L';
-  const stock = findStockCandidates(data, itemId, person, wantedSize, usedStock);
-  const exactTransfer = findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, exactNumberOnly: true });
+  const sourceOptions = { allowCrossTeam: !!options.allowCrossTeam };
+  const stock = findStockCandidates(data, itemId, person, wantedSize, usedStock, sourceOptions);
+  const exactTransfer = findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, exactNumberOnly: true, allowCrossTeam: sourceOptions.allowCrossTeam });
   if (exactTransfer) return exactTransfer;
 
   const reservedExact = stock.find(inv => inv.reservedFor === person?.id && inventoryMatchesPersonIdentityInData(data, inv, person));
@@ -232,22 +271,23 @@ function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock) {
   const reprintStock = stock.find(inv => !sourceReprintExcluded(data, inv, person) && !inventoryMatchesPersonIdentityInData(data, inv, person));
   if (reprintStock) return reprintStock;
 
-  return findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, excludeReprintBlocked: true });
+  return findSeasonTransferCandidate(data, itemId, person, usedStock, { size: wantedSize, excludeReprintBlocked: true, allowCrossTeam: sourceOptions.allowCrossTeam });
 }
 
 function findSeasonTransferCandidate(data, itemId, person, usedStock, options = {}) {
   const wantedSize = options.size || person?.size || 'L';
   const exactNumberOnly = !!options.exactNumberOnly;
   const excludeReprintBlocked = !!options.excludeReprintBlocked;
+  const allowCrossTeam = !!options.allowCrossTeam || person?._kind === 'coach';
   const candidates = (data.inventory || []).filter(inv => {
     if (usedStock.has(inv.id)) return false;
-    if (inv.status !== 'ausgegeben' || inv.itemType !== itemId) return false;
-    if ((inv.size || wantedSize) !== wantedSize) return false;
+    if (inv.status !== 'ausgegeben' || !inventoryItemMatches(data, inv, itemId)) return false;
+    if (normalizeSizeKey(inv.size || wantedSize) !== normalizeSizeKey(wantedSize)) return false;
     const owner = findPerson(data, inv.assignedTo);
     const valid = owner
       && owner.id !== person.id
       && owner._kind === person._kind
-      && (owner.team === person.team || person._kind === 'coach')
+      && (allowCrossTeam || owner.team === person.team)
       && seasonFlag(owner.seasonExit)
       && !seasonFlag(owner.seasonEntry);
     if (!valid) return false;
@@ -279,28 +319,28 @@ function openOrderedQtyForPersonItem(data, person, itemId, size) {
     if (!orderCoversNeed(order)) return sum;
     return sum + (order.lines || []).reduce((lineSum, line) => {
       if (line.playerId !== person?.id) return lineSum;
-      if (line.itemType !== itemId) return lineSum;
-      if (size && line.size && line.size !== size) return lineSum;
+      if (!itemMatchesCatalogEntry(data, line.itemType, itemId)) return lineSum;
+      if (size && line.size && normalizeSizeKey(line.size) !== normalizeSizeKey(size)) return lineSum;
       return lineSum + (Number(line.qty) || 1);
     }, 0);
   }, 0);
 }
 
-function currentDraftQtyForPersonItem(lines, person, itemId, size) {
+function currentDraftQtyForPersonItem(lines, person, itemId, size, data = null) {
   return (lines || []).reduce((sum, line) => {
     if (line.playerId !== person?.id) return sum;
-    if (line.itemType !== itemId) return sum;
-    if (size && line.size && line.size !== size) return sum;
+    if (data ? !itemMatchesCatalogEntry(data, line.itemType, itemId) : line.itemType !== itemId) return sum;
+    if (size && line.size && normalizeSizeKey(line.size) !== normalizeSizeKey(size)) return sum;
     return sum + (Number(line.qty) || 1);
   }, 0);
 }
 
 function issuedQtyForPersonItem(data, person, itemId, size) {
   return (data.inventory || []).filter(inv =>
-    inv.itemType === itemId &&
+    inventoryItemMatches(data, inv, itemId) &&
     inv.status === 'ausgegeben' &&
     inv.assignedTo === person?.id &&
-    (!size || !inv.size || inv.size === size)
+    (!size || !inv.size || normalizeSizeKey(inv.size) === normalizeSizeKey(size))
   ).length;
 }
 
@@ -1190,9 +1230,9 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
 
   function issuedCountForItem(itemId, size) {
     return (data.inventory || []).filter(inv =>
-      inv.itemType === itemId &&
+      inventoryItemMatches(data, inv, itemId) &&
       inv.status === 'ausgegeben' &&
-      (!size || !inv.size || inv.size === size) &&
+      (!size || !inv.size || normalizeSizeKey(inv.size) === normalizeSizeKey(size)) &&
       (
         inv.assignedTo === person.id ||
         (inv.assignedTo == null && inv.team === person.team && inventoryMatchesPersonNumber(inv, person))
@@ -1528,7 +1568,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
 
   function issuedCountForPersonItem(person, itemId) {
     return (data.inventory || []).filter(inv =>
-      inv.itemType === itemId &&
+      inventoryItemMatches(data, inv, itemId) &&
       inv.status === 'ausgegeben' &&
       (
         inv.assignedTo === person.id ||
@@ -2883,6 +2923,113 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
   );
 }
 
+function orderSponsorLabel(order) {
+  if (order?.sponsorKey) return order.sponsorKey;
+  const sponsors = order?.sponsors || {};
+  return [sponsors.brust, sponsors.ruecken, sponsors.aermel].filter(Boolean).join(' / ');
+}
+
+function SponsorKitOverview({ data }) {
+  const persons = allPersons(data);
+  const byId = new Map(persons.map(p => [p.id, p]));
+  const groups = new Map();
+
+  function addGroup({ sponsor, team, itemName, status, qty = 1 }) {
+    const sponsorLabel = String(sponsor || '').trim();
+    if (!sponsorLabel) return;
+    const teamLabel = team || 'ohne Mannschaft';
+    const key = `${sponsorLabel}__${teamLabel}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        sponsor: sponsorLabel,
+        team: teamLabel,
+        lager: 0,
+        ausgegeben: 0,
+        bestellt: 0,
+        articles: new Set(),
+      });
+    }
+    const group = groups.get(key);
+    if (status === 'lager') group.lager += qty;
+    else if (status === 'ausgegeben') group.ausgegeben += qty;
+    else if (status === 'bestellt') group.bestellt += qty;
+    if (itemName) group.articles.add(itemName);
+  }
+
+  (data.inventory || []).forEach(inv => {
+    const person = byId.get(inv.assignedTo);
+    addGroup({
+      sponsor: inv.sponsorKey,
+      team: person?.team || inv.team,
+      itemName: inv.itemName,
+      status: inv.status === 'ausgegeben' ? 'ausgegeben' : 'lager',
+    });
+  });
+
+  (data.orders || []).filter(orderCoversNeed).forEach(order => {
+    const sponsor = orderSponsorLabel(order);
+    (order.lines || []).forEach(line => {
+      const person = byId.get(line.playerId);
+      const item = (data.items || []).find(i => i.id === line.itemType);
+      addGroup({
+        sponsor,
+        team: person?.team || order.team,
+        itemName: item?.name || line.itemName || line.itemType,
+        status: 'bestellt',
+        qty: Number(line.qty) || 1,
+      });
+    });
+  });
+
+  const rows = [...groups.values()].sort((a, b) =>
+    compareValues(a.sponsor, b.sponsor, 'asc') || compareValues(a.team, b.team, 'asc')
+  );
+
+  return (
+    <div className="bg-white border border-stone-200 mb-4">
+      <div className="p-4 border-b border-stone-200">
+        <div className="font-display text-xl">TRIKOTSÄTZE NACH SPONSOR</div>
+        <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
+          Übersicht der Sponsorenzugehörigkeit je Mannschaft aus Lager, Ausgabe und offenen Bestellungen.
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <div className="p-4 text-sm text-stone-500">Noch keine Sponsorenzuordnung an Material oder Bestellung vorhanden.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-stone-50 uppercase tracking-wider text-stone-500">
+              <tr>
+                <th className="text-left p-3">Sponsor</th>
+                <th className="text-left p-3">Mannschaft nutzt</th>
+                <th className="text-right p-3">Lager</th>
+                <th className="text-right p-3">Ausgegeben</th>
+                <th className="text-right p-3">Bestellt</th>
+                <th className="text-left p-3">Artikel</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(row => (
+                <tr key={`${row.sponsor}_${row.team}`} className="border-t border-stone-100">
+                  <td className="p-3 font-medium">{row.sponsor}</td>
+                  <td className="p-3">{row.team}</td>
+                  <td className="p-3 text-right">{row.lager}</td>
+                  <td className="p-3 text-right">{row.ausgegeben}</td>
+                  <td className="p-3 text-right">{row.bestellt}</td>
+                  <td className="p-3" style={{ color: 'var(--ink-mute)' }}>
+                    {[...row.articles].slice(0, 6).join(', ')}
+                    {row.articles.size > 6 ? ` +${row.articles.size - 6}` : ''}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SeasonMaterialWorkArea({ data, update }) {
   const [open, setOpen] = useState(true);
   const [filterPersonKind, setFilterPersonKind] = useState('alle'); // alle | player | coach
@@ -2891,6 +3038,7 @@ function SeasonMaterialWorkArea({ data, update }) {
   const [filterItemId, setFilterItemId] = useState('');
   const [filterSize, setFilterSize] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
+  const [allowCrossTeamRedistribution, setAllowCrossTeamRedistribution] = useState(false);
   const standardSets = migrateStandardSets(data.settings);
   const persons = allPersons(data);
   const openOrders = (data.orders || []).filter(orderCoversNeed);
@@ -2904,7 +3052,7 @@ function SeasonMaterialWorkArea({ data, update }) {
       if (!person || !item) return;
       const target = { ...person, _kind: person._kind };
       const wantedSize = size || getPersonItemSize(target, item.id);
-      const source = chooseMaterialSourceForNeed(data, item.id, target, wantedSize, usedSources);
+      const source = chooseMaterialSourceForNeed(data, item.id, target, wantedSize, usedSources, { allowCrossTeam: allowCrossTeamRedistribution });
       if (!source) {
         if (!allowMissing) return;
         result.push({
@@ -2937,9 +3085,9 @@ function SeasonMaterialWorkArea({ data, update }) {
         size: source.size || wantedSize,
         source,
         sourceLabel: sourcePerson
-          ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson._kind === 'coach' && sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
+          ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
           : returnedMatchingStock
-            ? `Rücklauf Lager${source.assignedName ? ` ${source.assignedName}` : ''}`
+            ? `Rücklauf Lager${source.assignedName ? ` ${source.assignedName}` : ''}${source.team ? ` (${source.team})` : ''}`
           : source.reservedFor
             ? 'Reservierter Lagerbestand'
             : source.team ? `Lagerbestand ${source.team}` : 'Lagerbestand',
@@ -2990,7 +3138,7 @@ function SeasonMaterialWorkArea({ data, update }) {
     });
 
     return result;
-  }, [data, persons, standardSets, openOrders]);
+  }, [data, persons, standardSets, openOrders, allowCrossTeamRedistribution]);
 
   const filterPersons = persons.filter(p => {
     if (filterTeam && p.team !== filterTeam) return false;
@@ -3254,6 +3402,18 @@ function SeasonMaterialWorkArea({ data, update }) {
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 mt-3 text-xs" style={{ color: 'var(--ink-mute)' }}>
               <span>{filteredRows.length} von {rows.length} Vorschlag/Vorschlägen sichtbar</span>
+              <label className="inline-flex items-start gap-2 px-3 py-2 bg-white border border-stone-300 text-left cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allowCrossTeamRedistribution}
+                  onChange={e => setAllowCrossTeamRedistribution(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block font-medium" style={{ color: 'var(--ink)' }}>Mannschaftsübergreifend suchen</span>
+                  <span className="block">Standard: gleiche Nummer/Größe nur innerhalb derselben Mannschaft.</span>
+                </span>
+              </label>
               <button
                 onClick={() => { setFilterPersonKind('alle'); setFilterTeam(''); setFilterPersonId(''); setFilterItemId(''); setFilterSize(''); setFilterSearch(''); }}
                 className="px-3 py-1.5 border border-stone-300 bg-white"
@@ -3644,6 +3804,8 @@ function InventoryView({ data, update }) {
       </div>
 
       <ArticleLocationSearch data={data} title="ARTIKELSUCHE MATERIAL" />
+
+      <SponsorKitOverview data={data} />
 
       <SeasonMaterialWorkArea data={data} update={update} />
 
@@ -5528,6 +5690,7 @@ function OrderForm({ data, order, onSave, onCancel }) {
   const [showPersonPicker, setShowPersonPicker] = useState(false);
   const [distributingLineId, setDistributingLineId] = useState(null);
   const [setSuggestionInfo, setSetSuggestionInfo] = useState(null);
+  const [allowCrossTeamRedistribution, setAllowCrossTeamRedistribution] = useState(false);
 
   const suppliers = data.suppliers || [];
   const articleSuppliers = suppliers.filter(s => s.type === 'artikel' || s.type === 'beides');
@@ -5640,7 +5803,7 @@ function OrderForm({ data, order, onSave, onCancel }) {
   function hasItemAssigned(personId, itemId) {
     return (data.inventory || []).some(inv =>
       inv.assignedTo === personId
-      && inv.itemType === itemId
+      && inventoryItemMatches(data, inv, itemId)
       && inv.status === 'ausgegeben'
     );
   }
@@ -5683,7 +5846,7 @@ function OrderForm({ data, order, onSave, onCancel }) {
         const requestedQty = Number(entry.qty) || 1;
         const alreadyIssued = issuedQtyForPersonItem(data, targetPerson, item.id, size);
         const alreadyOrdered = openOrderedQtyForPersonItem(data, targetPerson, item.id, size);
-        const alreadyInDraft = currentDraftQtyForPersonItem([...lines, ...newLines], targetPerson, item.id, size);
+        const alreadyInDraft = currentDraftQtyForPersonItem([...lines, ...newLines], targetPerson, item.id, size, data);
         let remainingQty = Math.max(0, requestedQty - alreadyIssued - alreadyOrdered - alreadyInDraft);
         if (remainingQty === 0) {
           skippedExisting++;
@@ -5696,7 +5859,7 @@ function OrderForm({ data, order, onSave, onCancel }) {
         }
         seen.add(key);
         for (let needIdx = 0; needIdx < remainingQty; needIdx++) {
-          const source = chooseMaterialSourceForNeed(data, item.id, targetPerson, size, usedTransfers);
+          const source = chooseMaterialSourceForNeed(data, item.id, targetPerson, size, usedTransfers, { allowCrossTeam: allowCrossTeamRedistribution });
           if (source) {
             usedTransfers.add(source.id);
             const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
@@ -5704,8 +5867,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
               itemName: item.name,
               size: source.size || size,
               sourceName: sourcePerson
-                ? `${sourcePerson.firstName} ${sourcePerson.lastName}`
-                : source.reservedFor ? 'Reservierter Lagerbestand' : 'Lagerbestand',
+                ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
+                : source.reservedFor ? 'Reservierter Lagerbestand' : source.team ? `Lagerbestand (${source.team})` : 'Lagerbestand',
               targetName: `${person.firstName} ${person.lastName}`,
               oldNumber: inventoryEffectiveNumber(data, source),
               newNumber: personNumberValue(targetPerson),
@@ -5898,6 +6061,18 @@ function OrderForm({ data, order, onSave, onCancel }) {
             </select>
           </div>
         )}
+        <label className="inline-flex items-start gap-2 text-xs px-3 py-1.5 border border-stone-300 bg-white cursor-pointer">
+          <input
+            type="checkbox"
+            checked={allowCrossTeamRedistribution}
+            onChange={e => setAllowCrossTeamRedistribution(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="block font-medium">Umverteilung mannschaftsübergreifend</span>
+            <span className="block" style={{ color: 'var(--ink-mute)' }}>Standard: nur gleiche Mannschaft.</span>
+          </span>
+        </label>
       </div>
 
       {setSuggestionInfo && (
