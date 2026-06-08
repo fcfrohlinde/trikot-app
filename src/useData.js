@@ -23,6 +23,7 @@ const DEFAULTS = {
   teams: DEFAULT_TEAMS,
   deposits: [],
   orders: [],
+  issueProtocols: [],
   transactions: [],
   reports: [],
   suppliers: [],

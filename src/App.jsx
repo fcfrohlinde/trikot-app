@@ -61,13 +61,34 @@ function getDefaultDeposit(settings, team) {
 }
 
 // Spieler + Trainer als gemeinsame Liste — für Material-Ausgabe, Pfand, Rückgabe, Bestellungen
-function allPersons(data) {
+const DATA_INDEX_CACHE = new WeakMap();
+
+function dataIndex(data) {
+  if (!data || typeof data !== 'object') {
+    return { persons: [], personById: new Map(), itemById: new Map() };
+  }
+  const cached = DATA_INDEX_CACHE.get(data);
+  if (cached) return cached;
   const players = (data.players || []).map(p => ({ ...p, _kind: 'player' }));
   const coaches = (data.coaches || []).map(c => ({ ...c, _kind: 'coach' }));
-  return [...players, ...coaches];
+  const persons = [...players, ...coaches];
+  const index = {
+    persons,
+    personById: new Map(persons.map(p => [p.id, p])),
+    itemById: new Map((data.items || []).map(item => [item.id, item])),
+  };
+  DATA_INDEX_CACHE.set(data, index);
+  return index;
+}
+
+function allPersons(data) {
+  return dataIndex(data).persons;
 }
 function findPerson(data, id) {
-  return allPersons(data).find(p => p.id === id);
+  return dataIndex(data).personById.get(id);
+}
+function findItem(data, id) {
+  return dataIndex(data).itemById.get(id);
 }
 
 function normalizeInventoryStatus(inv) {
@@ -210,8 +231,8 @@ function articleNamesMatch(a, b) {
 function itemMatchesCatalogEntry(data, sourceItemId, targetItemId) {
   if (!sourceItemId || !targetItemId) return false;
   if (sourceItemId === targetItemId) return true;
-  const sourceItem = (data.items || []).find(item => item.id === sourceItemId);
-  const targetItem = (data.items || []).find(item => item.id === targetItemId);
+  const sourceItem = findItem(data, sourceItemId);
+  const targetItem = findItem(data, targetItemId);
   if (!sourceItem || !targetItem) return false;
   const sourceCodes = articleCodesFrom(sourceItem.articleNumber, sourceItem.name);
   const targetCodes = articleCodesFrom(targetItem.articleNumber, targetItem.name);
@@ -222,7 +243,7 @@ function itemMatchesCatalogEntry(data, sourceItemId, targetItemId) {
 function inventoryItemMatches(data, inv, targetItemId) {
   if (!inv || !targetItemId) return false;
   if (inv.itemType === targetItemId) return true;
-  const targetItem = (data.items || []).find(item => item.id === targetItemId);
+  const targetItem = findItem(data, targetItemId);
   if (!targetItem) return false;
   const invCodes = articleCodesFrom(inv.articleNumber, inv.itemName, inv.itemType);
   const targetCodes = articleCodesFrom(targetItem.articleNumber, targetItem.name, targetItem.id);
@@ -309,7 +330,7 @@ function materialSourceNeedsReprint(data, inv, person, context = {}) {
 }
 
 function itemReprintExcluded(data, itemId) {
-  return !!(data.items || []).find(item => item.id === itemId)?.reprintExcluded;
+  return !!findItem(data, itemId)?.reprintExcluded;
 }
 
 function sourceReprintExcluded(data, inv, person) {
@@ -416,6 +437,28 @@ function inventoryNumberForTarget(data, inv, person, itemId, size, options = {})
   if (direct) return direct;
   const owner = seasonExitSourceOwner(data, inv, itemId, size, options);
   return personNumberValue(owner).toUpperCase();
+}
+
+function returnedStockMatchesTarget(data, inv, person, itemId, size, options = {}) {
+  if (!inv || !inventoryIsInStock(data, inv)) return false;
+  return seasonStockMatchesTarget(data, inv, person, itemId, size, options)
+    || (
+      !!(inventoryNumberForTarget(data, inv, person, itemId, size, options) || inv.assignedName || inv.returnedName)
+      && inventoryMatchesPersonNumberInData(data, inv, person)
+    );
+}
+
+function materialSourceIsRedistribution(data, source, person, itemId, size, options = {}) {
+  if (!source || !person) return false;
+  if (inventoryIsIssued(data, source)) {
+    const owner = findPerson(data, source.assignedTo);
+    return !!owner
+      && owner.id !== person.id
+      && owner._kind === person._kind
+      && seasonFlag(owner.seasonExit)
+      && !seasonFlag(owner.seasonEntry);
+  }
+  return returnedStockMatchesTarget(data, source, person, itemId, size, options);
 }
 
 function stockReservedForOther(inv, person) {
@@ -584,7 +627,7 @@ function userCan(user, action) {
 function canDeletePerson(data, personId) {
   const reasons = [];
   const inventoryOut = (data.inventory || []).filter(i =>
-    i.assignedTo === personId && i.status === 'ausgegeben'
+    i.assignedTo === personId && inventoryIsIssued(data, i)
   );
   if (inventoryOut.length > 0) {
     reasons.push(`${inventoryOut.length} ausgegebenes Materialteil${inventoryOut.length > 1 ? 'e' : ''} (zuerst zurückgeben)`);
@@ -994,7 +1037,7 @@ function Dashboard({ data, setView }) {
   const totalPlayers = data.players.length;
   const totalCoaches = (data.coaches || []).length;
   const playersWithMaterial = data.players.filter(p =>
-    data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben')
+    data.inventory.some(i => i.assignedTo === p.id && inventoryIsIssued(data, i))
   ).length;
   const unusedItems = data.inventory.filter(i => inventoryIsInStock(data, i)).length;
   const totalDeposits = data.deposits.filter(d => !d.refunded).reduce((s, d) => s + d.amount, 0);
@@ -1057,7 +1100,7 @@ function Dashboard({ data, setView }) {
             ) : data.teams.map(team => {
               const teamPlayers = data.players.filter(p => p.team === team);
               const teamCoaches = (data.coaches || []).filter(c => c.team === team);
-              const withMat = teamPlayers.filter(p => data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben')).length;
+              const withMat = teamPlayers.filter(p => data.inventory.some(i => i.assignedTo === p.id && inventoryIsIssued(data, i))).length;
               return (
                 <div key={team} className="p-3 bg-white flex items-center justify-between">
                   <div>
@@ -1199,7 +1242,7 @@ function PersonsView({ data, update, kind }) {
   function exportHandoverProtocol(person) {
     const signature = prompt('Digitale Unterschrift / Name der empfangenden Person:');
     if (!signature) return;
-    const items = (data.inventory || []).filter(i => i.assignedTo === person.id && i.status === 'ausgegeben');
+    const items = (data.inventory || []).filter(i => i.assignedTo === person.id && inventoryIsIssued(data, i));
     const deposit = (data.deposits || []).find(d => d.playerId === person.id && !d.refunded);
     const mode = getDepositMode(data.settings, person.team);
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -1230,8 +1273,8 @@ function PersonsView({ data, update, kind }) {
       if (sort.key === 'team') return compareValues(a.team, b.team, sort.dir);
       if (sort.key === 'size') return compareValues(a.size, b.size, sort.dir);
       if (sort.key === 'material') {
-        const ac = data.inventory.filter(i => i.assignedTo === a.id && i.status === 'ausgegeben').length;
-        const bc = data.inventory.filter(i => i.assignedTo === b.id && i.status === 'ausgegeben').length;
+        const ac = data.inventory.filter(i => i.assignedTo === a.id && inventoryIsIssued(data, i)).length;
+        const bc = data.inventory.filter(i => i.assignedTo === b.id && inventoryIsIssued(data, i)).length;
         return compareValues(ac, bc, sort.dir);
       }
       if (sort.key === 'deposit') {
@@ -1323,7 +1366,7 @@ function PersonsView({ data, update, kind }) {
               </thead>
               <tbody>
                 {sortPersonList(filtered).map(p => {
-                  const itemCount = data.inventory.filter(i => i.assignedTo === p.id && i.status === 'ausgegeben').length;
+                  const itemCount = data.inventory.filter(i => i.assignedTo === p.id && inventoryIsIssued(data, i)).length;
                   const flaggedCount = data.inventory.filter(i => i.assignedTo === p.id && i.flagged).length;
                   const deposit = data.deposits.find(d => d.playerId === p.id && !d.refunded);
                   return (
@@ -1429,7 +1472,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
   function issuedCountForItem(itemId, size) {
     return (data.inventory || []).filter(inv =>
       inventoryItemMatches(data, inv, itemId) &&
-      inv.status === 'ausgegeben' &&
+      inventoryIsIssued(data, inv) &&
       (!size || !inv.size || normalizeSizeKey(inv.size) === normalizeSizeKey(size)) &&
       (
         inv.assignedTo === person.id ||
@@ -1445,7 +1488,7 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
     const usedStock = new Set();
     const suggestions = [];
     (selectedSet.items || []).forEach(entry => {
-      const item = (data.items || []).find(i => i.id === entry.itemId);
+      const item = findItem(data, entry.itemId);
       if (!item) return;
       const qty = Number(entry.qty) || 1;
       const wantedSize = getPersonItemSize(person, item.id);
@@ -1458,14 +1501,9 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
         if (sized) usedStock.add(sized.id);
         const oldNumber = sized ? inventoryNumberForTarget(data, sized, person, item.id, wantedSize) : '';
         const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person, { itemId: item.id, size: wantedSize });
-        const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
-        const returnedMatchingStock = sized?.status === 'lager'
-          && (
-            seasonStockMatchesTarget(data, sized, person, item.id, wantedSize)
-            || ((inventoryNumberForTarget(data, sized, person, item.id, wantedSize) || sized.assignedName || sized.returnedName)
-              && inventoryMatchesPersonNumberInData(data, sized, person))
-          );
-        const action = (fromPerson || returnedMatchingStock)
+        const fromPerson = sized && inventoryIsIssued(data, sized) ? findPerson(data, sized.assignedTo) : null;
+        const returnedMatchingStock = returnedStockMatchesTarget(data, sized, person, item.id, wantedSize);
+        const action = materialSourceIsRedistribution(data, sized, person, item.id, wantedSize)
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
           : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
         suggestions.push({
@@ -1770,7 +1808,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
   function issuedCountForPersonItem(person, itemId) {
     return (data.inventory || []).filter(inv =>
       inventoryItemMatches(data, inv, itemId) &&
-      inv.status === 'ausgegeben' &&
+      inventoryIsIssued(data, inv) &&
       (
         inv.assignedTo === person.id ||
         (inv.assignedTo == null && inv.team === person.team && inventoryMatchesPersonNumber(inv, person))
@@ -1786,7 +1824,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
       if (!setSupportsPerson(selectedSet, person) && person.standardSetId !== selectedSet.id) return;
       const targetNumber = personNumberValue(person);
       (selectedSet.items || []).forEach(entry => {
-        const item = (data.items || []).find(i => i.id === entry.itemId);
+        const item = findItem(data, entry.itemId);
         if (!item) return;
         const size = getPersonItemSize(person, item.id);
         const missing = Math.max(0,
@@ -1798,15 +1836,11 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           const source = chooseMaterialSourceForNeed(data, item.id, person, size, usedStock);
           const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
           if (sized) usedStock.add(sized.id);
-        const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
+        const fromPerson = sized && inventoryIsIssued(data, sized) ? findPerson(data, sized.assignedTo) : null;
         const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person, { itemId: item.id, size });
-        const returnedMatchingStock = sized?.status === 'lager'
-          && (
-            seasonStockMatchesTarget(data, sized, person, item.id, size)
-            || ((inventoryNumberForTarget(data, sized, person, item.id, size) || sized.assignedName || sized.returnedName)
-              && inventoryMatchesPersonNumberInData(data, sized, person))
-          );
-        const action = (fromPerson || returnedMatchingStock)
+        const returnedMatchingStock = returnedStockMatchesTarget(data, sized, person, item.id, size);
+        const oldNumber = sized ? inventoryNumberForTarget(data, sized, person, item.id, size) : '';
+        const action = materialSourceIsRedistribution(data, sized, person, item.id, size)
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
           : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
           out.push({
@@ -1815,7 +1849,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
             item,
             stock: sized,
             size: sized?.size || size,
-            oldNumber: sized ? inventoryNumberForTarget(data, sized, person, item.id, size) : '',
+            oldNumber,
             newNumber: targetNumber,
             needsReprint,
             action,
@@ -2976,6 +3010,7 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
   const [number, setNumber] = useState('');
   const [itemId, setItemId] = useState('alle');
   const [scope, setScope] = useState('artikel');
+  const [location, setLocation] = useState('alle');
   const [criteria, setCriteria] = useState(null);
 
   const persons = allPersons(data);
@@ -2983,6 +3018,7 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
   const activeNumber = criteria?.number || '';
   const activeItemId = criteria?.itemId || 'alle';
   const activeScope = criteria?.scope || 'artikel';
+  const activeLocation = criteria?.location || 'alle';
   const normalizedNumber = String(activeNumber).trim().toLowerCase();
   const matchedPersons = persons.filter(p => {
     if (!criteria) return false;
@@ -2995,9 +3031,11 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
 
   if (criteria) {
     (data.inventory || []).forEach(inv => {
-      const item = (data.items || []).find(x => x.id === inv.itemType) || { id: inv.itemType, name: inv.itemName || inv.itemType };
+      const item = findItem(data, inv.itemType) || { id: inv.itemType, name: inv.itemName || inv.itemType };
       const person = findPerson(data, inv.assignedTo);
       const invTeam = inventoryIsIssued(data, inv) ? person?.team : inv.team;
+      const rowLocation = inventoryIsInStock(data, inv) ? 'lager' : inventoryIsIssued(data, inv) ? 'ausgegeben' : 'sonstige';
+      if (activeLocation !== 'alle' && activeLocation !== rowLocation) return;
       const numberMatch = !normalizedNumber || (person && matchedPersonIds.has(person.id)) || String(inv.assignedNumber || '').trim().toLowerCase() === normalizedNumber;
       const teamMatch = activeTeam === 'alle' || invTeam === activeTeam || (!invTeam && inventoryIsInStock(data, inv));
       const itemMatch = activeItemId === 'alle' || inv.itemType === activeItemId;
@@ -3006,6 +3044,7 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
         rows.push({
           key: `inv_${inv.id}`,
           status: inventoryIsInStock(data, inv) ? 'Im Lager' : inventoryIsIssued(data, inv) ? 'Beim Spieler/Trainer' : inventoryStatusLabel(data, inv),
+          location: rowLocation,
           item,
           size: inv.size || '',
           number: inv.assignedNumber || personNumberValue(person) || '',
@@ -3016,9 +3055,10 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
       }
     });
 
-    (data.orders || []).forEach(order => {
+    (data.orders || []).filter(orderCoversNeed).forEach(order => {
       (order.lines || []).forEach(line => {
-        const item = (data.items || []).find(x => x.id === line.itemType) || { id: line.itemType, name: line.itemType };
+        if (activeLocation !== 'alle' && activeLocation !== 'bestellt') return;
+        const item = findItem(data, line.itemType) || { id: line.itemType, name: line.itemType };
         const person = findPerson(data, line.playerId);
         const lineTeam = person?.team || order.team;
         const numberMatch = !normalizedNumber || String(line.number || personNumberValue(person) || '').trim().toLowerCase() === normalizedNumber;
@@ -3029,6 +3069,7 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
           rows.push({
             key: `ord_${order.id}_${line.id}`,
             status: 'Bestellt',
+            location: 'bestellt',
             item,
             size: line.size || '',
             number: line.number || personNumberValue(person) || '',
@@ -3047,6 +3088,7 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
       number: number.trim(),
       itemId,
       scope,
+      location,
     });
   }
 
@@ -3055,13 +3097,14 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
     setNumber('');
     setItemId('alle');
     setScope('artikel');
+    setLocation('alle');
     setCriteria(null);
   }
 
   return (
     <div className="bg-white border border-stone-200 p-4 mb-4">
       <div className="font-display text-xl mb-3">{title}</div>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-3">
         <Field label="Mannschaft">
           <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={team} onChange={e => setTeam(e.target.value)}>
             <option value="alle">Alle Mannschaften</option>
@@ -3081,6 +3124,15 @@ function ArticleLocationSearch({ data, title = 'ARTIKELSUCHE' }) {
           <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={scope} onChange={e => setScope(e.target.value)}>
             <option value="artikel">Nur gewählten Artikel</option>
             <option value="person">Alle Teile der Person</option>
+          </select>
+        </Field>
+        <Field label="Ort / Status">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={location} onChange={e => setLocation(e.target.value)}>
+            <option value="alle">Alle Orte</option>
+            <option value="lager">Im Lager</option>
+            <option value="ausgegeben">Beim Spieler/Trainer</option>
+            <option value="bestellt">In Bestellung</option>
+            <option value="sonstige">Sonstige Status</option>
           </select>
         </Field>
       </div>
@@ -3155,7 +3207,6 @@ function sponsorLabelForItem(data, itemId, team) {
 
 function sponsorLabelForInventory(data, inv) {
   if (!inv) return '';
-  if (inv.sponsorKey) return inv.sponsorKey;
   const person = inv.assignedTo ? findPerson(data, inv.assignedTo) : null;
   return sponsorLabelForItem(data, inv.itemType, person?.team || inv.team);
 }
@@ -3262,6 +3313,65 @@ function SponsorKitOverview({ data }) {
       )}
     </div>
   );
+}
+
+function sponsorUsageStats(data, sponsor) {
+  const persons = allPersons(data);
+  const byId = new Map(persons.map(p => [p.id, p]));
+  const stats = { lager: 0, ausgegeben: 0, bestellt: 0, teams: new Set(), articles: new Set() };
+
+  function add({ itemId, itemName, team, status, qty = 1 }) {
+    if (!sponsorMatchesContext(sponsor, itemId, team)) return;
+    if (status === 'lager') stats.lager += qty;
+    else if (status === 'ausgegeben') stats.ausgegeben += qty;
+    else if (status === 'bestellt') stats.bestellt += qty;
+    if (team) stats.teams.add(team);
+    if (itemName) stats.articles.add(itemName);
+  }
+
+  (data.inventory || []).forEach(inv => {
+    const person = byId.get(inv.assignedTo);
+    const item = findItem(data, inv.itemType);
+    add({
+      itemId: inv.itemType,
+      itemName: item?.name || inv.itemName || inv.itemType,
+      team: person?.team || inv.team,
+      status: inventoryIsIssued(data, inv) ? 'ausgegeben' : inventoryIsInStock(data, inv) ? 'lager' : normalizeInventoryStatus(inv),
+    });
+  });
+
+  (data.orders || []).filter(orderCoversNeed).forEach(order => {
+    (order.lines || []).forEach(line => {
+      const person = byId.get(line.playerId);
+      const item = findItem(data, line.itemType);
+      add({
+        itemId: line.itemType,
+        itemName: item?.name || line.itemName || line.itemType,
+        team: person?.team || order.team,
+        status: 'bestellt',
+        qty: Number(line.qty) || 1,
+      });
+    });
+  });
+
+  return stats;
+}
+
+function limitedListLabel(values, fallback, max = 5) {
+  const list = [...new Set((values || []).filter(Boolean))];
+  if (list.length === 0) return fallback;
+  return `${list.slice(0, max).join(', ')}${list.length > max ? ` +${list.length - max}` : ''}`;
+}
+
+function sponsorPlacementLabel(value) {
+  const labels = {
+    satz: 'Trikotsatz / Satzkennung',
+    brust: 'Brust',
+    ruecken: 'Ruecken',
+    aermel: 'Aermel',
+    artikel: 'Artikel allgemein',
+  };
+  return labels[value] || value || 'Trikotsatz / Satzkennung';
 }
 
 function SponsorsView({ data, update }) {
@@ -3388,8 +3498,6 @@ function SponsorsView({ data, update }) {
         </div>
       )}
 
-      <SponsorKitOverview data={data} />
-
       <div className="bg-white border border-stone-200 overflow-hidden">
         {sponsors.length === 0 ? (
           <div className="p-8 text-sm text-stone-500">Noch keine Sponsoren angelegt.</div>
@@ -3401,22 +3509,31 @@ function SponsorsView({ data, update }) {
                   <th className="text-left p-3">Sponsor</th>
                   <th className="text-left p-3">Zuordnung</th>
                   <th className="text-left p-3">Mannschaften</th>
+                  <th className="text-right p-3">Lager</th>
+                  <th className="text-right p-3">Ausgegeben</th>
+                  <th className="text-right p-3">Bestellt</th>
                   <th className="text-left p-3">Artikel</th>
                   <th className="p-3"></th>
                 </tr>
               </thead>
               <tbody>
                 {sponsors.map(sponsor => {
-                  const itemNames = (sponsor.itemIds || []).map(id => (data.items || []).find(item => item.id === id)?.name || id);
+                  const stats = sponsorUsageStats(data, sponsor);
+                  const itemNames = (sponsor.itemIds || []).map(id => findItem(data, id)?.name || id);
+                  const usageArticles = [...stats.articles];
+                  const teamNames = sponsor.teams?.length ? sponsor.teams : [...stats.teams];
                   return (
                     <tr key={sponsor.id} className="border-t border-stone-100">
                       <td className="p-3 font-medium">
                         {sponsor.name}
                         {sponsor.notes && <div className="text-xs text-stone-500 mt-0.5">{sponsor.notes}</div>}
                       </td>
-                      <td className="p-3">{sponsor.placement || 'satz'}</td>
-                      <td className="p-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{(sponsor.teams || []).join(', ') || 'alle Mannschaften'}</td>
-                      <td className="p-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{itemNames.slice(0, 5).join(', ') || 'alle Artikel'}{itemNames.length > 5 ? ` +${itemNames.length - 5}` : ''}</td>
+                      <td className="p-3">{sponsorPlacementLabel(sponsor.placement)}</td>
+                      <td className="p-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{limitedListLabel(teamNames, 'alle Mannschaften')}</td>
+                      <td className="p-3 text-right">{stats.lager}</td>
+                      <td className="p-3 text-right">{stats.ausgegeben}</td>
+                      <td className="p-3 text-right">{stats.bestellt}</td>
+                      <td className="p-3 text-xs" style={{ color: 'var(--ink-soft)' }}>{limitedListLabel(itemNames.length ? itemNames : usageArticles, 'alle Artikel')}</td>
                       <td className="p-3 text-right whitespace-nowrap">
                         <button onClick={() => startEdit(sponsor)} className="p-1 text-stone-500 hover:text-stone-900" title="Bearbeiten"><Edit2 size={14} /></button>
                         <button onClick={() => deleteSponsor(sponsor.id)} className="p-1 text-stone-500 hover:text-red-600" title="Löschen"><Trash2 size={14} /></button>
@@ -3434,7 +3551,7 @@ function SponsorsView({ data, update }) {
 }
 
 function SeasonMaterialWorkArea({ data, update }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [filterPersonKind, setFilterPersonKind] = useState('alle'); // alle | player | coach
   const [filterTeam, setFilterTeam] = useState('');
   const [filterPersonId, setFilterPersonId] = useState('');
@@ -3442,11 +3559,12 @@ function SeasonMaterialWorkArea({ data, update }) {
   const [filterSize, setFilterSize] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
   const [allowCrossTeamRedistribution, setAllowCrossTeamRedistribution] = useState(false);
-  const standardSets = migrateStandardSets(data.settings);
-  const persons = allPersons(data);
-  const openOrders = (data.orders || []).filter(orderCoversNeed);
+  const standardSets = useMemo(() => migrateStandardSets(data.settings), [data.settings]);
+  const persons = useMemo(() => allPersons(data), [data]);
+  const openOrders = useMemo(() => (data.orders || []).filter(orderCoversNeed), [data.orders]);
 
   const rows = useMemo(() => {
+    if (!open) return [];
     const result = [];
     const usedSources = new Set();
     const needKeys = new Set();
@@ -3475,18 +3593,13 @@ function SeasonMaterialWorkArea({ data, update }) {
       }
 
       usedSources.add(source.id);
-      const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
-      const seasonSourceOwner = source.status === 'lager'
+      const sourcePerson = inventoryIsIssued(data, source) ? findPerson(data, source.assignedTo) : null;
+      const seasonSourceOwner = inventoryIsInStock(data, source)
         ? seasonExitSourceOwner(data, source, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution })
         : null;
       const needsReprint = materialSourceNeedsReprint(data, source, target, { itemId: item.id, size: wantedSize, allowCrossTeam: allowCrossTeamRedistribution });
-      const returnedMatchingStock = source.status === 'lager'
-        && (
-          seasonStockMatchesTarget(data, source, target, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution })
-          || ((inventoryNumberForTarget(data, source, target, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution }) || source.assignedName || source.returnedName)
-            && inventoryMatchesPersonNumberInData(data, source, target))
-        );
-      const category = needsReprint ? 'umbeflockung' : (source.status === 'ausgegeben' || returnedMatchingStock) ? 'umverteilung' : 'ausgabe';
+      const returnedMatchingStock = returnedStockMatchesTarget(data, source, target, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution });
+      const category = needsReprint ? 'umbeflockung' : materialSourceIsRedistribution(data, source, target, item.id, wantedSize, { allowCrossTeam: allowCrossTeamRedistribution }) ? 'umverteilung' : 'ausgabe';
       result.push({
         id: `${source.id}_${target.id}_${item.id}_${result.length}`,
         category,
@@ -3511,7 +3624,7 @@ function SeasonMaterialWorkArea({ data, update }) {
     openOrders.forEach(order => {
       (order.lines || []).forEach(line => {
         const person = findPerson(data, line.playerId);
-        const item = (data.items || []).find(i => i.id === line.itemType);
+        const item = findItem(data, line.itemType);
         const qty = Number(line.qty) || 1;
         for (let idx = 0; idx < qty; idx++) {
           addRow({ person, item, size: line.size || getPersonItemSize(person, item.id), sourceHint: `Bestellung: ${order.title}`, orderId: order.id, allowMissing: false });
@@ -3523,7 +3636,7 @@ function SeasonMaterialWorkArea({ data, update }) {
       const sets = getPersonStandardSets(data.settings, person);
       sets.forEach(set => {
         (set.items || []).forEach(entry => {
-          const item = (data.items || []).find(i => i.id === entry.itemId);
+          const item = findItem(data, entry.itemId);
           if (!item) return;
           const size = getPersonItemSize(person, item.id);
           const key = `${person.id}_${item.id}_${size}`;
@@ -3547,7 +3660,7 @@ function SeasonMaterialWorkArea({ data, update }) {
     });
 
     return result;
-  }, [data, persons, standardSets, openOrders, allowCrossTeamRedistribution]);
+  }, [open, data, persons, standardSets, openOrders, allowCrossTeamRedistribution]);
 
   const filterPersons = persons.filter(p => {
     if (filterTeam && p.team !== filterTeam) return false;
@@ -3587,7 +3700,7 @@ function SeasonMaterialWorkArea({ data, update }) {
   const missingOrders = filteredRows.filter(r => r.category === 'bestellung');
 
   function reserveSource(row) {
-    if (row.source?.status !== 'lager') return;
+    if (!row.source || !inventoryIsInStock(data, row.source)) return;
     const now = new Date().toISOString();
     update('inventory', (data.inventory || []).map(inv => inv.id === row.source.id ? {
       ...inv,
@@ -3685,7 +3798,7 @@ function SeasonMaterialWorkArea({ data, update }) {
         row.size || '',
         `${row.sourceLabel} ${row.oldNumber || '-'}`,
         `${row.target.firstName} ${row.target.lastName}${row.target._kind === 'coach' ? ' (Trainer)' : ''} ${row.newNumber || '-'}`,
-        row.source ? (row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ruecklauf ${row.source.id}`) : 'Bestellung',
+        row.source ? (inventoryIsInStock(data, row.source) ? `Lager ${row.source.id}` : `Ruecklauf ${row.source.id}`) : 'Bestellung',
         row.sourceHint || '',
       ]),
       styles: { fontSize: 8, cellPadding: 2 },
@@ -3723,7 +3836,7 @@ function SeasonMaterialWorkArea({ data, update }) {
                     <span className="ml-1 text-[10px] px-1.5 py-0.5" style={{ background: 'var(--paper-dark)', color: 'var(--vereinsblau)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.12em' }}>TRAINER</span>
                   )}
                 </td>
-                <td className="p-2 font-mono">{row.source ? (row.source.status === 'lager' ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`) : 'Bestellung'}</td>
+                <td className="p-2 font-mono">{row.source ? (inventoryIsInStock(data, row.source) ? `Lager ${row.source.id}` : `Ausgabe ${row.source.id}`) : 'Bestellung'}</td>
                 <td className="p-2">{row.sourceHint}</td>
                 <td className="p-2">
                   {row.category === 'umbeflockung' && row.source ? (
@@ -3743,7 +3856,7 @@ function SeasonMaterialWorkArea({ data, update }) {
                 <td className="p-2 text-right">
                   {!row.source ? (
                     <span className="text-stone-500">Restbedarf</span>
-                  ) : row.source.status === 'lager' ? (
+                  ) : inventoryIsInStock(data, row.source) ? (
                     row.source.reservedFor === row.target.id ? (
                       <span className="text-emerald-700">reserviert</span>
                     ) : (
@@ -3767,7 +3880,9 @@ function SeasonMaterialWorkArea({ data, update }) {
         <div>
           <div className="font-display text-xl">UMVERTEILUNG & UMBEFLOCKUNG</div>
           <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>
-            {transfers.length} Umverteilung(en) / {issues.length} Ausgabe(n) / {reprints.length} Umbeflockung(en) / {missingOrders.length} Restbedarf aus offenen Bestellungen, Saisonstatus und aktuellem Bestand
+            {open
+              ? `${transfers.length} Umverteilung(en) / ${issues.length} Ausgabe(n) / ${reprints.length} Umbeflockung(en) / ${missingOrders.length} Restbedarf aus offenen Bestellungen, Saisonstatus und aktuellem Bestand`
+              : 'Zum Berechnen der aktuellen Vorschlaege aufklappen.'}
           </div>
         </div>
         <span className="text-xs" style={{ color: 'var(--vereinsblau)' }}>{open ? 'zuklappen' : 'aufklappen'}</span>
@@ -3886,16 +4001,16 @@ function InventoryView({ data, update }) {
   const [groupBy, setGroupBy] = useState('article'); // 'article' | 'team' | 'person'
   const [openGroups, setOpenGroups] = useState({}); // {groupKey: true}
   const [sort, setSort] = useState({ key: 'item', dir: 'asc' });
-  const stockCount = data.inventory.filter(i => inventoryIsInStock(data, i)).length;
-  const issuedCount = data.inventory.filter(i => inventoryIsIssued(data, i)).length;
+  const stockCount = useMemo(() => data.inventory.filter(i => inventoryIsInStock(data, i)).length, [data]);
+  const issuedCount = useMemo(() => data.inventory.filter(i => inventoryIsIssued(data, i)).length, [data]);
 
-  const filtered = data.inventory.filter(i => {
+  const filtered = useMemo(() => data.inventory.filter(i => {
     if (filter === 'alle') return true;
     if (filter === 'lager') return inventoryIsInStock(data, i);
     if (filter === 'ausgegeben') return inventoryIsIssued(data, i);
     if (filter === 'markiert') return i.flagged;
     return i.itemType === filter;
-  });
+  }), [data, filter]);
 
   // Aggregation: wählbar pro Artikel, Team oder Person.
   // Lagerware wird so pro Mannschaft separat gezählt — wichtig fürs Bestandsmanagement.
@@ -5420,6 +5535,7 @@ function AssignForm({ inv, persons, inventory, onAssign, onCancel }) {
 // ============ PFAND ============
 function DepositsView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
+  const [showIssueFlow, setShowIssueFlow] = useState(false);
 
   function addDeposit(playerId, amount, note) {
     const dep = {
@@ -5450,12 +5566,19 @@ function DepositsView({ data, update }) {
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
         <PageHeader number="06" label="VERWALTUNG" title="Pfandkasse" subtitle={`${active.length} aktive Pfänder · gesamt ${total.toFixed(2)} €`} />
-        <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
-          style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
-          <Plus size={14} /> Pfand einnehmen
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setShowIssueFlow(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+            style={{ background: 'var(--vereinsblau)', color: 'white', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <Shirt size={14} /> Material ausgeben
+          </button>
+          <button onClick={() => setShowForm(true)} className="px-5 py-2.5 text-xs font-medium flex items-center gap-2 uppercase"
+            style={{ background: 'var(--paper-dark)', color: 'var(--ink)', fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.15em' }}>
+            <Plus size={14} /> Pfand einnehmen
+          </button>
+        </div>
       </div>
 
+      {showIssueFlow && <MaterialIssueFlow data={data} update={update} onClose={() => setShowIssueFlow(false)} />}
       {showForm && <DepositForm persons={allPersons(data)} deposits={data.deposits} settings={data.settings} onSave={addDeposit} onCancel={() => setShowForm(false)} />}
 
       <div className="bg-white border border-stone-200 overflow-hidden mb-6">
@@ -5530,6 +5653,315 @@ function DepositsView({ data, update }) {
   );
 }
 
+function MaterialIssueFlow({ data, update, onClose }) {
+  const persons = allPersons(data);
+  const [personId, setPersonId] = useState('');
+  const [mode, setMode] = useState('set');
+  const [setId, setSetId] = useState('');
+  const [itemId, setItemId] = useState((data.items || [])[0]?.id || '');
+  const [qty, setQty] = useState(1);
+  const [depositAmount, setDepositAmount] = useState(0);
+  const [signature, setSignature] = useState('');
+  const [notes, setNotes] = useState('');
+
+  const person = findPerson(data, personId);
+  const availableSets = useMemo(() => person ? getPersonStandardSets(data.settings, person) : [], [data.settings, person]);
+  const selectedSet = availableSets.find(set => set.id === setId) || availableSets[0] || null;
+  const depositMode = getDepositMode(data.settings, person?.team);
+  const depositRequired = !!person && depositMode !== 'ohne_pfand';
+  const activeDeposit = (data.deposits || []).find(d => d.playerId === personId && !d.refunded);
+
+  useEffect(() => {
+    if (person && !setId && availableSets[0]) setSetId(availableSets[0].id);
+  }, [personId, availableSets, setId]);
+
+  useEffect(() => {
+    setDepositAmount(getDefaultDeposit(data.settings, person?.team));
+  }, [personId, person?.team, data.settings]);
+
+  const plannedLines = useMemo(() => {
+    if (!person) return [];
+    if (mode === 'item') {
+      const item = findItem(data, itemId);
+      return item ? [{ item, qty: Math.max(1, Number(qty) || 1), setName: 'Einzelartikel' }] : [];
+    }
+    if (!selectedSet) return [];
+    return (selectedSet.items || [])
+      .map(entry => {
+        const item = findItem(data, entry.itemId);
+        return item ? { item, qty: Number(entry.qty) || 1, setName: selectedSet.name } : null;
+      })
+      .filter(Boolean);
+  }, [data, person, mode, itemId, qty, selectedSet]);
+
+  const suggestions = useMemo(() => {
+    if (!person) return [];
+    const used = new Set();
+    const out = [];
+    plannedLines.forEach(line => {
+      for (let idx = 0; idx < line.qty; idx++) {
+        const size = getPersonItemSize(person, line.item.id);
+        const source = chooseMaterialSourceForNeed(data, line.item.id, person, size, used, { allowCrossTeam: false });
+        if (source) used.add(source.id);
+        const sourcePerson = source && inventoryIsIssued(data, source) ? findPerson(data, source.assignedTo) : null;
+        out.push({
+          id: `${line.item.id}_${idx}`,
+          item: line.item,
+          size,
+          source,
+          sourcePerson,
+          oldNumber: source ? inventoryNumberForTarget(data, source, person, line.item.id, size) : '',
+          newNumber: personNumberValue(person),
+          needsReprint: source ? materialSourceNeedsReprint(data, source, person, { itemId: line.item.id, size }) : false,
+          setName: line.setName,
+        });
+      }
+    });
+    return out;
+  }, [data, person, plannedLines]);
+
+  const missing = suggestions.filter(s => !s.source);
+
+  function printProtocol(protocol, issuedRows, createdDeposit) {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    if (typeof doc.autoTable !== 'function') {
+      alert('PDF-Tabellenmodul konnte nicht geladen werden.');
+      return;
+    }
+    doc.setFontSize(16);
+    doc.text('Uebergabeprotokoll Vereinsmaterial', 14, 18);
+    doc.setFontSize(10);
+    doc.text(`${person.firstName} ${person.lastName} · ${person.team} · ${person._kind === 'coach' ? 'Initialen' : 'Nr.'} ${personNumberValue(person) || '-'}`, 14, 27);
+    const depositText = depositMode === 'ohne_pfand'
+      ? 'ohne Pfand'
+      : createdDeposit
+        ? `Pfand erfasst: ${Number(createdDeposit.amount || 0).toFixed(2)} EUR`
+        : activeDeposit
+          ? `Pfand vorhanden: ${Number(activeDeposit.amount || 0).toFixed(2)} EUR`
+          : 'Pfand nicht erfasst';
+    doc.text(`Pfandregel: ${depositMode === 'saison' ? 'Saison-Abschreibung' : depositMode === 'pauschal' ? 'Pauschal' : 'ohne Pfand'} · ${depositText}`, 14, 34);
+    doc.autoTable({
+      startY: 42,
+      head: [['Artikel', 'Groesse', 'Nr./Init.', 'Quelle', 'Inventar-ID']],
+      body: issuedRows.map(row => [
+        row.itemName,
+        row.size || '',
+        row.assignedNumber || '',
+        row.sourceLabel || '',
+        row.inventoryId || '',
+      ]),
+      styles: { fontSize: 8, cellPadding: 2 },
+      headStyles: { fillColor: [9, 36, 71] },
+    });
+    const y = Math.max(doc.lastAutoTable?.finalY || 55, 70) + 10;
+    doc.text('Die oben aufgefuehrten Teile wurden als Leihgabe erhalten. Die Pfand- und Kleiderordnung wurde anerkannt.', 14, y, { maxWidth: 180 });
+    doc.line(14, y + 24, 95, y + 24);
+    doc.text(`Digitale Unterschrift: ${protocol.signature}`, 14, y + 30);
+    doc.text(`Datum: ${new Date(protocol.createdAt).toLocaleDateString('de-DE')}`, 130, y + 30);
+    doc.save(`uebergabe_${person.lastName || 'person'}_${new Date().toISOString().slice(0, 10)}.pdf`);
+  }
+
+  function submit() {
+    if (!person) return alert('Bitte Spieler oder Trainer wählen.');
+    if (suggestions.length === 0) return alert('Bitte Artikel oder Artikelset auswählen.');
+    if (missing.length > 0) return alert(`Ausgabe nicht möglich: ${missing.length} Position(en) ohne passenden Bestand.`);
+    if (!signature.trim()) return alert('Digitale Unterschrift fehlt.');
+
+    const now = new Date().toISOString();
+    const protocolId = `issue_${Date.now()}`;
+    const issuedRows = suggestions.map((s, idx) => {
+      const sourceLabel = s.sourcePerson
+        ? `${s.sourcePerson.firstName} ${s.sourcePerson.lastName}`
+        : inventoryIsInStock(data, s.source)
+          ? 'Lagerbestand'
+          : inventoryStatusLabel(data, s.source);
+      return {
+        id: `ir_${Date.now()}_${idx}`,
+        inventoryId: s.source.id,
+        itemType: s.item.id,
+        itemName: s.item.name,
+        size: s.source.size || s.size,
+        assignedNumber: personNumberValue(person),
+        assignedName: (person.lastName || '').toUpperCase(),
+        sourceLabel,
+        oldNumber: s.oldNumber || '',
+        needsReprint: s.needsReprint,
+      };
+    });
+
+    const nextInventory = (data.inventory || []).map(inv => {
+      const row = issuedRows.find(r => r.inventoryId === inv.id);
+      if (!row) return inv;
+      return {
+        ...inv,
+        status: 'ausgegeben',
+        assignedTo: person.id,
+        assignedAt: now,
+        reservedFor: null,
+        reservedAt: null,
+        assignedNumber: row.assignedNumber || null,
+        assignedName: row.assignedName || null,
+        personKind: person._kind,
+        team: person.team || inv.team || null,
+        issueProtocolId: protocolId,
+        needsReprint: row.needsReprint,
+        reprintFromNumber: row.needsReprint ? (row.oldNumber || null) : null,
+        reprintToNumber: row.needsReprint ? (row.assignedNumber || null) : null,
+        reprintRequestedAt: row.needsReprint ? now : null,
+      };
+    });
+
+    let createdDeposit = null;
+    if (depositRequired && !activeDeposit) {
+      createdDeposit = {
+        id: `dep_${Date.now()}`,
+        playerId: person.id,
+        amount: Number(depositAmount) || getDefaultDeposit(data.settings, person.team),
+        paidAt: now,
+        refunded: false,
+        note: `Automatisch bei Materialausgabe ${protocolId}`,
+      };
+    }
+
+    const protocol = {
+      id: protocolId,
+      playerId: person.id,
+      personKind: person._kind,
+      team: person.team || null,
+      mode,
+      setId: mode === 'set' ? selectedSet?.id || null : null,
+      setName: mode === 'set' ? selectedSet?.name || '' : '',
+      signature: signature.trim(),
+      notes,
+      depositMode,
+      depositId: activeDeposit?.id || createdDeposit?.id || null,
+      depositAmount: activeDeposit?.amount || createdDeposit?.amount || 0,
+      lines: issuedRows,
+      createdAt: now,
+    };
+
+    update('inventory', nextInventory);
+    if (createdDeposit) {
+      update('deposits', [...(data.deposits || []), createdDeposit]);
+      update('transactions', [...(data.transactions || []), {
+        id: `tx_${Date.now()}`,
+        type: 'pfand_eingang',
+        amount: createdDeposit.amount,
+        playerId: person.id,
+        depositId: createdDeposit.id,
+        date: now,
+        note: `Pfand bei Materialausgabe ${protocolId}`,
+      }]);
+    }
+    update('issueProtocols', [...(data.issueProtocols || []), protocol]);
+    printProtocol(protocol, issuedRows, createdDeposit);
+    alert(`Materialausgabe mit ${issuedRows.length} Teil(en) abgeschlossen.`);
+    onClose();
+  }
+
+  return (
+    <div className="bg-white border-2 border-stone-900 p-6 mb-4">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 className="font-display text-2xl">MATERIALAUSGABE MIT PROTOKOLL</h2>
+          <p className="text-xs" style={{ color: 'var(--ink-mute)' }}>Einzelartikel oder Artikelset ausgeben, Pfandregel anwenden und digital unterschreiben.</p>
+        </div>
+        <button onClick={onClose} className="p-1 hover:bg-stone-100"><X size={18} /></button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <Field label="Person">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={personId} onChange={e => setPersonId(e.target.value)}>
+            <option value="">- wählen -</option>
+            <optgroup label="Spieler">
+              {persons.filter(p => p._kind === 'player').map(p => <option key={p.id} value={p.id}>#{p.number || '-'} {p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
+            <optgroup label="Trainer">
+              {persons.filter(p => p._kind === 'coach').map(p => <option key={p.id} value={p.id}>{p.number || '-'} {p.firstName} {p.lastName} ({p.team})</option>)}
+            </optgroup>
+          </select>
+        </Field>
+        <Field label="Ausgabeart">
+          <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={mode} onChange={e => setMode(e.target.value)}>
+            <option value="set">Artikelset</option>
+            <option value="item">Einzelartikel</option>
+          </select>
+        </Field>
+        {mode === 'set' ? (
+          <Field label="Artikelset">
+            <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={setId} onChange={e => setSetId(e.target.value)} disabled={!person}>
+              {availableSets.length === 0 && <option value="">Kein Set verfügbar</option>}
+              {availableSets.map(set => <option key={set.id} value={set.id}>{set.name}</option>)}
+            </select>
+          </Field>
+        ) : (
+          <Field label="Einzelartikel">
+            <div className="grid grid-cols-[1fr_5rem] gap-2">
+              <select className="w-full border border-stone-300 px-3 py-2 text-sm" value={itemId} onChange={e => setItemId(e.target.value)}>
+                {(data.items || []).map(item => <option key={item.id} value={item.id}>{item.articleNumber ? `[${item.articleNumber}] ` : ''}{item.name}</option>)}
+              </select>
+              <input type="number" min="1" value={qty} onChange={e => setQty(parseInt(e.target.value) || 1)} className="border border-stone-300 px-2 py-2 text-sm text-right" />
+            </div>
+          </Field>
+        )}
+      </div>
+
+      {person && (
+        <div className="p-3 mb-4 text-xs" style={{ background: 'var(--paper-dark)', color: 'var(--ink-soft)', borderLeft: '3px solid var(--vereinsblau)' }}>
+          Pfandregel {person.team}: <strong>{depositMode === 'ohne_pfand' ? 'ohne Pfand' : depositMode === 'saison' ? 'Saison-Abschreibung' : 'Pauschal'}</strong>
+          {depositRequired && activeDeposit && <> · vorhandenes Pfand: <strong>{Number(activeDeposit.amount || 0).toFixed(2)} EUR</strong></>}
+          {depositRequired && !activeDeposit && (
+            <span className="inline-flex items-center gap-2 ml-2">
+              Pfand bei Ausgabe erfassen:
+              <input type="number" value={depositAmount} onChange={e => setDepositAmount(parseFloat(e.target.value) || 0)} className="border border-stone-300 px-2 py-1 w-24 text-right" />
+              EUR
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="overflow-x-auto mb-4 border border-stone-200">
+        <table className="w-full text-xs">
+          <thead className="bg-stone-50 uppercase tracking-wider text-stone-500">
+            <tr><th className="text-left p-2">Artikel</th><th className="text-left p-2">Größe</th><th className="text-left p-2">Quelle</th><th className="text-left p-2">Nr./Init.</th><th className="text-left p-2">Hinweis</th></tr>
+          </thead>
+          <tbody>
+            {!person ? (
+              <tr><td colSpan={5} className="p-4 text-stone-500">Bitte Person wählen.</td></tr>
+            ) : suggestions.length === 0 ? (
+              <tr><td colSpan={5} className="p-4 text-stone-500">Keine Artikel ausgewählt.</td></tr>
+            ) : suggestions.map(s => (
+              <tr key={s.id} className="border-t border-stone-100">
+                <td className="p-2 font-medium">{s.item.name}<div className="text-[10px] text-stone-500">{s.setName}</div></td>
+                <td className="p-2">{s.source?.size || s.size}</td>
+                <td className="p-2">{s.source ? (s.sourcePerson ? `${s.sourcePerson.firstName} ${s.sourcePerson.lastName}` : 'Lagerbestand') : <span style={{ color: 'var(--danger)' }}>Kein Bestand</span>}</td>
+                <td className="p-2">{s.newNumber || '-'}</td>
+                <td className="p-2">{s.needsReprint ? <span style={{ color: 'var(--warn)' }}>Umbeflockung {s.oldNumber || '-'} - {s.newNumber || '-'}</span> : 'bereit'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+        <Field label="Digitale Unterschrift Spieler/Trainer">
+          <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={signature} onChange={e => setSignature(e.target.value)} placeholder="Name als Unterschrift" />
+        </Field>
+        <Field label="Hinweis">
+          <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={notes} onChange={e => setNotes(e.target.value)} placeholder="optional" />
+        </Field>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button onClick={submit} disabled={!person || missing.length > 0 || suggestions.length === 0 || !signature.trim()} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
+          Ausgabe abschließen & PDF
+        </button>
+        <button onClick={onClose} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>
+      </div>
+    </div>
+  );
+}
+
 function DepositForm({ persons, deposits, settings, onSave, onCancel }) {
   const [playerId, setPlayerId] = useState('');
   const selectedPerson = persons.find(p => p.id === playerId);
@@ -5589,7 +6021,7 @@ function ReturnsView({ data, update }) {
   const [confirming, setConfirming] = useState(false);
 
   const player = findPerson(data, selectedPlayer);
-  const playerItems = data.inventory.filter(i => i.assignedTo === selectedPlayer && i.status === 'ausgegeben');
+  const playerItems = data.inventory.filter(i => i.assignedTo === selectedPlayer && inventoryIsIssued(data, i));
   const deposit = data.deposits.find(d => d.playerId === selectedPlayer && !d.refunded);
 
   // Berechnung — abhängig vom Pfandmodus
@@ -5637,7 +6069,7 @@ function ReturnsView({ data, update }) {
     const now = new Date().toISOString();
     // Material zurück ins Lager mit Zustandsupdate
     const newInv = data.inventory.map(i => {
-      if (i.assignedTo === selectedPlayer && i.status === 'ausgegeben') {
+      if (i.assignedTo === selectedPlayer && inventoryIsIssued(data, i)) {
         const cond = conditions[i.id] || (mode === 'saison' ? 'gut' : 'ok');
         // Status "verloren" / nicht mehr im Lager: bei Pauschal-Modus "fehlt", bei Saison "defekt"
         const isLost = (mode === 'pauschal' && cond === 'fehlt') || (mode === 'saison' && cond === 'defekt');
@@ -5731,13 +6163,13 @@ function ReturnsView({ data, update }) {
             <option value="">– wählen –</option>
             <optgroup label="Spieler">
               {data.players.filter(p =>
-                data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben') ||
+                data.inventory.some(i => i.assignedTo === p.id && inventoryIsIssued(data, i)) ||
                 data.deposits.some(d => d.playerId === p.id && !d.refunded)
               ).map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
             </optgroup>
             <optgroup label="Trainer">
               {(data.coaches || []).filter(p =>
-                data.inventory.some(i => i.assignedTo === p.id && i.status === 'ausgegeben') ||
+                data.inventory.some(i => i.assignedTo === p.id && inventoryIsIssued(data, i)) ||
                 data.deposits.some(d => d.playerId === p.id && !d.refunded)
               ).map(p => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} ({p.team})</option>)}
             </optgroup>
@@ -6249,7 +6681,7 @@ function OrderForm({ data, order, onSave, onCancel }) {
     return (data.inventory || []).some(inv =>
       inv.assignedTo === personId
       && inventoryItemMatches(data, inv, itemId)
-      && inv.status === 'ausgegeben'
+      && inventoryIsIssued(data, inv)
     );
   }
 
@@ -6307,8 +6739,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
           const source = chooseMaterialSourceForNeed(data, item.id, targetPerson, size, usedTransfers, { allowCrossTeam: allowCrossTeamRedistribution });
           if (source) {
             usedTransfers.add(source.id);
-            const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
-            const seasonSourceOwner = source.status === 'lager'
+            const sourcePerson = inventoryIsIssued(data, source) ? findPerson(data, source.assignedTo) : null;
+            const seasonSourceOwner = inventoryIsInStock(data, source)
               ? seasonExitSourceOwner(data, source, item.id, size, { allowCrossTeam: allowCrossTeamRedistribution })
               : null;
             const sourceRow = {
@@ -8920,7 +9352,7 @@ function ReportsView({ data, update }) {
       return;
     }
     const matchingItems = data.inventory.filter(i =>
-      i.assignedTo === player.id && i.itemType === report.item && i.status === 'ausgegeben'
+      i.assignedTo === player.id && inventoryItemMatches(data, i, report.item) && inventoryIsIssued(data, i)
     );
     if (matchingItems.length === 0) {
       alert('Kein passendes ausgegebenes Material gefunden. Bitte manuell prüfen.');

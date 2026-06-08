@@ -27,6 +27,10 @@ const baseData = {
   ],
   deposits: [],
   transactions: [],
+  issueProtocols: [
+    { id: 'ip1', playerId: 'p1', team: 'A' },
+    { id: 'ip2', playerId: 'p2', team: 'B' },
+  ],
   reports: [
     { id: 'r1', team: 'A' },
     { id: 'r2', team: 'B' },
@@ -46,6 +50,7 @@ assert.deepEqual(filtered.players.map(p => p.id), ['p1']);
 assert.deepEqual(filtered.reports.map(r => r.id), ['r1']);
 assert.deepEqual(filtered.orders.map(o => o.id), ['o1']);
 assert.deepEqual(filtered.inventory.map(i => i.id), ['i1', 'i3']);
+assert.deepEqual(filtered.issueProtocols.map(p => p.id), ['ip1']);
 assert.equal(filtered.settings.weeklyReportEmail, undefined);
 
 assert.equal(userCanApi(user, 'canEditInventory'), true);

@@ -1,4 +1,4 @@
-export const DATA_KEYS = ['players', 'coaches', 'inventory', 'items', 'teams', 'deposits', 'orders', 'transactions', 'reports', 'suppliers', 'settings'];
+export const DATA_KEYS = ['players', 'coaches', 'inventory', 'items', 'teams', 'deposits', 'orders', 'transactions', 'reports', 'issueProtocols', 'suppliers', 'settings'];
 
 export const DEFAULT_USER_PERMISSIONS = {
   canDeletePeople: false,
@@ -14,6 +14,7 @@ const WRITE_PERMISSION_BY_KEY = {
   inventory: 'canEditInventory',
   orders: 'canCreateOrders',
   reports: 'canManageReports',
+  issueProtocols: 'canManageDeposits',
   deposits: 'canManageDeposits',
   transactions: 'canManageDeposits',
 };
@@ -57,7 +58,7 @@ export function scopeForUser(data, user) {
 function isVisibleByKey(key, record, scope) {
   if (!record) return false;
   if (key === 'players' || key === 'coaches' || key === 'reports') return scope.teams.has(record.team);
-  if (key === 'deposits' || key === 'transactions') return scope.personIds.has(record.playerId);
+  if (key === 'deposits' || key === 'transactions' || key === 'issueProtocols') return scope.personIds.has(record.playerId);
   if (key === 'inventory') {
     if (record.status === 'ausgegeben') return record.assignedTo && scope.personIds.has(record.assignedTo);
     return !record.team || scope.teams.has(record.team);
@@ -73,7 +74,7 @@ function isVisibleByKey(key, record, scope) {
 function isWritableByKey(key, record, scope) {
   if (!record) return false;
   if (key === 'players' || key === 'coaches' || key === 'reports') return scope.teams.has(record.team);
-  if (key === 'deposits' || key === 'transactions') return scope.personIds.has(record.playerId);
+  if (key === 'deposits' || key === 'transactions' || key === 'issueProtocols') return scope.personIds.has(record.playerId);
   if (key === 'inventory') {
     if (record.status === 'ausgegeben') return record.assignedTo && scope.personIds.has(record.assignedTo);
     return !record.team || scope.teams.has(record.team);
@@ -102,6 +103,7 @@ export function filterDataForUser(data, user) {
     coaches: (data.coaches || []).filter(c => isVisibleByKey('coaches', c, scope)),
     deposits: (data.deposits || []).filter(d => isVisibleByKey('deposits', d, scope)),
     transactions: (data.transactions || []).filter(t => isVisibleByKey('transactions', t, scope)),
+    issueProtocols: (data.issueProtocols || []).filter(p => isVisibleByKey('issueProtocols', p, scope)),
     reports: (data.reports || []).filter(r => isVisibleByKey('reports', r, scope)),
     orders: (data.orders || []).filter(o => isVisibleByKey('orders', o, scope)),
     inventory: (data.inventory || []).filter(i => isVisibleByKey('inventory', i, scope)),

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const appSource = readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8');
-const helperStart = appSource.indexOf('function allPersons(data)');
+const helperStart = appSource.indexOf('const DATA_INDEX_CACHE');
 const helperEnd = appSource.indexOf('function compressRanges(numbers)');
 
 assert.ok(helperStart > -1, 'helper start not found');
@@ -24,6 +24,7 @@ getPersonStandardSets = function(settings) {
   inventoryEffectiveNumber,
   inventoryNumberForTarget,
   materialSourceNeedsReprint,
+  returnedStockMatchesTarget,
 });
 `, {});
 
@@ -115,5 +116,29 @@ const staleBookedStock = {
 
 assert.equal(helpers.inventoryIsIssued(data, staleBookedStock), false);
 assert.equal(helpers.inventoryIsInStock(data, staleBookedStock), true);
+
+const staleReturnedNumberedStock = {
+  id: 'inv_stale_returned_29',
+  status: 'ausgegeben',
+  itemType: 'heim-trikot-old',
+  itemName: '[4224-414] HEIM - Trikot Iconic',
+  size: 'M',
+  team: 'ERSTE',
+  assignedTo: null,
+  assignedNumber: 29,
+  assignedName: 'KLEBER',
+  personKind: 'player',
+};
+
+const staleSource = helpers.chooseMaterialSourceForNeed(
+  { ...data, inventory: [staleReturnedNumberedStock] },
+  'heim-trikot-new',
+  jonah,
+  'M',
+  new Set()
+);
+
+assert.equal(staleSource?.id, 'inv_stale_returned_29');
+assert.equal(helpers.returnedStockMatchesTarget({ ...data, inventory: [staleReturnedNumberedStock] }, staleSource, jonah, 'heim-trikot-new', 'M'), true);
 
 console.log('season material matching ok');

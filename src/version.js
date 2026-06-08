@@ -1,8 +1,22 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.14.32';
+export const APP_VERSION = '1.2.0';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.0',
+    date: '2026-06-08',
+    changes: [
+      'Materiallogik nutzt zentral den aktuellen Zustand: Lager, Ausgabe, Ruecklauf, Reservierung und offene Bestellung werden einheitlich bewertet',
+      'Umverteilung erkennt Ruecklauf- und Altbestandsteile auch dann, wenn der gespeicherte Rohstatus noch inkonsistent ist',
+      'Artikelsuche Material hat Statusfilter fuer Lager, Spieler/Trainer, Bestellung und sonstige Status erhalten',
+      'Pfandbereich enthaelt eine Materialausgabe mit Einzelartikel/Artikelset, Pfandregel-Pruefung, digitaler Unterschrift und Uebergabeprotokoll',
+      'Materialverwaltung laedt schneller, weil schwere Umverteilungs-/Umbeflockungsvorschlaege erst beim Aufklappen berechnet und Bestandsfilter memoisiert werden',
+      'Sponsorenansicht zeigt nur noch angelegte Sponsor-Stammdaten und fasst Nutzung, Lager, Ausgabe, Bestellung und Bearbeitung in einer Tabelle zusammen',
+      'Admin-Audit fuer die Vercel-KV-Datenbank ergaenzt: alte Sponsor-Felder, verwaiste Referenzen, Zeichensatzreste und unbekannte KV-Keys werden gemeldet',
+      'issueProtocols ist jetzt ein offizieller API-Datenbereich und wird wie Pfanddaten berechtigt und teambezogen gefiltert',
+    ],
+  },
   {
     version: '1.14.32',
     date: '2026-06-08',
