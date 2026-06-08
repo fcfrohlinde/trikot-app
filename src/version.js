@@ -1,5 +1,6 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
+<<<<<<< HEAD
 export const APP_VERSION = '1.14.25';
 
 export const CHANGELOG = [
@@ -24,6 +25,12 @@ export const CHANGELOG = [
     ],
   },
   {
+=======
+export const APP_VERSION = '1.14.23';
+
+export const CHANGELOG = [
+  {
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
     version: '1.14.23',
     date: '2026-05-21',
     changes: [

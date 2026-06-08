@@ -123,12 +123,15 @@ function getPersonStandardSets(settings, personOrKind) {
   return defaults.length > 0 ? defaults : matching;
 }
 
+<<<<<<< HEAD
 function getPersonItemSize(person, itemId) {
   const itemSizes = person?.itemSizes || {};
   const itemSize = itemId ? itemSizes[itemId] : null;
   return (person?.individualSizes && itemSize) ? itemSize : (person?.size || 'L');
 }
 
+=======
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
 function shouldPlanStandardSetInMaterial(data, person) {
   if (!person || !shouldReceiveSeasonEquipment(person)) return false;
   const sets = getPersonStandardSets(data.settings, person);
@@ -174,10 +177,13 @@ function materialSourceNeedsReprint(data, inv, person) {
   if (inv.status === 'ausgegeben') {
     return !inventoryMatchesPersonNumberInData(data, inv, person);
   }
+<<<<<<< HEAD
   const hasNumber = inv.assignedNumber !== undefined && inv.assignedNumber !== null && String(inv.assignedNumber).trim() !== '';
   const hasName = inv.assignedName !== undefined && inv.assignedName !== null && String(inv.assignedName).trim() !== '';
   if (!hasNumber && !hasName) return false;
   if (hasNumber && inventoryMatchesPersonNumberInData(data, inv, person)) return false;
+=======
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
   return !inventoryMatchesPersonIdentityInData(data, inv, person);
 }
 
@@ -219,9 +225,12 @@ function chooseMaterialSourceForNeed(data, itemId, person, size, usedStock) {
   const reservedExact = stock.find(inv => inv.reservedFor === person?.id && inventoryMatchesPersonIdentityInData(data, inv, person));
   if (reservedExact) return reservedExact;
 
+<<<<<<< HEAD
   const exactNumberStock = stock.find(inv => inventoryMatchesPersonNumberInData(data, inv, person) && !sourceReprintExcluded(data, inv, person));
   if (exactNumberStock) return exactNumberStock;
 
+=======
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
   const exactStock = stock.find(inv => inventoryMatchesPersonIdentityInData(data, inv, person));
   if (exactStock) return exactStock;
 
@@ -1042,7 +1051,11 @@ function PersonsView({ data, update, kind }) {
         ))}
       </div>
 
+<<<<<<< HEAD
       {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} standardSets={migrateStandardSets(data.settings)} items={data.items || []} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
+=======
+      {showForm && <PlayerForm player={editing} players={persons} teams={data.teams} labels={labels} kind={kind} standardSets={migrateStandardSets(data.settings)} onSave={save} onCancel={() => { setShowForm(false); setEditing(null); }} />}
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
       {showImport && <PlayerImport teams={data.teams} existingPlayers={persons} labels={labels} kind={kind} onImport={bulkAdd} onCancel={() => setShowImport(false)} />}
       {equipmentPerson && (
         <BasicEquipmentDialog
@@ -1209,21 +1222,33 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
       const item = (data.items || []).find(i => i.id === entry.itemId);
       if (!item) return;
       const qty = Number(entry.qty) || 1;
+<<<<<<< HEAD
       const wantedSize = getPersonItemSize(person, item.id);
       const alreadyIssued = issuedCountForItem(item.id, wantedSize);
       const alreadyOrdered = openOrderedQtyForPersonItem(data, person, item.id, wantedSize);
       const missing = Math.max(0, qty - alreadyIssued - alreadyOrdered);
       for (let idx = 0; idx < missing; idx++) {
+=======
+      const alreadyIssued = issuedCountForItem(item.id);
+      const alreadyOrdered = openOrderedQtyForPersonItem(data, person, item.id, person.size || 'L');
+      const missing = Math.max(0, qty - alreadyIssued - alreadyOrdered);
+      for (let idx = 0; idx < missing; idx++) {
+        const wantedSize = person.size || 'L';
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
         const source = chooseMaterialSourceForNeed(data, item.id, person, wantedSize, usedStock);
         const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
         if (sized) usedStock.add(sized.id);
         const oldNumber = sized ? inventoryEffectiveNumber(data, sized) : '';
         const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
+<<<<<<< HEAD
         const returnedMatchingStock = sized?.status === 'lager'
           && (sized.assignedNumber || sized.assignedName)
           && inventoryMatchesPersonNumberInData(data, sized, person);
         const action = (fromPerson || returnedMatchingStock)
+=======
+        const action = fromPerson
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
           : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
         suggestions.push({
@@ -1236,7 +1261,11 @@ function BasicEquipmentDialog({ data, person, onSave, onCreateOrder, onCancel })
           needsReprint,
           oldNumber,
           newNumber: targetNumber,
+<<<<<<< HEAD
           sourcePerson: fromPerson || (returnedMatchingStock ? { firstName: 'Rücklauf', lastName: sized.assignedName || oldNumber || '' } : null),
+=======
+          sourcePerson: fromPerson,
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
         });
       }
     });
@@ -1546,7 +1575,11 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
       (selectedSet.items || []).forEach(entry => {
         const item = (data.items || []).find(i => i.id === entry.itemId);
         if (!item) return;
+<<<<<<< HEAD
         const size = getPersonItemSize(person, item.id);
+=======
+        const size = person.size || 'L';
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
         const missing = Math.max(0,
           (Number(entry.qty) || 1)
           - issuedCountForPersonItem(person, item.id)
@@ -1556,6 +1589,7 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
           const source = chooseMaterialSourceForNeed(data, item.id, person, size, usedStock);
           const sized = correctionMode && source && !inventoryMatchesPersonNumberInData(data, source, person) ? null : source;
           if (sized) usedStock.add(sized.id);
+<<<<<<< HEAD
         const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
         const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
         const returnedMatchingStock = sized?.status === 'lager'
@@ -1564,6 +1598,13 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
         const action = (fromPerson || returnedMatchingStock)
           ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
           : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
+=======
+          const fromPerson = sized?.status === 'ausgegeben' ? findPerson(data, sized.assignedTo) : null;
+          const needsReprint = !correctionMode && !!sized && materialSourceNeedsReprint(data, sized, person);
+          const action = fromPerson
+            ? (needsReprint ? 'umverteilung_umbeflocken' : 'umverteilung')
+            : sized ? (needsReprint ? 'umbeflocken' : 'passend') : 'korrektur';
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
           out.push({
             id: `${person.id}_${item.id}_${idx}`,
             person,
@@ -1574,7 +1615,11 @@ function TeamBasicEquipmentDialog({ data, kind, team, onTeamChange, onSave, onCr
             newNumber: targetNumber,
             needsReprint,
             action,
+<<<<<<< HEAD
             sourcePerson: fromPerson || (returnedMatchingStock ? { firstName: 'Rücklauf', lastName: sized.assignedName || oldNumber || '' } : null),
+=======
+            sourcePerson: fromPerson,
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
           });
         }
       });
@@ -1830,11 +1875,16 @@ function CoachesView({ data, update }) {
   return <PersonsView data={data} update={update} kind="coach" />;
 }
 
+<<<<<<< HEAD
 function PlayerForm({ player, players, teams, labels, kind, standardSets, items, onSave, onCancel }) {
+=======
+function PlayerForm({ player, players, teams, labels, kind, standardSets, onSave, onCancel }) {
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
   const isCoach = kind === 'coach';
   const numberLabel = isCoach ? 'Initialen (max. 3 Zeichen)' : 'Rückennummer';
   const numberPlaceholder = isCoach ? 'z.B. DW' : '';
   const L = labels || { addNew: 'Spieler anlegen', editNew: 'Spieler bearbeiten', singular: 'Spieler' };
+<<<<<<< HEAD
   const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', individualSizes: false, itemSizes: {}, notes: '', isGoalkeeper: false, standardSetId: '', seasonEntry: false, seasonExit: false });
   const formSetOptions = sortStandardSets(standardSets || []).filter(set =>
     setSupportsPerson(set, { _kind: kind, isGoalkeeper: !!form.isGoalkeeper }) || form.standardSetId === set.id
@@ -1845,6 +1895,12 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
   const activeSizeRows = (activeSizeSet?.items || [])
     .map(entry => ({ entry, item: (items || []).find(i => i.id === entry.itemId) }))
     .filter(row => row.item);
+=======
+  const [form, setForm] = useState(player || { firstName: '', lastName: '', team: teams[0] || '', number: '', size: 'L', notes: '', isGoalkeeper: false, standardSetId: '', seasonEntry: false, seasonExit: false });
+  const formSetOptions = sortStandardSets(standardSets || []).filter(set =>
+    setSupportsPerson(set, { _kind: kind, isGoalkeeper: !!form.isGoalkeeper }) || form.standardSetId === set.id
+  );
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
 
   // Konflikt-Check funktioniert für Spieler (Nummer) wie Trainer (Initialen) gleich:
   // Pro Mannschaft darf der gleiche Wert nicht doppelt vergeben sein.
@@ -1880,8 +1936,12 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
       ? (form.number ? String(form.number).trim().toUpperCase() : null)
       : (form.number ? parseInt(form.number) : null);
 
+<<<<<<< HEAD
     const itemSizes = form.individualSizes ? (form.itemSizes || {}) : {};
     onSave({ ...form, number: numberValue, size: form.size || 'L', individualSizes: !!form.individualSizes, itemSizes, isGoalkeeper: isCoach ? false : !!form.isGoalkeeper, standardSetId: form.standardSetId || '' });
+=======
+    onSave({ ...form, number: numberValue, isGoalkeeper: isCoach ? false : !!form.isGoalkeeper, standardSetId: form.standardSetId || '' });
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
   }
 
   return (
@@ -1922,6 +1982,7 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
             {SIZE_OPTIONS.map(s => <option key={s}>{s}</option>)}
           </select>
         </Field>
+<<<<<<< HEAD
         <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.individualSizes ? '#F1ECDF' : 'white' }}>
           <input type="checkbox" checked={!!form.individualSizes} onChange={e => setForm({ ...form, individualSizes: e.target.checked })} className="mt-1" />
           <div>
@@ -1929,6 +1990,8 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
             <div className="text-xs" style={{ color: 'var(--ink-mute)' }}>Je Artikel aus dem Standard-Set eine eigene Größe pflegen.</div>
           </div>
         </label>
+=======
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
         {!isCoach && (
           <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.isGoalkeeper ? '#F1ECDF' : 'white' }}>
             <input type="checkbox" checked={!!form.isGoalkeeper} onChange={e => setForm({ ...form, isGoalkeeper: e.target.checked, standardSetId: '' })} className="mt-1" />
@@ -1950,6 +2013,7 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
           )}
         </Field>
         <Field label="Notizen"><input className="w-full border border-stone-300 px-3 py-2 text-sm" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></Field>
+<<<<<<< HEAD
         {form.individualSizes && (
           <div className="sm:col-span-2 p-3" style={{ border: '1px solid var(--rule)', background: 'var(--paper)' }}>
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 mb-3">
@@ -1993,6 +2057,8 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
             )}
           </div>
         )}
+=======
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
         <div className="sm:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="flex items-start gap-3 p-3 cursor-pointer" style={{ border: '1px solid var(--rule)', background: form.seasonEntry ? '#F1ECDF' : 'white' }}>
             <input type="checkbox" checked={!!form.seasonEntry} onChange={e => setForm({ ...form, seasonEntry: e.target.checked })} className="mt-1" />
@@ -2902,7 +2968,11 @@ function SeasonMaterialWorkArea({ data, update }) {
     function addRow({ person, item, size, sourceHint, orderId, allowMissing = false }) {
       if (!person || !item) return;
       const target = { ...person, _kind: person._kind };
+<<<<<<< HEAD
       const wantedSize = size || getPersonItemSize(target, item.id);
+=======
+      const wantedSize = size || target.size || 'L';
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
       const source = chooseMaterialSourceForNeed(data, item.id, target, wantedSize, usedSources);
       if (!source) {
         if (!allowMissing) return;
@@ -2925,10 +2995,14 @@ function SeasonMaterialWorkArea({ data, update }) {
       usedSources.add(source.id);
       const sourcePerson = source.status === 'ausgegeben' ? findPerson(data, source.assignedTo) : null;
       const needsReprint = materialSourceNeedsReprint(data, source, target);
+<<<<<<< HEAD
       const returnedMatchingStock = source.status === 'lager'
         && (source.assignedNumber || source.assignedName)
         && inventoryMatchesPersonNumberInData(data, source, target);
       const category = needsReprint ? 'umbeflockung' : (source.status === 'ausgegeben' || returnedMatchingStock) ? 'umverteilung' : 'ausgabe';
+=======
+      const category = needsReprint ? 'umbeflockung' : source.status === 'lager' ? 'ausgabe' : 'umverteilung';
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
       result.push({
         id: `${source.id}_${target.id}_${item.id}_${result.length}`,
         category,
@@ -2937,8 +3011,11 @@ function SeasonMaterialWorkArea({ data, update }) {
         source,
         sourceLabel: sourcePerson
           ? `${sourcePerson.firstName} ${sourcePerson.lastName}${sourcePerson._kind === 'coach' && sourcePerson.team ? ` (${sourcePerson.team})` : ''}`
+<<<<<<< HEAD
           : returnedMatchingStock
             ? `Rücklauf Lager${source.assignedName ? ` ${source.assignedName}` : ''}`
+=======
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
           : source.reservedFor
             ? 'Reservierter Lagerbestand'
             : source.team ? `Lagerbestand ${source.team}` : 'Lagerbestand',
@@ -2956,7 +3033,11 @@ function SeasonMaterialWorkArea({ data, update }) {
         const item = (data.items || []).find(i => i.id === line.itemType);
         const qty = Number(line.qty) || 1;
         for (let idx = 0; idx < qty; idx++) {
+<<<<<<< HEAD
           addRow({ person, item, size: line.size || getPersonItemSize(person, item.id), sourceHint: `Bestellung: ${order.title}`, orderId: order.id, allowMissing: false });
+=======
+          addRow({ person, item, size: line.size || person?.size || 'L', sourceHint: `Bestellung: ${order.title}`, orderId: order.id, allowMissing: false });
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
         }
       });
     });
@@ -2967,7 +3048,11 @@ function SeasonMaterialWorkArea({ data, update }) {
         (set.items || []).forEach(entry => {
           const item = (data.items || []).find(i => i.id === entry.itemId);
           if (!item) return;
+<<<<<<< HEAD
           const size = getPersonItemSize(person, item.id);
+=======
+          const size = person.size || 'L';
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
           const key = `${person.id}_${item.id}_${size}`;
           if (needKeys.has(key)) return;
           needKeys.add(key);
@@ -5678,7 +5763,10 @@ function OrderForm({ data, order, onSave, onCancel }) {
         const item = data.items.find(i => i.id === entry.itemId);
         if (!item) return;
         const targetPerson = { ...person, _kind: kind };
+<<<<<<< HEAD
         const size = getPersonItemSize(targetPerson, item.id);
+=======
+>>>>>>> e643e82b2224aaf17d898bdeab96d4bc0c32c121
         const requestedQty = Number(entry.qty) || 1;
         const alreadyIssued = issuedQtyForPersonItem(data, targetPerson, item.id, size);
         const alreadyOrdered = openOrderedQtyForPersonItem(data, targetPerson, item.id, size);
