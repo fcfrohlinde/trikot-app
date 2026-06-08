@@ -304,6 +304,37 @@ function normalizeFlockName(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+function personMatchesInventoryIdentity(data, person, inv, options = {}) {
+  if (!person || !inv) return false;
+  const invKind = normalizePersonKind(inv.personKind);
+  if (invKind && invKind !== person._kind) return false;
+  const allowCrossTeam = !!options.allowCrossTeam || person._kind === 'coach';
+  const invTeam = normalizeTeamKey(inv.team || inv.returnedTeam);
+  if (!allowCrossTeam && invTeam && normalizeTeamKey(person.team) !== invTeam) return false;
+
+  const invNumber = inventoryEffectiveNumber(data, inv);
+  if (invNumber && personNumberValue(person).toUpperCase() !== invNumber) return false;
+
+  const invName = normalizeFlockName(inv.assignedName || inv.returnedName);
+  if (invName && normalizeFlockName(person.lastName) !== invName) return false;
+
+  return !!(invNumber || invName);
+}
+
+function inventoryPersonOwner(data, inv, options = {}) {
+  const directOwner = findPerson(data, inv?.assignedTo) || findPerson(data, inv?.returnedFrom);
+  if (directOwner) return directOwner;
+  const matches = allPersons(data).filter(person => personMatchesInventoryIdentity(data, person, inv, options));
+  return matches.find(person => seasonFlag(person.seasonExit) && !seasonFlag(person.seasonEntry))
+    || matches.find(person => seasonFlag(person.seasonExit))
+    || matches[0]
+    || null;
+}
+
+function inventoryIsIssuedForTransfer(data, inv, options = {}) {
+  return normalizeInventoryStatus(inv) === 'ausgegeben' && !!inventoryPersonOwner(data, inv, options);
+}
+
 function inventoryMatchesPersonName(inv, person) {
   const invName = normalizeFlockName(inv?.assignedName);
   if (!invName) return true;
@@ -348,7 +379,7 @@ function inventoryLooksReturned(inv) {
 }
 
 function seasonExitSourceOwner(data, inv, itemId, size, options = {}) {
-  const directOwner = findPerson(data, inv?.assignedTo) || findPerson(data, inv?.returnedFrom);
+  const directOwner = inventoryPersonOwner(data, inv, options);
   const wantedSize = normalizeSizeKey(size || inv?.size || '');
   const invNumber = inventoryEffectiveNumber(data, inv);
   const invName = normalizeFlockName(inv?.assignedName || inv?.returnedName);
@@ -450,11 +481,14 @@ function returnedStockMatchesTarget(data, inv, person, itemId, size, options = {
 
 function materialSourceIsRedistribution(data, source, person, itemId, size, options = {}) {
   if (!source || !person) return false;
-  if (inventoryIsIssued(data, source)) {
-    const owner = findPerson(data, source.assignedTo);
+  if (inventoryIsIssuedForTransfer(data, source, options)) {
+    const owner = inventoryPersonOwner(data, source, options);
     return !!owner
       && owner.id !== person.id
       && owner._kind === person._kind
+      && (!itemId || inventoryItemMatches(data, source, itemId))
+      && (!size || !source.size || normalizeSizeKey(source.size) === normalizeSizeKey(size))
+      && ((!!options.allowCrossTeam || person._kind === 'coach') || normalizeTeamKey(owner.team) === normalizeTeamKey(person.team))
       && seasonFlag(owner.seasonExit)
       && !seasonFlag(owner.seasonEntry);
   }
@@ -520,9 +554,9 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock, options = 
   const allowCrossTeam = !!options.allowCrossTeam || person?._kind === 'coach';
   const candidates = (data.inventory || []).filter(inv => {
     if (usedStock.has(inv.id)) return false;
-    if (!inventoryIsIssued(data, inv) || !inventoryItemMatches(data, inv, itemId)) return false;
+    if (!inventoryIsIssuedForTransfer(data, inv, { allowCrossTeam }) || !inventoryItemMatches(data, inv, itemId)) return false;
     if (normalizeSizeKey(inv.size || wantedSize) !== normalizeSizeKey(wantedSize)) return false;
-    const owner = findPerson(data, inv.assignedTo);
+    const owner = inventoryPersonOwner(data, inv, { allowCrossTeam });
     const valid = owner
       && owner.id !== person.id
       && owner._kind === person._kind

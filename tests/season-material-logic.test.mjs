@@ -237,6 +237,40 @@ assert.equal(
 assert.equal(
   helpers.decideMaterialNeed({
     ...matrixBase,
+    inventory: [{
+      id: 'transfer_from_legacy_assignment',
+      status: 'ausgegeben',
+      itemType: 'shirt',
+      size: 'M',
+      assignedTo: 'Alt Spieler',
+      assignedName: 'Spieler',
+      assignedNumber: 9,
+      personKind: 'player',
+      team: 'ERSTE',
+    }],
+  }, matrixBase.players[1], 'shirt', 'M').action,
+  'redistribute',
+  'Ausgegebenes Altbestandsteil wird ueber Mannschaft, Nummer und Name dem Austritt zugeordnet'
+);
+
+const coachSeasonData = {
+  ...matrixBase,
+  players: [],
+  coaches: [
+    { id: 'coach_leave', firstName: 'Alt', lastName: 'Trainer', number: 'AT', team: 'ERSTE', size: 'L', seasonExit: true, _kind: 'coach' },
+    { id: 'coach_entry', firstName: 'Neu', lastName: 'Coach', number: 'AT', team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'coach' },
+  ],
+  inventory: [{ id: 'coach_transfer', status: 'ausgegeben', itemType: 'shirt', size: 'L', assignedTo: 'coach_leave', team: 'ERSTE', personKind: 'coach' }],
+};
+assert.equal(
+  helpers.decideMaterialNeed(coachSeasonData, coachSeasonData.coaches[1], 'shirt', 'L').action,
+  'redistribute',
+  'Trainer mit gleichen Initialen und Saisonstatus werden ebenfalls umverteilt'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...matrixBase,
     inventory: [{ id: 'reprint_from_leave', status: 'ausgegeben', itemType: 'shirt', size: 'M', assignedTo: 'leave', team: 'ERSTE', assignedNumber: 9 }],
     players: matrixBase.players.map(p => p.id === 'entry' ? { ...p, number: 10 } : p),
   }, { ...matrixBase.players[1], number: 10 }, 'shirt', 'M').action,

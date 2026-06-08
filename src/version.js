@@ -1,8 +1,24 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.2.2';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.2',
+    date: '2026-06-08',
+    changes: [
+      'Saisonwechsel-Umverteilung beruecksichtigt ausgegebene Teile ausscheidender Spieler/Trainer jetzt auch bei Altbestand-Zuordnung ueber Mannschaft, Nummer/Initialen und Name',
+    ],
+  },
+  {
+    version: '1.2.1',
+    date: '2026-06-08',
+    changes: [
+      'Serverseitige Fachvalidierung fuer Lager, Bestellungen, Bedarfsmeldungen und Uebergabeprotokolle blockiert doppelte offene Bestellungen, kaputte Personen-/Artikelreferenzen und ungueltige Ausgaben',
+      'Material-Entscheidungsmatrix fuer Ausgabe, Lager, offene Bestellung, Umverteilung, Umbeflockung und Restbedarf ist als Regressionstest abgesichert',
+      'Frontend rollt optimistische Daten nach abgelehnten API-Speicherungen zurueck, damit keine falschen Lager- oder Bestellstaende sichtbar bleiben',
+    ],
+  },
   {
     version: '1.2.0',
     date: '2026-06-08',
@@ -16,9 +32,6 @@ export const CHANGELOG = [
       'Admin-Audit fuer die Vercel-KV-Datenbank ergaenzt: alte Sponsor-Felder, verwaiste Referenzen, Zeichensatzreste und unbekannte KV-Keys werden gemeldet',
       'issueProtocols ist jetzt ein offizieller API-Datenbereich und wird wie Pfanddaten berechtigt und teambezogen gefiltert',
       'Restbedarf-Bestellungen uebernehmen alle sichtbaren Restbedarfszeilen und verlieren keine Positionen mehr durch zu grobe Deduplizierung',
-      'Serverseitige Fachvalidierung fuer Lager, Bestellungen, Bedarfsmeldungen und Uebergabeprotokolle blockiert doppelte offene Bestellungen, kaputte Personen-/Artikelreferenzen und ungueltige Ausgaben',
-      'Material-Entscheidungsmatrix fuer Ausgabe, Lager, offene Bestellung, Umverteilung, Umbeflockung und Restbedarf ist als Regressionstest abgesichert',
-      'Frontend rollt optimistische Daten nach abgelehnten API-Speicherungen zurueck, damit keine falschen Lager- oder Bestellstaende sichtbar bleiben',
     ],
   },
   {
