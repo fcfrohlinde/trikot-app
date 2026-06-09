@@ -308,6 +308,40 @@ assert.equal(
   'Gleiche Nummer/Groesse/Mannschaft darf trotz alter Namenszuordnung nicht als Umbeflockung vorgeschlagen werden'
 );
 
+const duplicateEntrySameNumberData = {
+  players: [
+    { id: 'entry_5_a', firstName: 'Ben', lastName: 'Heike', number: 5, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
+    { id: 'entry_5_b', firstName: 'Zweit', lastName: 'Fuenf', number: 5, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
+  ],
+  coaches: [],
+  items: [{ id: 'hose_power', articleNumber: '8423-900', name: 'Trainingshose Power' }],
+  inventory: [
+    { id: 'stock_exact_5', status: 'lager', itemType: 'hose_power', itemName: 'Trainingshose Power', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+    { id: 'stock_wrong_17', status: 'lager', itemType: 'hose_power', itemName: 'Trainingshose Power', size: 'L', team: 'ERSTE', assignedNumber: 17, personKind: 'player' },
+  ],
+  orders: [],
+  settings: {
+    standardSets: [{
+      id: 'set_dup',
+      name: 'Spieler-Set',
+      target: 'player',
+      isDefault: true,
+      items: [{ itemId: 'hose_power', qty: 1 }],
+    }],
+  },
+};
+const duplicateEntryRows = helpers.buildSeasonMaterialProposalRows(duplicateEntrySameNumberData);
+assert.equal(
+  duplicateEntryRows.some(row => row.source?.id === 'stock_exact_5' && row.category === 'ausgabe'),
+  true,
+  'Doppelte Eintrittsnummern duerfen passenden Lagerbestand Nr. 5 nicht gegenseitig blockieren'
+);
+assert.equal(
+  duplicateEntryRows.find(row => row.source?.id === 'stock_exact_5')?.category,
+  'ausgabe',
+  'Passender Lagerbestand Nr. 5 darf nicht durch falsche Nr. 17 als Umbeflockung ersetzt werden'
+);
+
 assert.equal(
   helpers.decideMaterialNeed({
     ...benHeikeData,

@@ -67,11 +67,37 @@ function normalizePersonRecord(person, kind) {
   };
 }
 
+function normalizeInventoryRecord(inv) {
+  const next = { ...inv };
+  const fields = [
+    ['assignedNumber', inv?.personKind],
+    ['returnedNumber', inv?.personKind],
+    ['number', inv?.personKind],
+    ['flockNumber', inv?.personKind],
+    ['shirtNumber', inv?.personKind],
+    ['reprintToNumber', inv?.personKind],
+    ['reprintFromNumber', inv?.personKind],
+    ['reservedNumber', inv?.personKind],
+    ['assignedInitials', 'coach'],
+    ['returnedInitials', 'coach'],
+    ['initials', 'coach'],
+    ['trainerInitials', 'coach'],
+    ['reservedInitials', 'coach'],
+  ];
+  fields.forEach(([field, kind]) => {
+    if (next[field] !== undefined && next[field] !== null && next[field] !== '') {
+      next[field] = normalizeFlockIdentifier(next[field], kind || next.personKind);
+    }
+  });
+  return next;
+}
+
 function normalizeDataShape(data) {
   return {
     ...data,
     players: (data.players || []).map(person => normalizePersonRecord(person, 'player')),
     coaches: (data.coaches || []).map(person => normalizePersonRecord(person, 'coach')),
+    inventory: (data.inventory || []).map(normalizeInventoryRecord),
   };
 }
 
@@ -118,7 +144,9 @@ export function useData() {
       ? (rawNextValue || []).map(person => normalizePersonRecord(person, 'player'))
       : key === 'coaches'
         ? (rawNextValue || []).map(person => normalizePersonRecord(person, 'coach'))
-        : rawNextValue;
+        : key === 'inventory'
+          ? (rawNextValue || []).map(normalizeInventoryRecord)
+          : rawNextValue;
     const previousSnapshot = data;
     setData(prev => {
       const rawOptimisticValue = typeof value === 'function' ? value(prev[key]) : value;
@@ -126,7 +154,9 @@ export function useData() {
         ? (rawOptimisticValue || []).map(person => normalizePersonRecord(person, 'player'))
         : key === 'coaches'
           ? (rawOptimisticValue || []).map(person => normalizePersonRecord(person, 'coach'))
-          : rawOptimisticValue;
+          : key === 'inventory'
+            ? (rawOptimisticValue || []).map(normalizeInventoryRecord)
+            : rawOptimisticValue;
       if (options.mode === 'mergeById' && Array.isArray(prev[key]) && Array.isArray(optimisticValue)) {
         const byId = new Map(prev[key].map(entry => [entry?.id, entry]).filter(([entryId]) => entryId));
         optimisticValue.forEach(entry => {

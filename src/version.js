@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.13';
+export const APP_VERSION = '1.2.14';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.14',
+    date: '2026-06-09',
+    changes: [
+      'Passender Lagerbestand wird bei doppelten Eintrittsnummern nicht mehr gegenseitig blockiert und dadurch nicht mehr faelschlich durch Umbeflockung mit anderer Nummer ersetzt',
+      'Inventar-Nummern und Trainer-Initialen werden beim Laden und Speichern ebenfalls vereinheitlicht, damit Anzeige und Materiallogik denselben Stand nutzen',
+    ],
+  },
   {
     version: '1.2.13',
     date: '2026-06-09',

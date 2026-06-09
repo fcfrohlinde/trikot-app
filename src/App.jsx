@@ -492,6 +492,8 @@ function sourceHeldForOtherSeasonEntry(data, inv, currentPerson, itemId, size, o
   const owner = seasonExitSourceOwner(data, inv, itemId, size, options);
   const sourceNumber = seasonSourceNumber(data, inv, owner);
   if (!sourceNumber) return false;
+  const currentNumber = personNumberValue(currentPerson).toUpperCase();
+  if (currentNumber && currentNumber === sourceNumber) return false;
   const sourceKind = normalizePersonKind(inv.personKind || owner?._kind || currentPerson?._kind);
   return allPersons(data).some(person => {
     if (person.id === currentPerson?.id) return false;
@@ -510,6 +512,8 @@ function issuedSourceHeldForOtherSeasonEntry(data, inv, currentPerson, itemId, s
   const wantedSize = size || getPersonItemSize(currentPerson, itemId);
   const sourceNumber = inventoryEffectiveNumber(data, inv) || personNumberValue(owner).toUpperCase();
   if (!sourceNumber) return false;
+  const currentNumber = personNumberValue(currentPerson).toUpperCase();
+  if (currentNumber && currentNumber === sourceNumber) return false;
   const sourceKind = normalizePersonKind(inv.personKind || owner._kind || currentPerson?._kind);
   const allowCrossTeam = !!options.allowCrossTeam || currentPerson?._kind === 'coach';
   return allPersons(data).some(person => {
@@ -571,6 +575,8 @@ function stockHeldForMatchingSeasonEntry(data, inv, currentPerson, itemId, size,
   if (!inv || !inventoryIsInStock(data, inv)) return false;
   const sourceNumber = inventoryEffectiveNumber(data, inv);
   if (!sourceNumber) return false;
+  const currentNumber = personNumberValue(currentPerson).toUpperCase();
+  if (currentNumber && currentNumber === sourceNumber) return false;
   const sourceKind = normalizePersonKind(inv.personKind || currentPerson?._kind);
   const wantedSize = normalizeSizeKey(size || inv.size || '');
   const allowCrossTeam = !!options.allowCrossTeam || currentPerson?._kind === 'coach';
