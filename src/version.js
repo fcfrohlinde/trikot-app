@@ -1,8 +1,24 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.7';
+export const APP_VERSION = '1.2.9';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.9',
+    date: '2026-06-09',
+    changes: [
+      'Materialvorschlagslisten nutzen jetzt eine zentrale, testbare Berechnungsfunktion statt einer separaten Komponentenlogik',
+      'Die komplette Vorschlagsliste fuer Ben Heike Nr. 5 wird gegen die Artikelsuche abgesichert: alle sechs passenden Lagerteile erscheinen als Ausgabe aus Lager und werden nicht an andere Eintrittsnummern vergeben',
+    ],
+  },
+  {
+    version: '1.2.8',
+    date: '2026-06-09',
+    changes: [
+      'Nummerierte Lagerquellen werden bereits in der Quellenauswahl fuer andere Eintrittsnummern gesperrt, sobald eine passende Eintrittsperson mit gleicher Nummer/Initialen, Mannschaft und Groesse existiert',
+      'Die Vorschlagslisten verhindern dadurch frueher, dass Ben-Heike-Lagerbestand Nr. 5 durch andere Spieler als Umbeflockungsquelle verbraucht wird',
+    ],
+  },
   {
     version: '1.2.7',
     date: '2026-06-09',

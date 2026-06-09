@@ -27,6 +27,7 @@ getPersonStandardSets = function(settings) {
   materialSourceIsRedistribution,
   returnedStockMatchesTarget,
   buildRestbedarfOrderCandidates,
+  buildSeasonMaterialProposalRows,
   decideMaterialNeed,
 });
 `, {});
@@ -226,6 +227,11 @@ assert.equal(
   'order',
   'Nummerierter Lagerbestand #5 darf nicht vorher fuer andere Eintrittsnummern als Umbeflockung verbraucht werden'
 );
+assert.equal(
+  helpers.chooseMaterialSourceForNeed(benHeikeData, 'aufwaermshirt', otherEntry, 'L', new Set()),
+  null,
+  'Nr.-5-Lagerquelle wird fuer andere Eintrittsnummern bereits in der Quellenauswahl gesperrt'
+);
 const benTarget = benHeikeData.players[1];
 const benActions = benHeikeData.items.map(item => helpers.decideMaterialNeed(benHeikeData, benTarget, item.id, 'L').action);
 assert.deepEqual(
@@ -233,6 +239,21 @@ assert.deepEqual(
   ['reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue'],
   'Alle sechs Lagerteile mit Nr. 5 muessen fuer Ben Heike als Ausgabe aus Lager erkannt werden'
 );
+const benProposalRows = helpers.buildSeasonMaterialProposalRows({
+  ...benHeikeData,
+  settings: {
+    standardSets: [{
+      id: 'set_ben',
+      name: 'Ben Set',
+      target: 'player',
+      isDefault: true,
+      items: benHeikeData.items.map(item => ({ itemId: item.id, qty: 1 })),
+    }],
+  },
+});
+const benIssueRows = benProposalRows.filter(row => row.target.id === 'ben' && row.category === 'ausgabe');
+assert.equal(benIssueRows.length, 6, 'Die komplette Vorschlagsliste muss alle sechs Ben-Heike-Lagerausgaben enthalten');
+assert.equal(benProposalRows.some(row => row.target.id === 'other_entry' && row.source?.assignedNumber === 5), false, 'Die komplette Vorschlagsliste darf Nr.-5-Quellen nicht an andere Eintrittsnummern vergeben');
 
 const matrixBase = {
   players: [
