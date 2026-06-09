@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Users, Shirt, Wallet, ShoppingCart, Plus, Trash2, Edit2, Download, ArrowLeft, Check, X, AlertCircle, Package, Euro, FileText, Settings, LogOut, UserCog, Mail, Bell, FileWarning } from 'lucide-react';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
@@ -463,6 +463,26 @@ function sourceHeldForOtherSeasonEntry(data, inv, currentPerson, itemId, size, o
   });
 }
 
+function issuedSourceHeldForOtherSeasonEntry(data, inv, currentPerson, itemId, size, options = {}) {
+  if (!inv || !inventoryIsIssuedForTransfer(data, inv, options)) return false;
+  const owner = inventoryPersonOwner(data, inv, options);
+  if (!owner || !seasonFlag(owner.seasonExit) || seasonFlag(owner.seasonEntry)) return false;
+  const wantedSize = size || getPersonItemSize(currentPerson, itemId);
+  const sourceNumber = inventoryEffectiveNumber(data, inv) || personNumberValue(owner).toUpperCase();
+  if (!sourceNumber) return false;
+  const sourceKind = normalizePersonKind(inv.personKind || owner._kind || currentPerson?._kind);
+  const allowCrossTeam = !!options.allowCrossTeam || currentPerson?._kind === 'coach';
+  return allPersons(data).some(person => {
+    if (person.id === currentPerson?.id || person.id === owner.id) return false;
+    if (!seasonFlag(person.seasonEntry) || seasonFlag(person.seasonExit)) return false;
+    if (sourceKind && person._kind !== sourceKind) return false;
+    if (!allowCrossTeam && normalizeTeamKey(person.team) !== normalizeTeamKey(owner.team)) return false;
+    if (personNumberValue(person).toUpperCase() !== sourceNumber) return false;
+    if (normalizeSizeKey(getPersonItemSize(person, itemId)) !== normalizeSizeKey(wantedSize)) return false;
+    return personNeedsStandardSetItem(data, person, itemId, wantedSize);
+  });
+}
+
 function inventoryNumberForTarget(data, inv, person, itemId, size, options = {}) {
   const direct = inventoryEffectiveNumber(data, inv);
   if (direct) return direct;
@@ -557,6 +577,7 @@ function findSeasonTransferCandidate(data, itemId, person, usedStock, options = 
     if (!inventoryIsIssuedForTransfer(data, inv, { allowCrossTeam }) || !inventoryItemMatches(data, inv, itemId)) return false;
     if (normalizeSizeKey(inv.size || wantedSize) !== normalizeSizeKey(wantedSize)) return false;
     const owner = inventoryPersonOwner(data, inv, { allowCrossTeam });
+    if (issuedSourceHeldForOtherSeasonEntry(data, inv, person, itemId, wantedSize, { allowCrossTeam })) return false;
     const valid = owner
       && owner.id !== person.id
       && owner._kind === person._kind
@@ -5771,6 +5792,104 @@ function DepositsView({ data, update }) {
   );
 }
 
+function SignaturePad({ value, onChange }) {
+  const canvasRef = useRef(null);
+  const drawingRef = useRef(false);
+
+  function pointFromEvent(event) {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const pointer = event.touches?.[0] || event;
+    return {
+      x: (pointer.clientX - rect.left) * (canvas.width / rect.width),
+      y: (pointer.clientY - rect.top) * (canvas.height / rect.height),
+    };
+  }
+
+  function prepareCanvas() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#1A1A1A';
+  }
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    prepareCanvas();
+    if (value) {
+      const image = new Image();
+      image.onload = () => ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      image.src = value;
+    }
+  }, [value]);
+
+  function start(event) {
+    event.preventDefault();
+    drawingRef.current = true;
+    prepareCanvas();
+    const ctx = canvasRef.current.getContext('2d');
+    const point = pointFromEvent(event);
+    ctx.beginPath();
+    ctx.moveTo(point.x, point.y);
+  }
+
+  function move(event) {
+    if (!drawingRef.current) return;
+    event.preventDefault();
+    const ctx = canvasRef.current.getContext('2d');
+    const point = pointFromEvent(event);
+    ctx.lineTo(point.x, point.y);
+    ctx.stroke();
+  }
+
+  function end() {
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
+    onChange(canvasRef.current.toDataURL('image/png'));
+  }
+
+  function clear() {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    prepareCanvas();
+    onChange('');
+  }
+
+  return (
+    <div>
+      <div className="border border-stone-300 bg-white">
+        <canvas
+          ref={canvasRef}
+          width={700}
+          height={220}
+          className="block w-full h-40 touch-none"
+          onMouseDown={start}
+          onMouseMove={move}
+          onMouseUp={end}
+          onMouseLeave={end}
+          onTouchStart={start}
+          onTouchMove={move}
+          onTouchEnd={end}
+          aria-label="Unterschriftenfeld"
+        />
+      </div>
+      <div className="flex items-center justify-between mt-2 gap-2">
+        <div className="text-xs text-stone-500">Mit Maus, Stift oder Finger unterschreiben.</div>
+        <button type="button" onClick={clear} className="px-3 py-1.5 text-xs border border-stone-300 bg-white">Zuruecksetzen</button>
+      </div>
+    </div>
+  );
+}
+
 function MaterialIssueFlow({ data, update, onClose }) {
   const persons = allPersons(data);
   const [personId, setPersonId] = useState('');
@@ -5779,7 +5898,7 @@ function MaterialIssueFlow({ data, update, onClose }) {
   const [itemId, setItemId] = useState((data.items || [])[0]?.id || '');
   const [qty, setQty] = useState(1);
   const [depositAmount, setDepositAmount] = useState(0);
-  const [signature, setSignature] = useState('');
+  const [signatureImage, setSignatureImage] = useState('');
   const [notes, setNotes] = useState('');
 
   const person = findPerson(data, personId);
@@ -5873,8 +5992,11 @@ function MaterialIssueFlow({ data, update, onClose }) {
     });
     const y = Math.max(doc.lastAutoTable?.finalY || 55, 70) + 10;
     doc.text('Die oben aufgefuehrten Teile wurden als Leihgabe erhalten. Die Pfand- und Kleiderordnung wurde anerkannt.', 14, y, { maxWidth: 180 });
+    if (protocol.signatureImage) {
+      doc.addImage(protocol.signatureImage, 'PNG', 14, y + 10, 70, 22);
+    }
     doc.line(14, y + 24, 95, y + 24);
-    doc.text(`Digitale Unterschrift: ${protocol.signature}`, 14, y + 30);
+    doc.text('Digitale Unterschrift Spieler/Trainer', 14, y + 30);
     doc.text(`Datum: ${new Date(protocol.createdAt).toLocaleDateString('de-DE')}`, 130, y + 30);
     doc.save(`uebergabe_${person.lastName || 'person'}_${new Date().toISOString().slice(0, 10)}.pdf`);
   }
@@ -5883,7 +6005,7 @@ function MaterialIssueFlow({ data, update, onClose }) {
     if (!person) return alert('Bitte Spieler oder Trainer wählen.');
     if (suggestions.length === 0) return alert('Bitte Artikel oder Artikelset auswählen.');
     if (missing.length > 0) return alert(`Ausgabe nicht möglich: ${missing.length} Position(en) ohne passenden Bestand.`);
-    if (!signature.trim()) return alert('Digitale Unterschrift fehlt.');
+    if (!signatureImage) return alert('Digitale Unterschrift fehlt.');
 
     const now = new Date().toISOString();
     const protocolId = `issue_${Date.now()}`;
@@ -5949,7 +6071,8 @@ function MaterialIssueFlow({ data, update, onClose }) {
       mode,
       setId: mode === 'set' ? selectedSet?.id || null : null,
       setName: mode === 'set' ? selectedSet?.name || '' : '',
-      signature: signature.trim(),
+      signature: 'canvas',
+      signatureImage,
       notes,
       depositMode,
       depositId: activeDeposit?.id || createdDeposit?.id || null,
@@ -6063,7 +6186,7 @@ function MaterialIssueFlow({ data, update, onClose }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
         <Field label="Digitale Unterschrift Spieler/Trainer">
-          <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={signature} onChange={e => setSignature(e.target.value)} placeholder="Name als Unterschrift" />
+          <SignaturePad value={signatureImage} onChange={setSignatureImage} />
         </Field>
         <Field label="Hinweis">
           <input className="w-full border border-stone-300 px-3 py-2 text-sm" value={notes} onChange={e => setNotes(e.target.value)} placeholder="optional" />
@@ -6071,7 +6194,7 @@ function MaterialIssueFlow({ data, update, onClose }) {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button onClick={submit} disabled={!person || missing.length > 0 || suggestions.length === 0 || !signature.trim()} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
+        <button onClick={submit} disabled={!person || missing.length > 0 || suggestions.length === 0 || !signatureImage} className="bg-stone-900 text-white px-4 py-2 text-sm font-medium disabled:opacity-50">
           Ausgabe abschließen & PDF
         </button>
         <button onClick={onClose} className="border border-stone-300 px-4 py-2 text-sm">Abbrechen</button>

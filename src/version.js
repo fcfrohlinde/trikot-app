@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.3';
+export const APP_VERSION = '1.2.4';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.4',
+    date: '2026-06-09',
+    changes: [
+      'Ausgegebene Teile ausscheidender Spieler/Trainer werden fuer eintretende Personen mit gleicher Nummer/Initialen, Mannschaft und Groesse reserviert und nicht mehr als Umbeflockung fuer andere Nummern verbraucht',
+      'Pfand-Materialausgabe nutzt ein echtes Canvas-Unterschriftenfeld; die digitale Unterschrift wird im Uebergabeprotokoll gespeichert und im PDF als Bild ausgegeben',
+    ],
+  },
   {
     version: '1.2.3',
     date: '2026-06-08',

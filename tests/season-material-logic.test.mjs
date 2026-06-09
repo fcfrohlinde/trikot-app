@@ -293,6 +293,37 @@ assert.equal(
   'Trainer mit gleichen Initialen und Saisonstatus werden ebenfalls umverteilt'
 );
 
+const sameNumberEntryProtectedData = {
+  players: [
+    { id: 'meikel', firstName: 'Meikel', lastName: 'Wagner', number: 1, team: 'ERSTE', size: 'XL', seasonExit: true },
+    { id: 'pascal', firstName: 'Pascal', lastName: 'Eiba', number: 1, team: 'ERSTE', size: 'XL', seasonEntry: true },
+    { id: 'kyell', firstName: 'Kyell', lastName: 'Gardemann', number: 6, team: 'ERSTE', size: 'XL', seasonEntry: true },
+  ],
+  coaches: [],
+  items: [{ id: 'shirt', articleNumber: '1000-01', name: 'Shirt' }],
+  inventory: [{ id: 'meikel_shirt', status: 'ausgegeben', itemType: 'shirt', size: 'XL', assignedTo: 'meikel', team: 'ERSTE' }],
+  orders: [],
+  settings: {
+    standardSets: [{
+      id: 'set_player',
+      name: 'Spieler-Set',
+      target: 'player',
+      isDefault: true,
+      items: [{ itemId: 'shirt', qty: 1 }],
+    }],
+  },
+};
+assert.equal(
+  helpers.decideMaterialNeed(sameNumberEntryProtectedData, { ...sameNumberEntryProtectedData.players[1], _kind: 'player' }, 'shirt', 'XL').action,
+  'redistribute',
+  'Austritt Nr. 1 wird fuer Eintritt Nr. 1 gleicher Mannschaft und Groesse umverteilt'
+);
+assert.equal(
+  helpers.decideMaterialNeed(sameNumberEntryProtectedData, { ...sameNumberEntryProtectedData.players[2], _kind: 'player' }, 'shirt', 'XL').action,
+  'order',
+  'Austritt Nr. 1 darf nicht als Umbeflockung fuer Eintritt Nr. 6 verbraucht werden'
+);
+
 assert.equal(
   helpers.decideMaterialNeed({
     ...matrixBase,
