@@ -342,6 +342,40 @@ assert.equal(
   'Passender Lagerbestand Nr. 5 darf nicht durch falsche Nr. 17 als Umbeflockung ersetzt werden'
 );
 
+const openOrderMustNotConsumeExactStockData = {
+  players: [
+    { id: 'ben_order_case', firstName: 'Ben', lastName: 'Heike', number: 5, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
+    { id: 'other_order_case', firstName: 'Andere', lastName: 'Person', number: 17, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
+  ],
+  coaches: [],
+  items: [{ id: 'short', articleNumber: '4400-04', name: 'HEIM - Short' }],
+  inventory: [
+    { id: 'stock_short_5', status: 'lager', itemType: 'short', itemName: 'HEIM - Short', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+    { id: 'stock_short_17', status: 'lager', itemType: 'short', itemName: 'HEIM - Short', size: 'L', team: 'ERSTE', assignedNumber: 17, personKind: 'player' },
+  ],
+  orders: [{ id: 'ord_other_17', title: 'Offene Bestellung anderer Spieler', status: 'angelegt', lines: [{ id: 'line_17', itemType: 'short', size: 'L', qty: 1, playerId: 'other_order_case', number: 17 }] }],
+  settings: {
+    standardSets: [{
+      id: 'set_order_case',
+      name: 'Spieler-Set',
+      target: 'player',
+      isDefault: true,
+      items: [{ itemId: 'short', qty: 1 }],
+    }],
+  },
+};
+const openOrderRows = helpers.buildSeasonMaterialProposalRows(openOrderMustNotConsumeExactStockData);
+assert.equal(
+  openOrderRows.find(row => row.target.id === 'ben_order_case')?.source?.id,
+  'stock_short_5',
+  'Saisonbedarf muss passenden Lagerbestand vor offenen Bestellhinweisen erhalten'
+);
+assert.equal(
+  openOrderRows.find(row => row.target.id === 'ben_order_case')?.category,
+  'ausgabe',
+  'Offene Bestellungen duerfen passenden Lagerbestand nicht in Umbeflockung verdraengen'
+);
+
 assert.equal(
   helpers.decideMaterialNeed({
     ...benHeikeData,

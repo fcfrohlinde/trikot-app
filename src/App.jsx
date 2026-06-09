@@ -854,17 +854,6 @@ function buildSeasonMaterialProposalRows(data, options = {}) {
     });
   }
 
-  openOrders.forEach(order => {
-    (order.lines || []).forEach(line => {
-      const person = findPerson(data, line.playerId);
-      const item = findItem(data, line.itemType);
-      const qty = Number(line.qty) || 1;
-      for (let idx = 0; idx < qty; idx++) {
-        addRow({ person, item, size: line.size || getPersonItemSize(person, item?.id), sourceHint: `Bestellung: ${order.title}`, orderId: order.id, allowMissing: false });
-      }
-    });
-  });
-
   const seasonNeeds = [];
   persons.filter(p => shouldPlanStandardSetInMaterial(data, p)).forEach(person => {
     const sets = getPersonStandardSets(data.settings, person);
@@ -905,6 +894,17 @@ function buildSeasonMaterialProposalRows(data, options = {}) {
   seasonNeeds
     .sort((a, b) => a.priority - b.priority || String(a.person.team || '').localeCompare(String(b.person.team || ''), 'de') || String(personNumberValue(a.person)).localeCompare(String(personNumberValue(b.person)), 'de', { numeric: true }))
     .forEach(addRow);
+
+  openOrders.forEach(order => {
+    (order.lines || []).forEach(line => {
+      const person = findPerson(data, line.playerId);
+      const item = findItem(data, line.itemType);
+      const qty = Number(line.qty) || 1;
+      for (let idx = 0; idx < qty; idx++) {
+        addRow({ person, item, size: line.size || getPersonItemSize(person, item?.id), sourceHint: `Bestellung: ${order.title}`, orderId: order.id, allowMissing: false });
+      }
+    });
+  });
 
   return result;
 }

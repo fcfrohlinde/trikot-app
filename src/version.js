@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.14';
+export const APP_VERSION = '1.2.15';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.15',
+    date: '2026-06-09',
+    changes: [
+      'Saisonbedarfe mit passendem Lagerbestand werden vor offenen Bestellhinweisen geplant, damit vorhandene Lagerware nicht vorab durch Bestellzeilen verbraucht wird',
+      'Regressionstest ergaenzt: offene Bestellungen duerfen passende Lagerteile gleicher Nummer, Groesse und Mannschaft nicht in Umbeflockung verdraengen',
+    ],
+  },
   {
     version: '1.2.14',
     date: '2026-06-09',
