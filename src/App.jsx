@@ -199,6 +199,10 @@ function normalizeArticleKey(value) {
   return String(value || '')
     .trim()
     .toLowerCase()
+    .replace(/\u00e4/g, 'ae')
+    .replace(/\u00f6/g, 'oe')
+    .replace(/\u00fc/g, 'ue')
+    .replace(/\u00df/g, 'ss')
     .replace(/ä/g, 'ae')
     .replace(/ö/g, 'oe')
     .replace(/ü/g, 'ue')
@@ -465,7 +469,7 @@ function sourceHeldForOtherSeasonEntry(data, inv, currentPerson, itemId, size, o
     if (sourceKind && person._kind !== sourceKind) return false;
     if (personNumberValue(person).toUpperCase() !== sourceNumber) return false;
     if (!seasonStockMatchesTarget(data, inv, person, itemId, size, options)) return false;
-    return personNeedsStandardSetItem(data, person, itemId, size);
+    return true;
   });
 }
 
@@ -485,7 +489,7 @@ function issuedSourceHeldForOtherSeasonEntry(data, inv, currentPerson, itemId, s
     if (!allowCrossTeam && normalizeTeamKey(person.team) !== normalizeTeamKey(owner.team)) return false;
     if (personNumberValue(person).toUpperCase() !== sourceNumber) return false;
     if (normalizeSizeKey(getPersonItemSize(person, itemId)) !== normalizeSizeKey(wantedSize)) return false;
-    return personNeedsStandardSetItem(data, person, itemId, wantedSize);
+    return true;
   });
 }
 

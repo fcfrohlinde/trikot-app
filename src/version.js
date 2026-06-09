@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.6';
+export const APP_VERSION = '1.2.7';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.7',
+    date: '2026-06-09',
+    changes: [
+      'Nummerierter Lagerbestand wird fuer eintretende Personen mit gleicher Nummer/Initialen, Mannschaft und Groesse geschuetzt und nicht vorher als Umbeflockungsquelle fuer andere Nummern verbraucht',
+      'Vorschlagslisten bleiben dadurch konsistent zur Artikelsuche: alle passenden Lagerteile mit Nummer werden als Ausgabe aus Lager beruecksichtigt',
+    ],
+  },
   {
     version: '1.2.6',
     date: '2026-06-09',

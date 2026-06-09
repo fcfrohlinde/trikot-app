@@ -197,6 +197,7 @@ assert.equal(
 
 const benHeikeData = {
   players: [
+    { id: 'other_entry', firstName: 'Andere', lastName: 'Nummer', number: 6, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
     { id: 'ben', firstName: 'Ben', lastName: 'Heike', number: 5, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
   ],
   coaches: [],
@@ -219,8 +220,14 @@ const benHeikeData = {
   orders: [],
   settings: {},
 };
-const ben = benHeikeData.players[0];
-const benActions = benHeikeData.items.map(item => helpers.decideMaterialNeed(benHeikeData, ben, item.id, 'L').action);
+const otherEntry = benHeikeData.players[0];
+assert.equal(
+  helpers.decideMaterialNeed(benHeikeData, otherEntry, 'aufwaermshirt', 'L').action,
+  'order',
+  'Nummerierter Lagerbestand #5 darf nicht vorher fuer andere Eintrittsnummern als Umbeflockung verbraucht werden'
+);
+const benTarget = benHeikeData.players[1];
+const benActions = benHeikeData.items.map(item => helpers.decideMaterialNeed(benHeikeData, benTarget, item.id, 'L').action);
 assert.deepEqual(
   benActions,
   ['reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue'],
