@@ -512,7 +512,7 @@ function materialSourceIsRedistribution(data, source, person, itemId, size, opti
       && seasonFlag(owner.seasonExit)
       && !seasonFlag(owner.seasonEntry);
   }
-  return returnedStockMatchesTarget(data, source, person, itemId, size, options);
+  return false;
 }
 
 function stockReservedForOther(inv, person) {

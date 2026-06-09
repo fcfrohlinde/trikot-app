@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.4';
+export const APP_VERSION = '1.2.5';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.5',
+    date: '2026-06-09',
+    changes: [
+      'Ruecklauf Lager wird in den Materialvorschlaegen wieder als Lagerbestand behandelt und erscheint nicht mehr in Umverteilung',
+      'Umverteilung zeigt nur noch Teile, die tatsaechlich noch beim ausscheidenden Spieler/Trainer ausgegeben sind',
+    ],
+  },
   {
     version: '1.2.4',
     date: '2026-06-09',

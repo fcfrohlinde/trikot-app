@@ -24,6 +24,7 @@ getPersonStandardSets = function(settings) {
   inventoryEffectiveNumber,
   inventoryNumberForTarget,
   materialSourceNeedsReprint,
+  materialSourceIsRedistribution,
   returnedStockMatchesTarget,
   buildRestbedarfOrderCandidates,
   decideMaterialNeed,
@@ -105,6 +106,8 @@ const source = helpers.chooseMaterialSourceForNeed(data, 'heim-trikot-new', jona
 assert.equal(source?.id, 'inv_29_returned');
 assert.equal(helpers.inventoryNumberForTarget(data, source, jonah, 'heim-trikot-new', 'M'), '29');
 assert.equal(helpers.materialSourceNeedsReprint(data, source, jonah), false);
+assert.equal(helpers.materialSourceIsRedistribution(data, source, jonah, 'heim-trikot-new', 'M'), false);
+assert.equal(helpers.decideMaterialNeed(data, jonah, 'heim-trikot-new', 'M').action, 'reserve_or_issue', 'Ruecklauf Lager zaehlt als Lagerausgabe, nicht als Umverteilung');
 
 const staleBookedStock = {
   id: 'inv_stale_booked',
