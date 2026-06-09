@@ -255,6 +255,73 @@ const benIssueRows = benProposalRows.filter(row => row.target.id === 'ben' && ro
 assert.equal(benIssueRows.length, 6, 'Die komplette Vorschlagsliste muss alle sechs Ben-Heike-Lagerausgaben enthalten');
 assert.equal(benProposalRows.some(row => row.target.id === 'other_entry' && row.source?.assignedNumber === 5), false, 'Die komplette Vorschlagsliste darf Nr.-5-Quellen nicht an andere Eintrittsnummern vergeben');
 
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...benHeikeData,
+    orders: [{ id: 'ord_ben_aufwaerm', status: 'angelegt', lines: [{ id: 'l1', itemType: 'aufwaermshirt', size: 'L', qty: 1, playerId: 'ben', number: 5 }] }],
+  }, benTarget, 'aufwaermshirt', 'L').action,
+  'covered_ordered',
+  'Offene Bestellung fuer Ben Nr. 5 deckt den Bedarf und verhindert Doppelplanung'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...benHeikeData,
+    inventory: [{ id: 'ben_issued', status: 'ausgegeben', itemType: 'aufwaermshirt', size: 'L', assignedTo: 'ben', team: 'ERSTE' }],
+  }, benTarget, 'aufwaermshirt', 'L').action,
+  'covered_issued',
+  'Bereits ausgegebenes Teil an Ben Nr. 5 verhindert neue Ausgabe oder Bestellung'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...benHeikeData,
+    inventory: [{ id: 'wrong_team', status: 'lager', itemType: 'aufwaermshirt', itemName: 'Aufwaermshirt Iconic', size: 'L', team: 'ZWEITE', assignedNumber: 5, personKind: 'player' }],
+  }, benTarget, 'aufwaermshirt', 'L').action,
+  'order',
+  'Lagerbestand Nr. 5 aus anderer Mannschaft wird fuer Spieler nicht verwendet'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...benHeikeData,
+    inventory: [{ id: 'wrong_size', status: 'lager', itemType: 'aufwaermshirt', itemName: 'Aufwaermshirt Iconic', size: 'XL', team: 'ERSTE', assignedNumber: 5, personKind: 'player' }],
+  }, benTarget, 'aufwaermshirt', 'L').action,
+  'order',
+  'Lagerbestand Nr. 5 mit falscher Groesse wird nicht verwendet'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...benHeikeData,
+    inventory: [{ id: 'reserved_ben', status: 'lager', itemType: 'aufwaermshirt', itemName: 'Aufwaermshirt Iconic', size: 'L', team: 'ERSTE', assignedNumber: 5, reservedFor: 'ben', personKind: 'player' }],
+  }, benTarget, 'aufwaermshirt', 'L').action,
+  'reserve_or_issue',
+  'Fuer Ben reservierter Lagerbestand Nr. 5 bleibt als Ausgabe verfuegbar'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...benHeikeData,
+    inventory: [{ id: 'reserved_other', status: 'lager', itemType: 'aufwaermshirt', itemName: 'Aufwaermshirt Iconic', size: 'L', team: 'ERSTE', assignedNumber: 5, reservedFor: 'someone_else', personKind: 'player' }],
+  }, benTarget, 'aufwaermshirt', 'L').action,
+  'order',
+  'Fuer andere reservierter Lagerbestand Nr. 5 wird fuer Ben nicht erneut verplant'
+);
+
+assert.equal(
+  helpers.decideMaterialNeed({
+    ...benHeikeData,
+    players: [
+      ...benHeikeData.players,
+      { id: 'leaver_5', firstName: 'Alt', lastName: 'Fuenf', number: 5, team: 'ERSTE', size: 'L', seasonExit: true, _kind: 'player' },
+    ],
+    inventory: [{ id: 'issued_leaver_5', status: 'ausgegeben', itemType: 'aufwaermshirt', itemName: 'Aufwaermshirt Iconic', size: 'L', team: 'ERSTE', assignedTo: 'leaver_5', personKind: 'player' }],
+  }, benTarget, 'aufwaermshirt', 'L').action,
+  'redistribute',
+  'Wenn ein ausscheidender Spieler Nr. 5 vorhanden ist, wird dessen ausgegebenes Teil als Umverteilung priorisiert'
+);
+
 const matrixBase = {
   players: [
     { id: 'active', firstName: 'Aktiv', lastName: 'Spieler', number: 7, team: 'ERSTE', size: 'M', _kind: 'player' },
@@ -419,6 +486,53 @@ assert.equal(
   }, matrixBase.players[0], 'shirt', 'M').action,
   'order',
   'Fuer andere reservierter Bestand wird nicht erneut verplant'
+);
+
+const mixedPeopleData = {
+  players: [
+    { id: 'player_leave_3', firstName: 'Alt', lastName: 'Drei', number: 3, team: 'ERSTE', size: 'M', seasonExit: true },
+    { id: 'player_entry_3', firstName: 'Neu', lastName: 'Drei', number: 3, team: 'ERSTE', size: 'M', seasonEntry: true },
+    { id: 'player_entry_4', firstName: 'Neu', lastName: 'Vier', number: 4, team: 'ERSTE', size: 'M', seasonEntry: true },
+  ],
+  coaches: [
+    { id: 'coach_entry_ab', firstName: 'Neu', lastName: 'Trainer', initials: 'AB', team: 'ERSTE', size: 'L', seasonEntry: true },
+    { id: 'coach_entry_cd', firstName: 'Neu', lastName: 'Coach', trainerInitials: 'CD', team: 'ZWEITE', size: 'L', seasonEntry: true },
+  ],
+  items: [{ id: 'shirt', articleNumber: '1000-01', name: 'Shirt' }],
+  inventory: [
+    { id: 'issued_player_3', status: 'ausgegeben', itemType: 'shirt', size: 'M', assignedTo: 'player_leave_3', team: 'ERSTE', personKind: 'player' },
+    { id: 'stock_player_4', status: 'lager', itemType: 'shirt', size: 'M', team: 'ERSTE', assignedNumber: 4, personKind: 'player' },
+    { id: 'stock_coach_ab', status: 'lager', itemType: 'shirt', size: 'L', team: 'ERSTE', assignedInitials: 'AB', personKind: 'coach' },
+    { id: 'stock_coach_cd', status: 'lager', itemType: 'shirt', size: 'L', team: 'DRITTE', returnedInitials: 'CD', personKind: 'coach' },
+  ],
+  orders: [],
+  settings: {
+    standardSets: [
+      { id: 'set_player', name: 'Spieler-Set', target: 'player', isDefault: true, items: [{ itemId: 'shirt', qty: 1 }] },
+      { id: 'set_coach', name: 'Trainer-Set', target: 'coach', isDefault: true, items: [{ itemId: 'shirt', qty: 1 }] },
+    ],
+  },
+};
+const mixedRows = helpers.buildSeasonMaterialProposalRows(mixedPeopleData);
+assert.equal(
+  mixedRows.find(row => row.target.id === 'player_entry_3')?.category,
+  'umverteilung',
+  'Alle Spieler: gleicher Nummern-/Groessenfall vom ausscheidenden Spieler wird als Umverteilung geplant'
+);
+assert.equal(
+  mixedRows.find(row => row.target.id === 'player_entry_4')?.category,
+  'ausgabe',
+  'Alle Spieler: passender Lagerbestand ohne Austritt wird als Ausgabe geplant'
+);
+assert.equal(
+  mixedRows.find(row => row.target.id === 'coach_entry_ab')?.category,
+  'ausgabe',
+  'Alle Trainer: Initialen aus assignedInitials werden als passende Lagerausgabe erkannt'
+);
+assert.equal(
+  helpers.buildSeasonMaterialProposalRows(mixedPeopleData, { allowCrossTeam: true }).find(row => row.target.id === 'coach_entry_cd')?.category,
+  'ausgabe',
+  'Alle Trainer: trainerInitials/returnedInitials werden auch mannschaftsuebergreifend erkannt'
 );
 
 console.log('season material matching ok');

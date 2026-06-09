@@ -120,8 +120,10 @@ function inventoryStatusLabel(data, inv) {
 }
 
 function personNumberValue(person) {
-  if (!person || person.number === undefined || person.number === null || person.number === '') return '';
-  return person._kind === 'coach' ? String(person.number).trim().toUpperCase() : String(person.number).trim();
+  if (!person) return '';
+  const raw = person.number ?? person.initials ?? person.trainerInitials ?? person.shortName ?? '';
+  if (raw === undefined || raw === null || raw === '') return '';
+  return person._kind === 'coach' ? String(raw).trim().toUpperCase() : String(raw).trim();
 }
 
 function normalizePersonKind(value) {
@@ -273,7 +275,21 @@ function shouldPlanStandardSetInMaterial(data, person) {
 }
 
 function inventoryEffectiveNumber(data, inv) {
-  const numberFields = ['assignedNumber', 'returnedNumber', 'number', 'flockNumber', 'shirtNumber', 'reprintToNumber', 'reprintFromNumber', 'reservedNumber'];
+  const numberFields = [
+    'assignedNumber',
+    'assignedInitials',
+    'returnedNumber',
+    'returnedInitials',
+    'number',
+    'initials',
+    'trainerInitials',
+    'flockNumber',
+    'shirtNumber',
+    'reprintToNumber',
+    'reprintFromNumber',
+    'reservedNumber',
+    'reservedInitials',
+  ];
   for (const field of numberFields) {
     if (inv?.[field] !== undefined && inv[field] !== null && inv[field] !== '') {
       return String(inv[field]).trim().toUpperCase();

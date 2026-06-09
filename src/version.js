@@ -1,8 +1,23 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.9';
+export const APP_VERSION = '1.2.11';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.11',
+    date: '2026-06-09',
+    changes: [
+      'Materiallogik auf alle Spieler und Trainer erweitert: Trainer-Initialen aus Alt-/Importfeldern werden zentral erkannt und in Lagerausgabe, Umverteilung, Umbeflockung und Restbedarf beruecksichtigt',
+      'Regressionstest fuer gemischte Spieler-/Trainer-Vorschlagslisten ergaenzt, damit passende Lagerteile nicht mehr nur fuer einzelne Beispielpersonen korrekt geplant werden',
+    ],
+  },
+  {
+    version: '1.2.10',
+    date: '2026-06-09',
+    changes: [
+      'Nr.-5-Materiallogik als vollstaendige Pruefmatrix abgesichert: Lagerbestand ohne passenden Austritt, offene Bestellung, bereits ausgegeben, falsche Mannschaft, falsche Groesse, Reservierung und Umverteilung bei vorhandenem Austritt',
+    ],
+  },
   {
     version: '1.2.9',
     date: '2026-06-09',
