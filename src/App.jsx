@@ -199,8 +199,14 @@ function normalizeArticleKey(value) {
   return String(value || '')
     .trim()
     .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/\[[^\]]+\]/g, ' ')
-    .replace(/[^a-z0-9äöüß]+/gi, ' ')
+    .replace(/[^a-z0-9]+/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }

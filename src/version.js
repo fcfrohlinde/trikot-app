@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.5';
+export const APP_VERSION = '1.2.6';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.6',
+    date: '2026-06-09',
+    changes: [
+      'Artikelabgleich zwischen Lagerbestand und Vorschlagslisten normalisiert Umlaute und Import-Schreibweisen robuster',
+      'Lagerteile wie Aufwaermshirt/Aufwaermshirt Iconic, doppelte Importnamen und Ruecklauf-Lager mit Nummer werden in Ausgabe, Bestellung, Umverteilung und Umbeflockung konsistent beruecksichtigt',
+    ],
+  },
   {
     version: '1.2.5',
     date: '2026-06-09',

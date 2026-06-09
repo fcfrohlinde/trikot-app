@@ -195,6 +195,38 @@ assert.equal(
   'Bereits anderweitig verplante Quellen duerfen sichtbaren Restbedarf nicht aus der Bestellung entfernen'
 );
 
+const benHeikeData = {
+  players: [
+    { id: 'ben', firstName: 'Ben', lastName: 'Heike', number: 5, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
+  ],
+  coaches: [],
+  items: [
+    { id: 'aufwaermshirt', articleNumber: '6124-403', name: 'Aufwaermshirt Iconic' },
+    { id: 'heim_short', articleNumber: '4400-04', name: 'HEIM - Short' },
+    { id: 'zip_shirt', articleNumber: '8824-403', name: 'ZIP Shirt Iconic' },
+    { id: 'jacke', articleNumber: '9324-403', name: 'Jacke Iconic' },
+    { id: 'hose_poly', articleNumber: '9223-900', name: 'Trainingshose Polyester' },
+    { id: 'hose_power', articleNumber: '8423-900', name: 'Trainingshose Power' },
+  ],
+  inventory: [
+    { id: 'inv_aufwaerm', status: 'lager', itemType: 'legacy_a', itemName: 'Aufwärmshirt Iconic', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+    { id: 'inv_short', status: 'lager', itemType: 'legacy_b', itemName: 'HEIM - ShortHEIM - Short', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+    { id: 'inv_zip', status: 'lager', itemType: 'legacy_c', itemName: 'ZIP Shirt IconicZIP Shirt Iconic', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+    { id: 'inv_jacke', status: 'lager', itemType: 'legacy_d', itemName: 'Jacke IconicJacke Iconic', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+    { id: 'inv_poly', status: 'lager', itemType: 'legacy_e', itemName: 'Trainingshose PolyesterTrainingshose Polyester', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+    { id: 'inv_power', status: 'lager', itemType: 'legacy_f', itemName: 'Trainingshose Power', size: 'L', team: 'ERSTE', assignedNumber: 5, personKind: 'player' },
+  ],
+  orders: [],
+  settings: {},
+};
+const ben = benHeikeData.players[0];
+const benActions = benHeikeData.items.map(item => helpers.decideMaterialNeed(benHeikeData, ben, item.id, 'L').action);
+assert.deepEqual(
+  benActions,
+  ['reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue', 'reserve_or_issue'],
+  'Alle sechs Lagerteile mit Nr. 5 muessen fuer Ben Heike als Ausgabe aus Lager erkannt werden'
+);
+
 const matrixBase = {
   players: [
     { id: 'active', firstName: 'Aktiv', lastName: 'Spieler', number: 7, team: 'ERSTE', size: 'M', _kind: 'player' },
