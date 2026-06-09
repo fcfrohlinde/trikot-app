@@ -1,8 +1,24 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.11';
+export const APP_VERSION = '1.2.13';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.13',
+    date: '2026-06-09',
+    changes: [
+      'Doppelte Rueckennummern und Trainer-Initialen sind in derselben Mannschaft erlaubt, sobald eine beteiligte Person als Eintritt Saison markiert ist',
+      'Hinterlegte Nummern und Initialen werden beim Laden, Speichern, Formular und Import vereinheitlicht, z. B. #05, Nr. 5 und 5 zu 5 sowie Trainer-Initialen in Grossbuchstaben',
+    ],
+  },
+  {
+    version: '1.2.12',
+    date: '2026-06-09',
+    changes: [
+      'Flocknummern und Initialen werden zentral normalisiert, sodass Lagerware mit Formaten wie #5, Nr. 5 oder 05 als gleiche Nummer erkannt wird',
+      'Passender Lagerbestand mit gleicher Nummer, Groesse und Mannschaft wird nicht mehr wegen alter Namenszuordnung als Umbeflockung vorgeschlagen',
+    ],
+  },
   {
     version: '1.2.11',
     date: '2026-06-09',

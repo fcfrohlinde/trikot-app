@@ -114,7 +114,19 @@ function personNumberValue(person) {
   if (!person) return '';
   const raw = person.number ?? person.initials ?? person.trainerInitials ?? person.shortName ?? '';
   if (raw === undefined || raw === null || raw === '') return '';
-  return person._kind === 'coach' ? String(raw).trim().toUpperCase() : String(raw).trim();
+  return normalizeFlockIdentifier(raw, person._kind);
+}
+
+function normalizeFlockIdentifier(value, kind = '') {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return '';
+  const cleaned = raw.replace(/^#\s*/, '').replace(/^NR\.?\s*/i, '').trim();
+  const normalizedKind = normalizePersonKind(kind);
+  const digits = cleaned.replace(/[^0-9]/g, '');
+  if (normalizedKind === 'player' || (/^\d/.test(cleaned) && digits)) {
+    return digits.replace(/^0+(?=\d)/, '');
+  }
+  return cleaned.replace(/[^A-Z0-9]/g, '');
 }
 
 function catalogArticleKey(data, itemId) {

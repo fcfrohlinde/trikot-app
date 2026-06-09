@@ -29,6 +29,8 @@ getPersonStandardSets = function(settings) {
   buildRestbedarfOrderCandidates,
   buildSeasonMaterialProposalRows,
   decideMaterialNeed,
+  normalizeFlockIdentifier,
+  personNumberValue,
 });
 `, {});
 
@@ -254,6 +256,57 @@ const benProposalRows = helpers.buildSeasonMaterialProposalRows({
 const benIssueRows = benProposalRows.filter(row => row.target.id === 'ben' && row.category === 'ausgabe');
 assert.equal(benIssueRows.length, 6, 'Die komplette Vorschlagsliste muss alle sechs Ben-Heike-Lagerausgaben enthalten');
 assert.equal(benProposalRows.some(row => row.target.id === 'other_entry' && row.source?.assignedNumber === 5), false, 'Die komplette Vorschlagsliste darf Nr.-5-Quellen nicht an andere Eintrittsnummern vergeben');
+
+const formattedNumberStockData = {
+  players: [
+    { id: 'old_5', firstName: 'Alt', lastName: 'Spieler', number: 5, team: 'ERSTE', size: 'L', seasonExit: true, _kind: 'player' },
+    { id: 'new_5', firstName: 'Neu', lastName: 'Spieler', number: 5, team: 'ERSTE', size: 'L', seasonEntry: true, _kind: 'player' },
+  ],
+  coaches: [],
+  items: [{ id: 'jacke', articleNumber: '9324-403', name: 'Jacke Iconic' }],
+  inventory: [
+    {
+      id: 'lager_hash_5',
+      status: 'lager',
+      itemType: 'jacke',
+      itemName: 'Jacke Iconic',
+      size: 'L',
+      team: 'ERSTE',
+      assignedNumber: '#5',
+      assignedName: 'ALT',
+      personKind: 'player',
+    },
+    {
+      id: 'lager_nr_5',
+      status: 'lager',
+      itemType: 'jacke',
+      itemName: 'Jacke Iconic',
+      size: 'L',
+      team: 'ERSTE',
+      returnedNumber: 'Nr. 5',
+      returnedName: 'ALT',
+      personKind: 'player',
+    },
+  ],
+  orders: [],
+  settings: {
+    standardSets: [{
+      id: 'set_formatted',
+      name: 'Spieler-Set',
+      target: 'player',
+      isDefault: true,
+      items: [{ itemId: 'jacke', qty: 2 }],
+    }],
+  },
+};
+const formattedNumberRows = helpers.buildSeasonMaterialProposalRows(formattedNumberStockData);
+const formattedNewRows = formattedNumberRows.filter(row => row.target.id === 'new_5');
+assert.equal(formattedNewRows.length, 2, 'Beide Lagerteile mit formatierter Nr. 5 muessen fuer den neuen Spieler erkannt werden');
+assert.equal(
+  formattedNewRows.some(row => row.category === 'umbeflockung'),
+  false,
+  'Gleiche Nummer/Groesse/Mannschaft darf trotz alter Namenszuordnung nicht als Umbeflockung vorgeschlagen werden'
+);
 
 assert.equal(
   helpers.decideMaterialNeed({
@@ -534,5 +587,10 @@ assert.equal(
   'ausgabe',
   'Alle Trainer: trainerInitials/returnedInitials werden auch mannschaftsuebergreifend erkannt'
 );
+
+assert.equal(helpers.normalizeFlockIdentifier('#05', 'player'), '5', 'Spielernummern werden ohne # und fuehrende Null gespeichert');
+assert.equal(helpers.normalizeFlockIdentifier('Nr. 5', 'player'), '5', 'Spielernummern mit Nr.-Praefix werden vereinheitlicht');
+assert.equal(helpers.personNumberValue({ _kind: 'coach', initials: ' ab ' }), 'AB', 'Trainer-Initialen aus Alt-Feldern werden vereinheitlicht');
+assert.equal(helpers.personNumberValue({ _kind: 'coach', trainerInitials: 'c.d' }), 'CD', 'Trainer-Initialen mit Trennzeichen werden vereinheitlicht');
 
 console.log('season material matching ok');

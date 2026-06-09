@@ -35,6 +35,46 @@ const DEFAULTS = {
   },
 };
 
+function normalizePersonKind(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (['player', 'spieler'].includes(raw)) return 'player';
+  if (['coach', 'trainer'].includes(raw)) return 'coach';
+  return raw;
+}
+
+function normalizeFlockIdentifier(value, kind = '') {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return '';
+  const cleaned = raw.replace(/^#\s*/, '').replace(/^NR\.?\s*/i, '').trim();
+  const normalizedKind = normalizePersonKind(kind);
+  const digits = cleaned.replace(/[^0-9]/g, '');
+  if (normalizedKind === 'player' || (/^\d/.test(cleaned) && digits)) {
+    return digits.replace(/^0+(?=\d)/, '');
+  }
+  return cleaned.replace(/[^A-Z0-9]/g, '');
+}
+
+function normalizePersonRecord(person, kind) {
+  const normalizedNumber = normalizeFlockIdentifier(
+    person?.number ?? person?.initials ?? person?.trainerInitials ?? person?.shortName ?? '',
+    kind
+  );
+  return {
+    ...person,
+    number: kind === 'coach'
+      ? (normalizedNumber || null)
+      : (normalizedNumber ? parseInt(normalizedNumber) : null),
+  };
+}
+
+function normalizeDataShape(data) {
+  return {
+    ...data,
+    players: (data.players || []).map(person => normalizePersonRecord(person, 'player')),
+    coaches: (data.coaches || []).map(person => normalizePersonRecord(person, 'coach')),
+  };
+}
+
 async function readJsonResponse(response, fallbackMessage) {
   const text = await response.text();
   let data = {};
@@ -64,7 +104,7 @@ export function useData() {
     try {
       const r = await authFetch('/api/data');
       const d = await readJsonResponse(r, 'Daten konnten nicht geladen werden');
-      setData({ ...DEFAULTS, ...d });
+      setData(normalizeDataShape({ ...DEFAULTS, ...d }));
     } catch (e) {
       console.error(e);
       setSaveError(e.message);
@@ -73,10 +113,20 @@ export function useData() {
   }
 
   async function update(key, value, options = {}) {
-    const nextValue = typeof value === 'function' ? value(data[key]) : value;
+    const rawNextValue = typeof value === 'function' ? value(data[key]) : value;
+    const nextValue = key === 'players'
+      ? (rawNextValue || []).map(person => normalizePersonRecord(person, 'player'))
+      : key === 'coaches'
+        ? (rawNextValue || []).map(person => normalizePersonRecord(person, 'coach'))
+        : rawNextValue;
     const previousSnapshot = data;
     setData(prev => {
-      const optimisticValue = typeof value === 'function' ? value(prev[key]) : value;
+      const rawOptimisticValue = typeof value === 'function' ? value(prev[key]) : value;
+      const optimisticValue = key === 'players'
+        ? (rawOptimisticValue || []).map(person => normalizePersonRecord(person, 'player'))
+        : key === 'coaches'
+          ? (rawOptimisticValue || []).map(person => normalizePersonRecord(person, 'coach'))
+          : rawOptimisticValue;
       if (options.mode === 'mergeById' && Array.isArray(prev[key]) && Array.isArray(optimisticValue)) {
         const byId = new Map(prev[key].map(entry => [entry?.id, entry]).filter(([entryId]) => entryId));
         optimisticValue.forEach(entry => {

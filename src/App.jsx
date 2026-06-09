@@ -123,7 +123,7 @@ function personNumberValue(person) {
   if (!person) return '';
   const raw = person.number ?? person.initials ?? person.trainerInitials ?? person.shortName ?? '';
   if (raw === undefined || raw === null || raw === '') return '';
-  return person._kind === 'coach' ? String(raw).trim().toUpperCase() : String(raw).trim();
+  return normalizeFlockIdentifier(raw, person._kind);
 }
 
 function normalizePersonKind(value) {
@@ -133,8 +133,20 @@ function normalizePersonKind(value) {
   return raw;
 }
 
+function normalizeFlockIdentifier(value, kind = '') {
+  const raw = String(value ?? '').trim().toUpperCase();
+  if (!raw) return '';
+  const cleaned = raw.replace(/^#\s*/, '').replace(/^NR\.?\s*/i, '').trim();
+  const normalizedKind = normalizePersonKind(kind);
+  const digits = cleaned.replace(/[^0-9]/g, '');
+  if (normalizedKind === 'player' || (/^\d/.test(cleaned) && digits)) {
+    return digits.replace(/^0+(?=\d)/, '');
+  }
+  return cleaned.replace(/[^A-Z0-9]/g, '');
+}
+
 function inventoryMatchesPersonNumber(inv, person) {
-  const invNumber = inv.assignedNumber === undefined || inv.assignedNumber === null ? '' : String(inv.assignedNumber).trim().toUpperCase();
+  const invNumber = normalizeFlockIdentifier(inv.assignedNumber, inv.personKind || person?._kind);
   const personNumber = personNumberValue(person).toUpperCase();
   if (!invNumber || !personNumber || invNumber !== personNumber) return false;
   const invKind = normalizePersonKind(inv.personKind || person._kind);
@@ -290,9 +302,11 @@ function inventoryEffectiveNumber(data, inv) {
     'reservedNumber',
     'reservedInitials',
   ];
+  const inventoryKind = normalizePersonKind(inv?.personKind);
   for (const field of numberFields) {
     if (inv?.[field] !== undefined && inv[field] !== null && inv[field] !== '') {
-      return String(inv[field]).trim().toUpperCase();
+      const fieldKind = field.toLowerCase().includes('initial') ? 'coach' : inventoryKind;
+      return normalizeFlockIdentifier(inv[field], fieldKind);
     }
   }
   const owner = findPerson(data, inv?.assignedTo);
@@ -2432,13 +2446,14 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
 
   // Konflikt-Check funktioniert für Spieler (Nummer) wie Trainer (Initialen) gleich:
   // Pro Mannschaft darf der gleiche Wert nicht doppelt vergeben sein.
-  const duplicateNumberPlayers = form.number ? players.filter(p =>
+  const formNumberKey = normalizeFlockIdentifier(form.number, kind);
+  const duplicateNumberPlayers = formNumberKey ? players.filter(p =>
     p.id !== player?.id
     && p.team === form.team
-    && String(p.number).trim().toLowerCase() === String(form.number).trim().toLowerCase()
+    && normalizeFlockIdentifier(personNumberValue({ ...p, _kind: kind }), kind) === formNumberKey
   ) : [];
   const isSeasonTransitionDuplicate = (other) =>
-    (!!form.seasonEntry && !!other.seasonExit) || (!!form.seasonExit && !!other.seasonEntry);
+    !!form.seasonEntry || !!other.seasonEntry;
   const numberConflict = duplicateNumberPlayers.some(p => !isSeasonTransitionDuplicate(p));
   const seasonDuplicateAllowed = duplicateNumberPlayers.length > 0 && !numberConflict;
 
@@ -2460,9 +2475,10 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
     if (numberConflict) return alert(`${isCoach ? 'Initialen' : 'Rückennummer'} in dieser Mannschaft bereits vergeben`);
 
     // Spieler-Nummer als Integer speichern, Trainer-Initialen als String
+    const normalizedNumber = normalizeFlockIdentifier(form.number, kind);
     const numberValue = isCoach
-      ? (form.number ? String(form.number).trim().toUpperCase() : null)
-      : (form.number ? parseInt(form.number) : null);
+      ? (normalizedNumber || null)
+      : (normalizedNumber ? parseInt(normalizedNumber) : null);
 
     const itemSizes = form.individualSizes ? (form.itemSizes || {}) : {};
     onSave({ ...form, number: numberValue, size: form.size || 'L', individualSizes: !!form.individualSizes, itemSizes, isGoalkeeper: isCoach ? false : !!form.isGoalkeeper, standardSetId: form.standardSetId || '' });
@@ -2497,7 +2513,7 @@ function PlayerForm({ player, players, teams, labels, kind, standardSets, items,
           />
           {seasonDuplicateAllowed && (
             <p className="text-xs mt-1 text-emerald-700">
-              Doppelvergabe ist erlaubt, weil Eintritt/Austritt fÃ¼r den Saisonwechsel passend markiert ist.
+              Doppelvergabe ist erlaubt, weil Eintritt Saison fuer den Saisonwechsel markiert ist.
             </p>
           )}
         </Field>
@@ -2612,13 +2628,13 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
   const [error, setError] = useState('');
 
   function downloadTemplate() {
-    const header = ['Vorname', 'Nachname', 'Mannschaft', numberLabel, 'Größe', 'Notizen'];
+    const header = ['Vorname', 'Nachname', 'Mannschaft', numberLabel, 'Größe', 'Eintritt Saison', 'Austritt Saison', 'Notizen'];
     const example = isCoach ? [
-      ['Dennis', 'Hasecke', teams[0] || '1. Mannschaft', 'DH', 'XL', 'Cheftrainer'],
-      ['Sven', 'Berger', teams[0] || '1. Mannschaft', 'SB', 'L', 'Co-Trainer'],
+      ['Dennis', 'Hasecke', teams[0] || '1. Mannschaft', 'DH', 'XL', 'nein', 'nein', 'Cheftrainer'],
+      ['Sven', 'Berger', teams[0] || '1. Mannschaft', 'SB', 'L', 'ja', 'nein', 'Co-Trainer'],
     ] : [
-      ['Max', 'Mustermann', teams[0] || '1. Mannschaft', '10', 'L', ''],
-      ['Tim', 'Beispiel', teams[0] || '1. Mannschaft', '7', 'M', 'Kapitän'],
+      ['Max', 'Mustermann', teams[0] || '1. Mannschaft', '10', 'L', 'nein', 'nein', ''],
+      ['Tim', 'Beispiel', teams[0] || '1. Mannschaft', '7', 'M', 'ja', 'nein', 'Kapitän'],
     ];
     const csv = [header, ...example].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n');
     const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -2650,6 +2666,8 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
       const iTeam = col('mannschaft', 'team');
       const iNumber = col('rückennummer', 'rueckennummer', 'nummer', 'number', 'nr', 'initialen', 'kürzel', 'kuerzel');
       const iSize = col('größe', 'groesse', 'size');
+      const iSeasonEntry = col('eintritt saison', 'saisoneintritt', 'eintritt', 'seasonentry', 'season entry');
+      const iSeasonExit = col('austritt saison', 'saisonaustritt', 'austritt', 'ausscheiden', 'seasonexit', 'season exit');
       const iNotes = col('notizen', 'notes', 'bemerkung');
 
       if (iVorname < 0 || iNachname < 0) {
@@ -2660,6 +2678,7 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
       const rows = dataRows.map((r, idx) => {
         let numberRaw = iNumber >= 0 ? (r[iNumber] || '').trim() : '';
         if (isCoach) numberRaw = numberRaw.replace(/[^a-zA-ZäöüÄÖÜß]/g, '').slice(0, 3).toUpperCase();
+        numberRaw = normalizeFlockIdentifier(numberRaw, kind);
         return {
           _idx: idx,
           firstName: (r[iVorname] || '').trim(),
@@ -2667,6 +2686,8 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
           team: iTeam >= 0 ? (r[iTeam] || '').trim() : (teams[0] || ''),
           number: numberRaw,
           size: iSize >= 0 ? ((r[iSize] || '').trim().toUpperCase() || 'L') : 'L',
+          seasonEntry: iSeasonEntry >= 0 ? seasonFlag(r[iSeasonEntry]) : false,
+          seasonExit: iSeasonExit >= 0 ? seasonFlag(r[iSeasonExit]) : false,
           notes: iNotes >= 0 ? (r[iNotes] || '').trim() : '',
         };
       });
@@ -2699,15 +2720,23 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
         if (!/^[a-zA-ZäöüÄÖÜß]{1,3}$/.test(row.number)) {
           errors.push('Initialen ungültig (1–3 Buchstaben)');
         } else {
-          const norm = String(row.number).trim().toUpperCase();
+          const norm = normalizeFlockIdentifier(row.number, kind);
           // Konflikt mit existierenden
           const conflictExisting = existingPlayers.some(p =>
-            p.team === row.team && String(p.number).trim().toUpperCase() === norm
+            p.team === row.team
+            && normalizeFlockIdentifier(personNumberValue({ ...p, _kind: kind }), kind) === norm
+            && !row.seasonEntry
+            && !p.seasonEntry
           );
           if (conflictExisting) errors.push('Initialen bereits vergeben');
           // Konflikt im Import
           const conflictImport = allRows.some(o =>
-            o._idx !== row._idx && o.team === row.team && o.number && String(o.number).trim().toUpperCase() === norm
+            o._idx !== row._idx
+            && o.team === row.team
+            && o.number
+            && normalizeFlockIdentifier(o.number, kind) === norm
+            && !row.seasonEntry
+            && !o.seasonEntry
           );
           if (conflictImport) errors.push('Initialen doppelt im Import');
         }
@@ -2715,10 +2744,20 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
         const n = parseInt(row.number);
         if (isNaN(n)) errors.push('Nummer ungültig');
         else {
-          const conflictExisting = existingPlayers.some(p => p.team === row.team && String(p.number) === String(n));
+          const conflictExisting = existingPlayers.some(p =>
+            p.team === row.team
+            && normalizeFlockIdentifier(personNumberValue({ ...p, _kind: kind }), kind) === normalizeFlockIdentifier(n, kind)
+            && !row.seasonEntry
+            && !p.seasonEntry
+          );
           if (conflictExisting) errors.push('Nummer bereits vergeben');
           const conflictImport = allRows.some(o =>
-            o._idx !== row._idx && o.team === row.team && o.number && parseInt(o.number) === n
+            o._idx !== row._idx
+            && o.team === row.team
+            && o.number
+            && normalizeFlockIdentifier(o.number, kind) === normalizeFlockIdentifier(n, kind)
+            && !row.seasonEntry
+            && !o.seasonEntry
           );
           if (conflictImport) errors.push('Nummer doppelt im Import');
         }
@@ -2736,8 +2775,10 @@ function PlayerImport({ teams, existingPlayers, kind, onImport, onCancel }) {
       firstName: r.firstName,
       lastName: r.lastName,
       team: r.team,
-      number: r.number,
+      number: isCoach ? normalizeFlockIdentifier(r.number, kind) : (r.number ? parseInt(normalizeFlockIdentifier(r.number, kind)) : null),
       size: r.size,
+      seasonEntry: !!r.seasonEntry,
+      seasonExit: !!r.seasonExit,
       notes: r.notes,
     }));
     if (valid.length === 0) { alert('Keine gültigen Zeilen zum Import.'); return; }
