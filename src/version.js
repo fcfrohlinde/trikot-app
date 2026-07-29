@@ -1,8 +1,32 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.15';
+export const APP_VERSION = '1.2.18';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.18',
+    date: '2026-07-29',
+    changes: [
+      'Fehlermeldungen bei blockierten Doppelbestellungen nennen jetzt die betroffene bestehende Bestellung inklusive Status, Artikel, Groesse, Person, Nummer/Initialen und Mannschaft',
+      'API liefert strukturierte Fehlerdetails zu betroffenen Bestellungen; Frontend zeigt diese Hinweise lesbar im Speicherfehler an',
+    ],
+  },
+  {
+    version: '1.2.17',
+    date: '2026-07-29',
+    changes: [
+      'Doppelbestellungen koennen pro Bestellposition als Sonderfall mit Begruendung erlaubt werden',
+      'Bestellformular um Checkbox und Begruendung fuer Sonderfall-Doppelbestellungen erweitert; Standard bleibt weiterhin blockiert',
+    ],
+  },
+  {
+    version: '1.2.16',
+    date: '2026-07-29',
+    changes: [
+      'Bestellpruefung blockiert nur noch neu entstehende Doppelbestellungen und verhindert nicht mehr das Bearbeiten bestehender Alt-Dubletten',
+      'Regressionstest ergaenzt: Lieferant, Sponsor oder Metadaten bestehender Bestellungen bleiben trotz alter Dubletten editierbar',
+    ],
+  },
   {
     version: '1.2.15',
     date: '2026-06-09',

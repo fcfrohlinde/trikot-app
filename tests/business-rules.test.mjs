@@ -44,6 +44,73 @@ const duplicateOpenOrders = [
 ];
 assert.equal(validate('orders', [], duplicateOpenOrders).ok, false, 'Doppelte offene Bestellungen fuer denselben Bedarf werden blockiert');
 assert.equal(validate('orders', [], duplicateOpenOrders).code, 'duplicate_open_order_need');
+assert.match(
+  validate('orders', [], duplicateOpenOrders).error,
+  /ord_1|Bestehende Bestellung/,
+  'Fehlermeldung verweist auf die bestehende Bestellung'
+);
+assert.equal(
+  validate('orders', [], duplicateOpenOrders).details.duplicateOrders.length,
+  2,
+  'Fehlerdetails enthalten die betroffenen offenen Bestellungen'
+);
+
+const duplicateOpenOrdersWithSpecialCase = [
+  duplicateOpenOrders[0],
+  {
+    ...duplicateOpenOrders[1],
+    lines: [{
+      ...duplicateOpenOrders[1].lines[0],
+      allowDuplicateOrder: true,
+      duplicateReason: 'Sonderfall Ersatzsatz',
+    }],
+  },
+];
+assert.equal(
+  validate('orders', [], duplicateOpenOrdersWithSpecialCase).ok,
+  true,
+  'Doppelbestellung ist mit markiertem Sonderfall und Begruendung erlaubt'
+);
+
+const legacyDuplicateOrders = [
+  {
+    id: 'ord_legacy_1',
+    status: 'angelegt',
+    team: 'ERSTE',
+    articleSupplierId: 'old',
+    lines: [{ id: 'l1', itemType: 'shirt', size: 'M', qty: 1, playerId: 'active', number: 7 }],
+  },
+  {
+    id: 'ord_legacy_2',
+    status: 'angelegt',
+    team: 'ERSTE',
+    lines: [{ id: 'l2', itemType: 'shirt', size: 'M', qty: 1, playerId: 'active', number: 7 }],
+  },
+];
+const legacyDuplicateSupplierEdit = [
+  { ...legacyDuplicateOrders[0], articleSupplierId: 'new' },
+  legacyDuplicateOrders[1],
+];
+assert.equal(
+  validate('orders', legacyDuplicateOrders, legacyDuplicateSupplierEdit).ok,
+  true,
+  'Bestehende Alt-Dubletten duerfen Lieferant/Sponsor/Metadaten weiter bearbeiten'
+);
+
+const newDuplicateAddedToLegacy = [
+  ...legacyDuplicateOrders,
+  {
+    id: 'ord_legacy_3',
+    status: 'angelegt',
+    team: 'ERSTE',
+    lines: [{ id: 'l3', itemType: 'shirt', size: 'M', qty: 1, playerId: 'active', number: 7 }],
+  },
+];
+assert.equal(
+  validate('orders', legacyDuplicateOrders, newDuplicateAddedToLegacy).code,
+  'duplicate_open_order_need',
+  'Neue zusaetzliche Dubletten bleiben blockiert'
+);
 
 const sameOrderMultiQty = [
   {
@@ -64,6 +131,20 @@ const duplicatedPersonalizedQty = [
   },
 ];
 assert.equal(validate('orders', [], duplicatedPersonalizedQty).code, 'duplicate_personalized_quantity');
+
+const duplicatedPersonalizedQtySpecial = [{
+  ...duplicatedPersonalizedQty[0],
+  lines: [{
+    ...duplicatedPersonalizedQty[0].lines[0],
+    allowDuplicateOrder: true,
+    duplicateReason: 'Sonderfall Ersatzsatz',
+  }],
+}];
+assert.equal(
+  validate('orders', [], duplicatedPersonalizedQtySpecial).ok,
+  true,
+  'Mehrfachmenge fuer personalisierte Artikel ist nur mit Sonderfall erlaubt'
+);
 
 const issuedData = {
   ...baseData,

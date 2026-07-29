@@ -65,8 +65,8 @@ function sameRecord(a, b) {
   return stableStringify(a) === stableStringify(b);
 }
 
-function reject(status, code, path, error) {
-  return { ok: false, status, code, path, error };
+function reject(status, code, path, error, details = null) {
+  return { ok: false, status, code, path, error, details };
 }
 
 function ok() {
@@ -176,9 +176,11 @@ function explicitReplacement(line) {
   const text = [
     line?.orderReason,
     line?.reason,
+    line?.duplicateReason,
     line?.notes,
     line?.comment,
   ].filter(Boolean).join(' ').toLowerCase();
+  if ((line?.allowDuplicateOrder === true || line?.allowDuplicate === true) && text.trim().length >= 3) return true;
   return /(ersatz|replacement|override|manuell|manual|nachbestellung|sonder|verlust|defekt|beschaedigt|beschadigt)/i.test(text);
 }
 
@@ -215,6 +217,53 @@ function currentLineSignatures(data, currentOrders) {
     });
   });
   return signatures;
+}
+
+function openOrderOwnersByNeed(data, orders) {
+  const { personById } = buildIndexes(data);
+  const ownersByNeed = new Map();
+  asArray(orders).forEach(order => {
+    if (!orderCoversNeed(order)) return;
+    asArray(order.lines).forEach((line, index) => {
+      if (explicitReplacement(line)) return;
+      const person = personById.get(line?.playerId);
+      if (!person) return;
+      const needKey = materialNeedKey(data, order, line, person);
+      const owners = ownersByNeed.get(needKey) || new Set();
+      owners.add(`${order.id || 'order'}:${line?.id || index}`);
+      ownersByNeed.set(needKey, owners);
+    });
+  });
+  return ownersByNeed;
+}
+
+function openOrderDetailsForNeed(data, orders, needKey) {
+  const { personById, itemById } = buildIndexes(data);
+  const details = [];
+  asArray(orders).forEach(order => {
+    if (!orderCoversNeed(order)) return;
+    asArray(order.lines).forEach((line, index) => {
+      if (explicitReplacement(line)) return;
+      const person = personById.get(line?.playerId);
+      if (!person) return;
+      if (materialNeedKey(data, order, line, person) !== needKey) return;
+      const item = itemById.get(line.itemType);
+      details.push({
+        orderId: order.id || '',
+        orderTitle: order.title || order.id || 'Bestellung ohne Titel',
+        orderStatus: order.status || 'angelegt',
+        lineId: line.id || String(index + 1),
+        itemName: item?.name || line.itemType || '',
+        size: line.size || '',
+        qty: Number(line.qty) || 1,
+        personId: person.id,
+        personName: `${person.firstName || ''} ${person.lastName || ''}`.trim(),
+        team: line.team || person.team || order.team || '',
+        number: line.number || personNumberValue(person),
+      });
+    });
+  });
+  return details;
 }
 
 function validateInventory(currentValue, nextValue, data) {
@@ -266,7 +315,8 @@ function validateOrders(currentValue, nextValue, data) {
 
   const { personById, itemById, teamSet } = buildIndexes(data);
   const currentSignatures = currentLineSignatures(data, currentValue);
-  const openOwnersByNeed = new Map();
+  const currentOpenOwnersByNeed = openOrderOwnersByNeed(data, currentValue);
+  const nextOpenOwnersByNeed = openOrderOwnersByNeed(data, nextValue);
   const changedNeedKeys = new Set();
 
   for (const order of asArray(nextValue)) {
@@ -332,22 +382,22 @@ function validateOrders(currentValue, nextValue, data) {
     }
   }
 
-  for (const order of asArray(nextValue)) {
-    if (!orderCoversNeed(order)) continue;
-    for (let index = 0; index < asArray(order.lines).length; index += 1) {
-      const line = order.lines[index];
-      const person = personById.get(line?.playerId);
-      if (!person) continue;
-      const needKey = materialNeedKey(data, order, line, person);
-      const owners = openOwnersByNeed.get(needKey) || new Set();
-      owners.add(order.id || `${order.id || 'order'}:${line?.id || index}`);
-      openOwnersByNeed.set(needKey, owners);
-    }
-  }
-
-  for (const [needKey, owners] of openOwnersByNeed.entries()) {
-    if (changedNeedKeys.has(needKey) && owners.size > 1) {
-      return reject(409, 'duplicate_open_order_need', 'orders', 'Zu Person, Mannschaft, Artikel, Groesse und Nummer/Initialen existiert bereits eine offene Bestellung.');
+  for (const needKey of changedNeedKeys) {
+    const nextOwners = nextOpenOwnersByNeed.get(needKey) || new Set();
+    const currentOwners = currentOpenOwnersByNeed.get(needKey) || new Set();
+    if (nextOwners.size > 1 && nextOwners.size > currentOwners.size) {
+      const details = openOrderDetailsForNeed(data, nextValue, needKey);
+      const existing = details[0];
+      const hint = existing
+        ? `Bestehende Bestellung: ${existing.orderTitle} (${existing.orderStatus}), Position ${existing.lineId}, ${existing.itemName}${existing.size ? ` Groesse ${existing.size}` : ''}, ${existing.personName}${existing.number ? ` ${existing.number}` : ''}, ${existing.team}.`
+        : 'Bitte bestehende offene Bestellung pruefen.';
+      return reject(
+        409,
+        'duplicate_open_order_need',
+        'orders',
+        `Doppelbestellung blockiert. ${hint} Fuer Sonderfall in der Bestellposition "Doppelbestellung" markieren und begruenden.`,
+        { duplicateOrders: details }
+      );
     }
   }
 

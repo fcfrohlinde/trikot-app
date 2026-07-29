@@ -81,6 +81,7 @@ export default async function handler(req, res) {
           error: businessRules.error,
           code: businessRules.code,
           path: businessRules.path,
+          details: businessRules.details || null,
         });
       }
 

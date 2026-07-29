@@ -113,7 +113,15 @@ async function readJsonResponse(response, fallbackMessage) {
   }
   if (!response.ok) {
     const requestSuffix = data.requestId ? ` (Fehler-ID: ${data.requestId})` : '';
-    throw new Error(`${data.error || fallbackMessage}${requestSuffix}`);
+    const duplicateDetails = Array.isArray(data.details?.duplicateOrders)
+      ? data.details.duplicateOrders
+      : [];
+    const detailText = duplicateDetails.length > 0
+      ? `\n\nBetroffene Bestellung(en):\n${duplicateDetails.slice(0, 5).map(d => (
+          `- ${d.orderTitle || d.orderId} (${d.orderStatus || 'offen'}), ${d.itemName || 'Artikel'}${d.size ? `, Groesse ${d.size}` : ''}, ${d.personName || 'Person'}${d.number ? ` ${d.number}` : ''}${d.team ? `, ${d.team}` : ''}`
+        )).join('\n')}`
+      : '';
+    throw new Error(`${data.error || fallbackMessage}${detailText}${requestSuffix}`);
   }
   return data;
 }

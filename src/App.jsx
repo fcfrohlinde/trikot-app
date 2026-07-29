@@ -7044,6 +7044,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
       personKind: null,
       number: '',
       name: '',
+      allowDuplicateOrder: false,
+      duplicateReason: '',
     }]);
   }
 
@@ -7074,6 +7076,9 @@ function OrderForm({ data, order, onSave, onCancel }) {
           nl.personKind = null;
         }
       }
+      if (key === 'allowDuplicateOrder' && !val) {
+        nl.duplicateReason = '';
+      }
       return nl;
     }));
   }
@@ -7093,6 +7098,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
         personKind: kind,
         number: person.number != null ? String(person.number) : '',
         name: (person.lastName || '').toUpperCase(),
+        allowDuplicateOrder: false,
+        duplicateReason: '',
       };
     });
     setLines([...lines, ...newLines]);
@@ -7114,6 +7121,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
         personKind: kind,
         number: person.number != null ? String(person.number) : '',
         name: (person.lastName || '').toUpperCase(),
+        allowDuplicateOrder: false,
+        duplicateReason: '',
       };
     });
     // Sammelzeile ersetzen
@@ -7218,6 +7227,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
             personKind: kind,
             number: person.number != null ? String(person.number) : '',
             name: (person.lastName || '').toUpperCase(),
+            allowDuplicateOrder: false,
+            duplicateReason: '',
           });
           addedForPerson++;
         }
@@ -7240,6 +7251,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
   function submit() {
     if (!title) return alert('Titel fehlt');
     if (lines.length === 0) return alert('Keine Positionen');
+    const invalidSpecial = lines.find(l => l.allowDuplicateOrder && !String(l.duplicateReason || l.orderReason || '').trim());
+    if (invalidSpecial) return alert('Sonderfall-Doppelbestellungen brauchen eine kurze Begründung.');
     onSave({
       ...(order || {}),
       title, type,
@@ -7459,7 +7472,7 @@ function OrderForm({ data, order, onSave, onCancel }) {
 
       {lines.length > 0 && (
         <div className="border border-stone-200 mb-4 overflow-x-auto">
-          <table className="w-full text-xs min-w-[700px]">
+          <table className="w-full text-xs min-w-[900px]">
             <thead className="bg-stone-50 uppercase tracking-wider text-stone-500">
               <tr>
                 <th className="text-left p-2">Artikel</th>
@@ -7468,6 +7481,8 @@ function OrderForm({ data, order, onSave, onCancel }) {
                 <th className="text-left p-2">Person</th>
                 <th className="text-left p-2">Nr./Init.</th>
                 <th className="text-left p-2">Flock-Name</th>
+                <th className="text-left p-2">Sonderfall</th>
+                <th className="text-left p-2">Begründung</th>
                 <th></th>
               </tr>
             </thead>
@@ -7533,6 +7548,25 @@ function OrderForm({ data, order, onSave, onCancel }) {
                       />
                     </td>
                     <td className="p-1"><input value={l.name} onChange={e => updateLine(l.id, 'name', e.target.value.toUpperCase())} className="border border-stone-300 px-1 py-1 text-xs w-full" /></td>
+                    <td className="p-1">
+                      <label className="inline-flex items-center gap-1 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={!!l.allowDuplicateOrder}
+                          onChange={e => updateLine(l.id, 'allowDuplicateOrder', e.target.checked)}
+                        />
+                        <span>Doppelbestellung</span>
+                      </label>
+                    </td>
+                    <td className="p-1">
+                      <input
+                        value={l.duplicateReason || ''}
+                        onChange={e => updateLine(l.id, 'duplicateReason', e.target.value)}
+                        disabled={!l.allowDuplicateOrder}
+                        placeholder="z. B. Ersatz defekt, Zusatzsatz"
+                        className="border border-stone-300 px-1 py-1 text-xs w-full disabled:bg-stone-100"
+                      />
+                    </td>
                     <td><button onClick={() => removeLine(l.id)} className="text-red-600 p-1"><X size={12} /></button></td>
                   </tr>
                 );
@@ -7542,7 +7576,7 @@ function OrderForm({ data, order, onSave, onCancel }) {
               <tr>
                 <td className="p-2 font-medium" colSpan={2}>Summe Positionen</td>
                 <td className="p-2 font-medium">{lines.reduce((s, l) => s + (l.qty || 0), 0)} Teile</td>
-                <td className="p-2" colSpan={4}></td>
+                <td className="p-2" colSpan={6}></td>
               </tr>
             </tfoot>
           </table>
