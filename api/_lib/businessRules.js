@@ -353,9 +353,6 @@ function validateOrders(currentValue, nextValue, data) {
 
       const item = itemById.get(line.itemType);
       const needsPersonalId = !item?.reprintExcluded;
-      if (needsPersonalId && qty > 1 && !explicitReplacement(line)) {
-        return reject(409, 'duplicate_personalized_quantity', `${path}.qty`, 'Personalisierte Artikel duerfen fuer dieselbe Person nicht mehrfach in einer Bestellposition stehen.');
-      }
       const number = isNonEmpty(line.number) ? String(line.number).trim() : personNumberValue(person);
       if (needsPersonalId && !number) {
         return reject(

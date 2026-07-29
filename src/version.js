@@ -1,8 +1,16 @@
 // Zentrale Versionsnummer der App.
 // Bei jedem neuen Feature oder Bugfix hier hochzählen.
-export const APP_VERSION = '1.2.18';
+export const APP_VERSION = '1.2.19';
 
 export const CHANGELOG = [
+  {
+    version: '1.2.19',
+    date: '2026-07-29',
+    changes: [
+      'Mehrfachbestellungen eines gleichen personalisierten Artikels sind jetzt in einer Bestellposition erlaubt',
+      'Die Schutzpruefung gegen versehentliche doppelte offene Bestellungen bleibt weiterhin aktiv',
+    ],
+  },
   {
     version: '1.2.18',
     date: '2026-07-29',

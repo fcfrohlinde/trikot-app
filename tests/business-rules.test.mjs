@@ -130,20 +130,10 @@ const duplicatedPersonalizedQty = [
     lines: [{ id: 'l1', itemType: 'shirt', size: 'M', qty: 2, playerId: 'active', number: 7 }],
   },
 ];
-assert.equal(validate('orders', [], duplicatedPersonalizedQty).code, 'duplicate_personalized_quantity');
-
-const duplicatedPersonalizedQtySpecial = [{
-  ...duplicatedPersonalizedQty[0],
-  lines: [{
-    ...duplicatedPersonalizedQty[0].lines[0],
-    allowDuplicateOrder: true,
-    duplicateReason: 'Sonderfall Ersatzsatz',
-  }],
-}];
 assert.equal(
-  validate('orders', [], duplicatedPersonalizedQtySpecial).ok,
+  validate('orders', [], duplicatedPersonalizedQty).ok,
   true,
-  'Mehrfachmenge fuer personalisierte Artikel ist nur mit Sonderfall erlaubt'
+  'Menge > 1 in einer Position ist auch fuer personalisierte Artikel erlaubt'
 );
 
 const issuedData = {
